@@ -1,0 +1,92 @@
+services:
+
+  bolna-app:
+    container_name: bolna-app
+    build: .
+    restart: on-failure
+    ports:
+      - "5001:5001"
+    env_file:
+      - .env
+    volumes:
+      - ./agent_data:/voiceai/agent_data
+      - $HOME/.aws/credentials:/root/.aws/credentials:ro
+      - $HOME/.aws/config:/root/.aws/config:ro
+    depends_on:
+      - redis
+    networks:
+      - voiceai
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  twilio-app:
+    container_name: twilio-app
+    build: .
+    command: uvicorn twilio_api_server:app --host 0.0.0.0 --port 8001 --app-dir local_setup/telephony_server
+    restart: on-failure
+    ports:
+      - "8011:8001"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - ngrok
+      - bolna-app
+    networks:
+      - voiceai
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  plivo-app:
+    container_name: plivo-app
+    build: .
+    command: uvicorn plivo_api_server:app --host 0.0.0.0 --port 8002 --app-dir local_setup/telephony_server
+    restart: on-failure
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - ngrok
+      - bolna-app
+    networks:
+      - voiceai
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
+  redis:
+    container_name: voiceai-redis
+    image: redis:latest
+    restart: on-failure
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - voiceai
+
+  ngrok:
+    container_name: voiceai-ngrok
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    command:
+      - "start"
+      - "--all"
+      - "--config"
+      - "/etc/ngrok.yml"
+    volumes:
+      - ./local_setup/ngrok-config.yml:/etc/ngrok.yml
+    ports:
+      - "4040:4040"
+    networks:
+      - voiceai
+
+volumes:
+  redisdata:
+
+networks:
+  voiceai:

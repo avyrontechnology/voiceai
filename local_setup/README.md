@@ -1,6 +1,6 @@
 ## Local docker setup
 
-A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. We have dockerized the setup in `local_setup/`. One will need to populate an environment `.env` file from `.env.sample`.
+A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `bolna` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
 
 The setup consists of four containers:
 
@@ -13,7 +13,7 @@ The setup consists of four containers:
 
 ### Quick Start
 
-The easiest way to get started is to use the provided script:
+The easiest way to get started is to use the provided script (from the repo root):
 
 ```bash
 chmod +x start.sh

@@ -1,0 +1,44 @@
+[tool.poetry]
+name = "voiceai-docker"
+version = "0.1.0"
+description = "Docker-only dependency set for voiceai — mirrors ../requirements.txt. Not published."
+authors = ["Bolna AI"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.11"
+aiobotocore = "==3.8.0"
+aiofiles = "==23.2.1"
+aiohttp = "==3.14.1"
+azure-cognitiveservices-speech = "==1.40.0"
+fastapi = "==0.109.1"
+google-cloud-speech = "==2.27.0"
+google-genai = ">=1.68.0"
+groq = ">=0.4.0"
+grpcio = "==1.71.0"
+grpcio-status = "==1.71.0"
+httpx = {version = ">=0.25.0", extras = ["http2"]}
+litellm = "==1.84.0"
+lxml = ">=6.1.0"
+numpy = "==1.26.1"
+onnxruntime = ">=1.16.3,<1.24.0"
+openai = "==2.36.0"
+plivo = "==4.61.0"
+protobuf = ">=5.29.6,<6.0.0"
+pydantic = ">=2.9.0"
+pydub = "==0.25.1"
+python-dateutil = "==2.8.2"
+python-dotenv = ">=1.0.0"
+pytz = ">=2024.1"
+redis = "==5.0.1"
+requests = ">=2.31.0,<3.0.0"
+scipy = "==1.11.4"
+tiktoken = ">=0.6.0"
+twilio = "==8.9.0"
+urllib3 = ">=2.7.0"
+uvicorn = "==0.22.0"
+websockets = "==15.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

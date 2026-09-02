@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.git/
+.vscode/
+venv/
+env/
+.idea/
+
+# Local agent data mounted at runtime — never belongs in the image
+agent_data/
+
+# Log files
+*.log
+
+# Tests aren't needed inside the runtime image
+tests/

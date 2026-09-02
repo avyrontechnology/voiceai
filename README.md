@@ -67,7 +67,7 @@ Refer to the [docs](https://docs.bolna.ai/providers) for a deepdive into all sup
 
 
 ## Local example setup [will be moved to a different repository]
-A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. We have dockerized the setup in `local_setup/`. One will need to populate an environment `.env` file from `.env.sample`.
+A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `bolna` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
 
 The setup consists of four containers:
 
@@ -83,7 +83,6 @@ The setup consists of four containers:
 The easiest way to get started is to use the provided script:
 
 ```bash
-cd local_setup
 chmod +x start.sh
 ./start.sh
 ```
