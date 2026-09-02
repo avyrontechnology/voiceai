@@ -1,6 +1,6 @@
 """Idle-flush duplicate-turn guard: a turn landing during the decide must skip the append."""
 
-from bolna.helpers.conversation_history import ConversationHistory
+from voiceai.helpers.conversation_history import ConversationHistory
 
 
 def make_history():

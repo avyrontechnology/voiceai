@@ -5,7 +5,7 @@ raised, and because callers swallowed the exception EVERY variable in that promp
 silently went unsubstituted.
 """
 
-from bolna.helpers.utils import (
+from voiceai.helpers.utils import (
     parse_json_container,
     render_prompt,
     render_variable_value,

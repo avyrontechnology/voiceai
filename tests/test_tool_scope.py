@@ -13,10 +13,10 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
-from bolna.agent_types.graph_agent import GraphAgent
-from bolna.agent_manager.task_manager import _inject_end_call_tool
-from bolna.enums import ToolScope
-from bolna.constants import END_CALL_TOOL_DEFINITION
+from voiceai.agent_types.graph_agent import GraphAgent
+from voiceai.agent_manager.task_manager import _inject_end_call_tool
+from voiceai.enums import ToolScope
+from voiceai.constants import END_CALL_TOOL_DEFINITION
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +39,9 @@ def _make_graph_agent(nodes, current_node_id="n1"):
         "nodes": nodes,
     }
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=MagicMock())}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=MagicMock())}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
     return agent
@@ -166,7 +166,7 @@ class _Sentinel(Exception):
 
 
 def _make_openai_llm():
-    from bolna.llms.openai_llm import OpenAiLLM
+    from voiceai.llms.openai_llm import OpenAiLLM
 
     return OpenAiLLM(
         model="gpt-4o-mini",
@@ -232,7 +232,7 @@ def test_openai_base_parse_tools_override():
 
 
 def _make_openai_llm_with_end_call():
-    from bolna.llms.openai_llm import OpenAiLLM
+    from voiceai.llms.openai_llm import OpenAiLLM
 
     return OpenAiLLM(
         model="gpt-4o-mini",
@@ -265,7 +265,7 @@ def test_text_rescue_executes_when_tool_offered():
 
 
 async def test_litellm_tools_override_reaches_request():
-    from bolna.llms.litellm import LiteLLM
+    from voiceai.llms.litellm import LiteLLM
 
     llm = LiteLLM(
         model="gpt-4o-mini",
@@ -278,7 +278,7 @@ async def test_litellm_tools_override_reaches_request():
         raise _Sentinel()
 
     only = [_tool("b")]
-    with patch("bolna.llms.litellm.acompletion", fake_acompletion):
+    with patch("voiceai.llms.litellm.acompletion", fake_acompletion):
         with pytest.raises(_Sentinel):
             async for _ in llm.generate_stream([{"role": "user", "content": "hi"}], tools=only):
                 pass

@@ -1,4 +1,4 @@
-class BolnaComponentError(Exception):
+class VoiceAIComponentError(Exception):
     """Base exception that carries component context for error attribution."""
 
     def __init__(self, message, component, provider=None, model=None):
@@ -8,16 +8,16 @@ class BolnaComponentError(Exception):
         super().__init__(message)
 
 
-class LLMError(BolnaComponentError):
+class LLMError(VoiceAIComponentError):
     def __init__(self, message, provider=None, model=None):
         super().__init__(message, component="llm", provider=provider, model=model)
 
 
-class SynthesizerError(BolnaComponentError):
+class SynthesizerError(VoiceAIComponentError):
     def __init__(self, message, provider=None, model=None):
         super().__init__(message, component="synthesizer", provider=provider, model=model)
 
 
-class TranscriberError(BolnaComponentError):
+class TranscriberError(VoiceAIComponentError):
     def __init__(self, message, provider=None, model=None):
         super().__init__(message, component="transcriber", provider=provider, model=model)

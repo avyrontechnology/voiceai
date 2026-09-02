@@ -8,15 +8,15 @@ import aiohttp
 import websockets
 
 from .stream_synthesizer import StreamSynthesizer
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
 
 logger = configure_logger(__name__)
 
 
 class SmallestSynthesizer(StreamSynthesizer):
-    # Attribution tag sent to Smallest AI so requests are tracked as bolna traffic.
-    SOURCE = "bolna"
+    # Attribution tag sent to Smallest AI so requests are tracked as voiceai traffic.
+    SOURCE = "voiceai"
 
     def __init__(
         self,

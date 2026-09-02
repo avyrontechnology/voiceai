@@ -5,10 +5,10 @@ import os
 import time
 from typing import Optional, TYPE_CHECKING
 
-from bolna.enums import HangupReason, LogComponent, LogDirection
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import convert_to_request_log, format_messages
-from bolna.prompts import VOICEMAIL_DETECTION_PROMPT
+from voiceai.enums import HangupReason, LogComponent, LogDirection
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import convert_to_request_log, format_messages
+from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
 
 if TYPE_CHECKING:
     from .task_manager import TaskManager

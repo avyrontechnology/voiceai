@@ -2,7 +2,7 @@
 
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from bolna.llms.openai_llm import OpenAiLLM
+from voiceai.llms.openai_llm import OpenAiLLM
 
 
 def _make_llm(**overrides):

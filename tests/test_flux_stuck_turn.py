@@ -10,7 +10,7 @@ speech_ended only when the turn produced no text.
 import asyncio
 
 
-from bolna.transcriber.deepgram_transcriber import DeepgramTranscriber
+from voiceai.transcriber.deepgram_transcriber import DeepgramTranscriber
 
 
 def _make_flux(output_queue=None, **kwargs):

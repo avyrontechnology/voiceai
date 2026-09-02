@@ -9,8 +9,8 @@ pin the call-site gate by exercising the same predicate and injection pair the c
 
 from unittest.mock import MagicMock
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 ENABLED = TaskManager._TaskManager__language_switch_enabled
 INJECT = TaskManager._TaskManager__inject_switch_language_tool

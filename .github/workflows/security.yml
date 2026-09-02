@@ -26,4 +26,4 @@ jobs:
       # Fails the build on medium+ severity, high-confidence findings (exec/eval/compile,
       # pickle, yaml.load, etc.). Low-severity style noise is intentionally not gated.
       - name: Bandit SAST
-        run: bandit -r bolna --severity-level medium --confidence-level high
+        run: bandit -r voiceai --severity-level medium --confidence-level high

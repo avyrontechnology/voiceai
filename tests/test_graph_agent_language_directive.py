@@ -8,7 +8,7 @@ an explicit "examples": null, so the lookup has to tolerate None rather than cra
 
 from unittest.mock import MagicMock
 
-from bolna.agent_types.graph_agent import GraphAgent
+from voiceai.agent_types.graph_agent import GraphAgent
 
 BUILD = GraphAgent._get_prompt_with_example
 

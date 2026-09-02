@@ -3,8 +3,8 @@ become the sync_history trim target. A fully-played turn whose pre-mark lingered
 unacked was being removed from the transcript as 'unheard' after a language
 switch, causing the agent to repeat the vanished reply."""
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.conversation_history import ConversationHistory
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.conversation_history import ConversationHistory
 
 
 def _mark(mark_type="", turn_id=None, response_uid=None, counter=0, duration=0.0):

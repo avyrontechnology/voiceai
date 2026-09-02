@@ -8,7 +8,7 @@ to a window at the start of the call, and it is pointless without a way to hang 
 import time
 from unittest.mock import MagicMock
 
-from bolna.agent_manager.voicemail_handler import VoicemailHandler
+from voiceai.agent_manager.voicemail_handler import VoicemailHandler
 
 GREETING = "hello you have reached the voicemail of someone please leave a message"
 

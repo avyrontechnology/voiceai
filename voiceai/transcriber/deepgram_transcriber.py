@@ -11,11 +11,11 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, ConnectionClosed
 
 from .base_transcriber import BaseTranscriber
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import create_ws_data_packet, timestamp_ms
-from bolna.enums import TelephonyProvider
-from bolna.constants import (
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
+from voiceai.enums import TelephonyProvider
+from voiceai.constants import (
     DEEPGRAM_FLUX_EOT_THRESHOLD,
     DEEPGRAM_FLUX_EAGER_EOT_THRESHOLD,
     DEEPGRAM_FLUX_EOT_TIMEOUT_MS,
@@ -676,7 +676,7 @@ class DeepgramTranscriber(BaseTranscriber):
 
                     logger.info(f"Starting new turn with turn_id: {self.current_turn_id}")
                     logger.info(
-                        "BOLNA_TRACE_DG speech_started dg_turn=%s request_id=%s",
+                        "VOICEAI_TRACE_DG speech_started dg_turn=%s request_id=%s",
                         self.current_turn_id,
                         self.meta_info.get("request_id"),
                     )
@@ -749,7 +749,7 @@ class DeepgramTranscriber(BaseTranscriber):
                         logger.info(f"Received interim result with is_final set as True - {transcript}")
                         self.final_transcript += f" {transcript}"
                         logger.info(
-                            "BOLNA_TRACE_DG result_final dg_turn=%s request_id=%s speech_final=%s final_len=%s text=%r",
+                            "VOICEAI_TRACE_DG result_final dg_turn=%s request_id=%s speech_final=%s final_len=%s text=%r",
                             self.current_turn_id,
                             deepgram_request_id,
                             msg.get("speech_final", False),
@@ -763,7 +763,7 @@ class DeepgramTranscriber(BaseTranscriber):
                                 f"Received speech final hence yielding the following transcript - {self.final_transcript}"
                             )
                             logger.info(
-                                "BOLNA_TRACE_DG emit_speech_final dg_turn=%s request_id=%s text_len=%s text=%r",
+                                "VOICEAI_TRACE_DG emit_speech_final dg_turn=%s request_id=%s text_len=%s text=%r",
                                 self.current_turn_id,
                                 deepgram_request_id,
                                 len(self.final_transcript.strip()),
@@ -820,7 +820,7 @@ class DeepgramTranscriber(BaseTranscriber):
                             f"Received UtteranceEnd hence yielding the following transcript - {self.final_transcript}"
                         )
                         logger.info(
-                            "BOLNA_TRACE_DG emit_utterance_end dg_turn=%s request_id=%s text_len=%s text=%r",
+                            "VOICEAI_TRACE_DG emit_utterance_end dg_turn=%s request_id=%s text_len=%s text=%r",
                             self.current_turn_id,
                             self.meta_info.get("request_id"),
                             len(self.final_transcript.strip()),
@@ -872,7 +872,7 @@ class DeepgramTranscriber(BaseTranscriber):
                             f"UtteranceEnd received but transcript already processed, yielding speech_ended notification"
                         )
                         logger.info(
-                            "BOLNA_TRACE_DG emit_speech_ended request_id=%s",
+                            "VOICEAI_TRACE_DG emit_speech_ended request_id=%s",
                             self.meta_info.get("request_id"),
                         )
                         self.speech_start_time = None

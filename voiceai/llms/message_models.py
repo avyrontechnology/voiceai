@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from bolna.enums import ChatRole, ResponseItemType
+from voiceai.enums import ChatRole, ResponseItemType
 
 
 class ChatToolCallFunction(BaseModel):
@@ -22,7 +22,7 @@ class ChatMessage(BaseModel):
     tool_call_id: Optional[str] = None
 
 
-# Bookkeeping bolna attaches to history messages for correlation and audio gating. Removed
+# Bookkeeping voiceai attaches to history messages for correlation and audio gating. Removed
 # before the request is built: OpenAI-compatible providers forward unknown message keys
 # verbatim, and nothing should depend on the server ignoring them. Denylist rather than an
 # allowlist so a legitimate provider key (name, cache_control, multimodal parts) is never
@@ -33,7 +33,7 @@ INTERNAL_MESSAGE_KEYS = frozenset(
 
 
 def strip_internal_keys(messages: list[dict]) -> list[dict]:
-    """Drop bolna's own bookkeeping keys, leaving every other key untouched."""
+    """Drop voiceai's own bookkeeping keys, leaving every other key untouched."""
     return [
         {k: v for k, v in m.items() if k not in INTERNAL_MESSAGE_KEYS} if isinstance(m, dict) else m for m in messages
     ]

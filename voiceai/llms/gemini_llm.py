@@ -5,9 +5,9 @@ import base64
 from typing import AsyncIterable
 from google import genai
 from google.genai import types
-from bolna.constants import default_thinking_level
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import (
+from voiceai.constants import default_thinking_level
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import (
     now_ms,
     compute_function_pre_call_message,
     convert_to_request_log,
@@ -49,18 +49,18 @@ class GeminiLLM(BaseLLM):
         self.client = genai.Client(api_key=api_key)
 
         self.api_params = kwargs.get("api_tools", {}).get("tools_params", {})
-        bolna_tools = kwargs.get("api_tools", {}).get("tools", [])
+        voiceai_tools = kwargs.get("api_tools", {}).get("tools", [])
 
         gemini_declarations = []
-        if bolna_tools:
-            if isinstance(bolna_tools, str):
+        if voiceai_tools:
+            if isinstance(voiceai_tools, str):
                 try:
-                    bolna_tools = json.loads(bolna_tools)
+                    voiceai_tools = json.loads(voiceai_tools)
                 except json.JSONDecodeError:
                     logger.error("Failed to parse tool definitions as JSON")
-                    bolna_tools = []
+                    voiceai_tools = []
 
-            for tool in bolna_tools:
+            for tool in voiceai_tools:
                 if tool.get("type") == "function":
                     func = tool["function"]
                     gemini_declarations.append(
@@ -80,8 +80,8 @@ class GeminiLLM(BaseLLM):
                     )
 
         self.gemini_tools = [types.Tool(function_declarations=gemini_declarations)] if gemini_declarations else None
-        # Keep raw bolna tools list for required-param validation at call time
-        self.bolna_tools_raw = bolna_tools if isinstance(bolna_tools, list) else []
+        # Keep raw voiceai tools list for required-param validation at call time
+        self.voiceai_tools_raw = voiceai_tools if isinstance(voiceai_tools, list) else []
         self.thinking_budget = kwargs.get("thinking_budget", 0)
         self.run_id = kwargs.get("run_id", None)
         self.language = kwargs.get("language", "en")
@@ -94,7 +94,7 @@ class GeminiLLM(BaseLLM):
         )
 
     def _prepare_history(self, messages):
-        """Translate Bolna roles (OpenAI-style) to Gemini-style roles and parts."""
+        """Translate VoiceAI roles (OpenAI-style) to Gemini-style roles and parts."""
         system_instruction = ""
         history = []
 
@@ -380,7 +380,7 @@ class GeminiLLM(BaseLLM):
             tool_spec = next(
                 (
                     t
-                    for t in self.bolna_tools_raw
+                    for t in self.voiceai_tools_raw
                     if (t.get("type") == "function" and t["function"]["name"] == fn_name) or (t.get("name") == fn_name)
                 ),
                 None,

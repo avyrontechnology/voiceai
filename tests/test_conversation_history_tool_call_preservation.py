@@ -6,8 +6,8 @@ a second assistant turn. A duplicate landing between the tool-call assistant and
 would make _sanitize_tool_messages strip the tool_calls and drop the result.
 """
 
-from bolna.helpers.conversation_history import ConversationHistory
-from bolna.enums import ChatRole
+from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.enums import ChatRole
 
 
 TOOL_CALLS = [

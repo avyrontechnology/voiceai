@@ -10,7 +10,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 
 async def _run(tm, active_transcript="garbled hi"):

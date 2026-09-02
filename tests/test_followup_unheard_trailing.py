@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.enums import ChatRole
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.enums import ChatRole
 
 # The methods under test are not in the package: this module landed without its production half.
 # Unskip once TaskManager grows __row_was_heard and __drop_unheard_trailing_responses.

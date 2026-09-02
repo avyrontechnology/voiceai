@@ -11,12 +11,12 @@ import asyncio
 
 import pytest
 
-import bolna.output_handlers.telephony as telephony_module
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
-from bolna.output_handlers.telephony_providers.exotel import ExotelOutputHandler
-from bolna.output_handlers.telephony_providers.plivo import PlivoOutputHandler
-from bolna.output_handlers.telephony_providers.twilio import TwilioOutputHandler
-from bolna.output_handlers.telephony_providers.vobiz import VobizOutputHandler
+import voiceai.output_handlers.telephony as telephony_module
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.output_handlers.telephony_providers.exotel import ExotelOutputHandler
+from voiceai.output_handlers.telephony_providers.plivo import PlivoOutputHandler
+from voiceai.output_handlers.telephony_providers.twilio import TwilioOutputHandler
+from voiceai.output_handlers.telephony_providers.vobiz import VobizOutputHandler
 
 
 class _HangingWebSocket:

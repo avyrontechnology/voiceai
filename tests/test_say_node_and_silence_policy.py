@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bolna.models import GraphNode
-from bolna.enums import NodeType
-from bolna.agent_types.graph_agent import GraphAgent
-from bolna.helpers.utils import get_md5_hash
+from voiceai.models import GraphNode
+from voiceai.enums import NodeType
+from voiceai.agent_types.graph_agent import GraphAgent
+from voiceai.helpers.utils import get_md5_hash
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +142,9 @@ def _make_agent(config_overrides=None):
     mock_openai_llm_cls = MagicMock(return_value=mock_llm)
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
 

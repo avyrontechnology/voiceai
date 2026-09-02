@@ -10,7 +10,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 
 def _make_tm():

@@ -7,8 +7,8 @@ before the welcome message has played,
 so the agent's opening line can never be barged by the caller's first noise.
 """
 
-from bolna.agent_manager.interruption_manager import InterruptionManager
-from bolna.constants import ACCIDENTAL_INTERRUPTION_PHRASES
+from voiceai.agent_manager.interruption_manager import InterruptionManager
+from voiceai.constants import ACCIDENTAL_INTERRUPTION_PHRASES
 
 PLAYING = True
 WELCOME_DONE = True

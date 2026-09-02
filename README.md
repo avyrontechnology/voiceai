@@ -15,7 +15,7 @@
       <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
   </a>
   <a href="https://github.com/bolna-ai/bolna/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Bolna is released under the MIT license." />
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="VoiceAI is released under the MIT license." />
   </a>
   <a href="https://github.com/bolna-ai/bolna/blob/main/CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen" alt="PRs welcome!" />
@@ -38,7 +38,7 @@ This repository contains the entire orchestration platform to build voice AI app
 
 
 ## Components
-Bolna helps you create AI Voice Agents which can be instructed to do tasks beginning with:
+VoiceAI helps you create AI Voice Agents which can be instructed to do tasks beginning with:
 
 1. Orchestration platform (this open source repository)
 2. Hosted APIs (https://docs.bolna.ai/api-reference/introduction) built on top of this orchestration platform [currently closed source]
@@ -52,7 +52,7 @@ Bolna helps you create AI Voice Agents which can be instructed to do tasks begin
 
 ```mermaid
 graph LR;
-    A[Bolna open source] -->B[Hosted APIs];
+    A[VoiceAI open source] -->B[Hosted APIs];
     B[Hosted APIs] --> C[Hosted Playground]
 ```
 
@@ -67,14 +67,14 @@ Refer to the [docs](https://docs.bolna.ai/providers) for a deepdive into all sup
 
 
 ## Local example setup [will be moved to a different repository]
-A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `bolna` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
+A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `voiceai` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
 
 The setup consists of four containers:
 
 1. Telephony web server:
    * Choosing Twilio: for initiating the calls one will need to set up a [Twilio account](https://www.twilio.com/docs/usage/tutorials/how-to-use-your-free-trial-account)
    * Choosing Plivo: for initiating the calls one will need to set up a [Plivo account](https://www.plivo.com/)
-2. Bolna server: for creating and handling agents 
+2. VoiceAI server: for creating and handling agents 
 3. `ngrok`: for tunneling. One will need to add the `authtoken` to `ngrok-config.yml`
 4. `redis`: for persisting agents & prompt data
 
@@ -111,9 +111,9 @@ Alternatively, you can manually build and run the services:
 To run specific services only:
 
 ```bash
-docker compose up -d bolna-app twilio-app
+docker compose up -d voiceai-app twilio-app
 # or
-docker compose up -d bolna-app plivo-app
+docker compose up -d voiceai-app plivo-app
 ```
 
 Once the docker containers are up, you can now start to create your agents and instruct them to initiate calls.
@@ -130,8 +130,8 @@ Example script: `examples/simple_assistant.py`
 
 ```python
 import asyncio
-from bolna.assistant import Assistant
-from bolna.models import (
+from voiceai.assistant import Assistant
+from voiceai.models import (
     Transcriber,
     Synthesizer,
     ElevenLabsConfig,
@@ -206,8 +206,8 @@ Example script: `examples/text_only_assistant.py`
 
 ```python
 import asyncio
-from bolna.assistant import Assistant
-from bolna.models import LlmAgent, SimpleLlmAgent
+from voiceai.assistant import Assistant
+from voiceai.models import LlmAgent, SimpleLlmAgent
 
 
 async def main():
@@ -265,7 +265,7 @@ These are the current supported ASRs Providers:
 
 <details>
 <summary>LLM Providers</summary><br>
-Bolna uses LiteLLM package to support multiple LLM integrations.
+VoiceAI uses LiteLLM package to support multiple LLM integrations.
 
 These are the current supported LLM Provider Family:
 https://github.com/bolna-ai/bolna/blob/10fa26e5985d342eedb5a8985642f12f1cf92a4b/bolna/providers.py#L30-L47
@@ -321,7 +321,7 @@ We have fluctuated b/w maintaining this repository purely from a point of time c
 Currently, we are continuing to maintain it for the community and improving the adoption of Voice AI.
 
 Though the repository is completely open source, you can connect with us if interested in managed hosted offerings or more customized solutions.
-<a href="https://calendly.com/bolna/30min"><img alt="Schedule a meeting" src="https://cdn.cookielaw.org/logos/122ecfc3-4694-42f1-863f-2db42d1b1e68/0bcbbcf4-9b83-4684-ba59-bc913c0d5905/c21bea90-f4f1-43d1-8118-8938bbb27a9d/logo.png" /></a>
+<a href="https://calendly.com/voiceai/30min"><img alt="Schedule a meeting" src="https://cdn.cookielaw.org/logos/122ecfc3-4694-42f1-863f-2db42d1b1e68/0bcbbcf4-9b83-4684-ba59-bc913c0d5905/c21bea90-f4f1-43d1-8118-8938bbb27a9d/logo.png" /></a>
 
 ## Extending with other Telephony Providers
 In case you wish to extend and add some other Telephony like Vonage, Telnyx, etc. following the guidelines below:

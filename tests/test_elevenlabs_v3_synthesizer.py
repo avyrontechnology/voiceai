@@ -7,8 +7,8 @@ import json
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
-from bolna.providers import SUPPORTED_SYNTHESIZER_MODELS
-from bolna.synthesizer.elevenlabs_synthesizer import (
+from voiceai.providers import SUPPORTED_SYNTHESIZER_MODELS
+from voiceai.synthesizer.elevenlabs_synthesizer import (
     DEFAULT_STABILITY,
     STABILITY_PRESETS,
     ElevenlabsBase,

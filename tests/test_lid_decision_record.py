@@ -1,6 +1,6 @@
 """build_lid_decision_record — the per-firing LID telemetry record (persisted to lid_detection_events)."""
 
-from bolna.agent_manager.task_manager import build_lid_decision_record
+from voiceai.agent_manager.task_manager import build_lid_decision_record
 
 DECISION = {
     "target_language": "en",
@@ -133,7 +133,7 @@ def test_inflight_activity_survives_removed_input_tool():
     # a KeyError here lost the whole record.
     from unittest.mock import MagicMock
 
-    from bolna.agent_manager.task_manager import TaskManager
+    from voiceai.agent_manager.task_manager import TaskManager
 
     tm = MagicMock()
     tm.response_in_pipeline = False

@@ -4,12 +4,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-MOD = "bolna.helpers.language_switcher"
+MOD = "voiceai.helpers.language_switcher"
 
 
 def _make_switcher(generate_return, labels=("en", "hi")):
     """Build a LanguageSwitcher whose underlying LiteLLM.generate is mocked."""
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     fake_llm = MagicMock()
     # Real generate(ret_metadata=True) returns (text, usage) — mirror the contract.
@@ -82,7 +82,7 @@ async def test_default_model_is_haiku_with_provider_prefix():
 
 
 async def test_bare_claude_model_gets_anthropic_prefix():
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     with patch(f"{MOD}.LiteLLM", return_value=MagicMock()):
         switcher = LanguageSwitcher(available_labels=["en"], model="claude-haiku-4-5-20251001")
@@ -90,7 +90,7 @@ async def test_bare_claude_model_gets_anthropic_prefix():
 
 
 async def test_provider_prefixed_model_left_untouched():
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     with patch(f"{MOD}.LiteLLM", return_value=MagicMock()):
         prefixed = LanguageSwitcher(available_labels=["en"], model="anthropic/claude-haiku-4-5-20251001")
@@ -117,7 +117,7 @@ def _clear_cred_envs(monkeypatch):
 
 
 def test_credentials_claude_falls_back_to_anthropic(monkeypatch):
-    from bolna.helpers.language_switcher import resolve_switch_llm_credentials
+    from voiceai.helpers.language_switcher import resolve_switch_llm_credentials
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
@@ -127,7 +127,7 @@ def test_credentials_claude_falls_back_to_anthropic(monkeypatch):
 
 def test_credentials_azure_falls_back_to_azure_openai_envs(monkeypatch):
     # azure/* picks up AZURE_OPENAI_* (not the Anthropic key, which would 401).
-    from bolna.helpers.language_switcher import resolve_switch_llm_credentials
+    from voiceai.helpers.language_switcher import resolve_switch_llm_credentials
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
@@ -142,7 +142,7 @@ def test_credentials_azure_falls_back_to_azure_openai_envs(monkeypatch):
 
 
 def test_credentials_openai_style_falls_back_to_openai(monkeypatch):
-    from bolna.helpers.language_switcher import resolve_switch_llm_credentials
+    from voiceai.helpers.language_switcher import resolve_switch_llm_credentials
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "oai-key")
@@ -151,7 +151,7 @@ def test_credentials_openai_style_falls_back_to_openai(monkeypatch):
 
 def test_credentials_azure_version_defaults_like_azure_llm(monkeypatch):
     # AZURE_OPENAI_API_VERSION unset → default (not ""), matching azure_llm.py, else every decide fails.
-    from bolna.helpers.language_switcher import resolve_switch_llm_credentials
+    from voiceai.helpers.language_switcher import resolve_switch_llm_credentials
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "az-key")
@@ -162,7 +162,7 @@ def test_credentials_azure_version_defaults_like_azure_llm(monkeypatch):
 
 def test_misconfigured_azure_judge_falls_back_to_default(monkeypatch):
     # azure flag granted but AZURE_OPENAI_* missing → don't ship a dead judge; use the default.
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")  # default judge's key is present
@@ -173,7 +173,7 @@ def test_misconfigured_azure_judge_falls_back_to_default(monkeypatch):
 
 
 def test_credentials_dedicated_envs_always_win(monkeypatch):
-    from bolna.helpers.language_switcher import resolve_switch_llm_credentials
+    from voiceai.helpers.language_switcher import resolve_switch_llm_credentials
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("LANGUAGE_SWITCH_LLM_API_KEY", "dedicated-key")
@@ -202,7 +202,7 @@ async def test_decide_splits_static_system_and_dynamic_user():
 
 
 async def test_decide_azure_model_gets_no_anthropic_annotation():
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     fake_llm = MagicMock()
     fake_llm.generate = AsyncMock(return_value=json.dumps({"target_language": None}))
@@ -227,7 +227,7 @@ async def test_prewarm_seeds_prompt_cache_with_system_block():
 
 def test_system_prompt_contains_all_rules():
     # One source of truth now — pin each rule's distinctive marker so edits can't drop one.
-    from bolna.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT
+    from voiceai.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT
 
     markers = [
         "INTENT ABOUT A NAMED LANGUAGE",
@@ -248,7 +248,7 @@ def test_system_prompt_contains_all_rules():
 
 
 def test_azure_switcher_wires_credentials_into_litellm(monkeypatch):
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     _clear_cred_envs(monkeypatch)
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "az-key")

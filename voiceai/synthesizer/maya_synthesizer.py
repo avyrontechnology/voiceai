@@ -16,11 +16,11 @@ import websockets
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from bolna.constants import MAYA_TTS_SUPPORTED_LANGUAGES, MAYA_TTS_SUPPORTED_VOICES
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import pcm_to_ulaw, pcm_to_wav_bytes, resample
-from bolna.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.constants import MAYA_TTS_SUPPORTED_LANGUAGES, MAYA_TTS_SUPPORTED_VOICES
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import pcm_to_ulaw, pcm_to_wav_bytes, resample
+from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
 
 logger = configure_logger(__name__)
 
@@ -29,7 +29,7 @@ MULAW_SAMPLE_RATE = 8000
 
 MAYA_DEFAULT_MODEL = "Maya 2 Native"
 
-# Maya and ISO 639-1 spell Odia "or"; bolna also carries the "od" variant.
+# Maya and ISO 639-1 spell Odia "or"; voiceai also carries the "od" variant.
 _LANGUAGE_ALIASES = {"od": "or"}
 
 
@@ -85,7 +85,7 @@ class MayaSynthesizer(StreamSynthesizer):
 
     @staticmethod
     def _normalise_language(language):
-        """Reduce bolna's region-qualified code ("hi-IN") to the primary subtag Maya wants."""
+        """Reduce voiceai's region-qualified code ("hi-IN") to the primary subtag Maya wants."""
         if not isinstance(language, str):
             return language
         primary = re.split(r"[-_]", language.strip().lower(), maxsplit=1)[0]
@@ -318,7 +318,7 @@ class MayaSynthesizer(StreamSynthesizer):
                     self.ws_url,
                     additional_headers={
                         "Authorization": f"Bearer {self.api_key}",
-                        "User-Agent": "bolna",
+                        "User-Agent": "voiceai",
                     },
                     ssl=get_ssl_context(self.ws_url),
                 ),
@@ -370,7 +370,7 @@ class MayaSynthesizer(StreamSynthesizer):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             # A default client User-Agent can trip a filter into a non-JSON 403.
-            "User-Agent": "bolna",
+            "User-Agent": "voiceai",
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(self.api_url, headers=headers, json=payload) as response:

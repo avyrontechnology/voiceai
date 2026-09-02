@@ -3,9 +3,9 @@ import time
 
 from starlette.websockets import WebSocketDisconnect
 
-from bolna.input_handlers.default import DefaultInputHandler
-from bolna.helpers.utils import create_ws_data_packet
-from bolna.helpers.logger_config import configure_logger
+from voiceai.input_handlers.default import DefaultInputHandler
+from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

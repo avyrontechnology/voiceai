@@ -6,7 +6,7 @@ it outlives the moment it was written for."""
 
 from unittest.mock import MagicMock
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 DIRECTIVE = TaskManager._TaskManager__language_directive
 

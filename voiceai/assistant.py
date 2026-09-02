@@ -1,5 +1,5 @@
-from bolna.models import *
-from bolna.agent_manager import AssistantManager
+from voiceai.models import *
+from voiceai.agent_manager import AssistantManager
 
 
 class Assistant:

@@ -7,7 +7,7 @@ name, and must stay out of the way for models it knows nothing about.
 
 import pytest
 
-from bolna.models import validate_reasoning_effort_for_model
+from voiceai.models import validate_reasoning_effort_for_model
 
 
 def test_a_supported_effort_is_accepted():

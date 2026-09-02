@@ -603,7 +603,7 @@ class ToolDescriptionLegacy(BaseModel):
     parameters: Dict
 
 
-from bolna.llms.types import APIParams  # noqa: E402 — canonical definition in llms/types.py
+from voiceai.llms.types import APIParams  # noqa: E402 — canonical definition in llms/types.py
 
 
 class ToolModel(BaseModel):

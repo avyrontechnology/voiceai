@@ -7,19 +7,19 @@ behaviour, because the dev venv may be newer and would never reach the failing p
 import pathlib
 import re
 
-BOLNA_ROOT = pathlib.Path(__file__).resolve().parents[1] / "bolna"
+VOICEAI_ROOT = pathlib.Path(__file__).resolve().parents[1] / "voiceai"
 
 # `asyncio.timeout(` — the 3.11+ timeout context manager. `asyncio.wait_for(` is fine (all versions).
 FORBIDDEN = re.compile(r"\basyncio\.timeout\s*\(")
 
 
 def _runtime_sources():
-    return sorted(BOLNA_ROOT.rglob("*.py"))
+    return sorted(VOICEAI_ROOT.rglob("*.py"))
 
 
 def test_guard_actually_reads_the_package():
     """Without this, a moved test file makes the scan below pass while inspecting nothing."""
-    assert BOLNA_ROOT.is_dir(), f"{BOLNA_ROOT} is not the bolna package"
+    assert VOICEAI_ROOT.is_dir(), f"{VOICEAI_ROOT} is not the voiceai package"
     assert len(_runtime_sources()) > 50
 
 
@@ -30,7 +30,7 @@ def test_no_asyncio_timeout_context_manager():
         for i, line in enumerate(text.splitlines(), 1):
             code = line.split("#", 1)[0]  # ignore comments — flag the call, not a mention
             if FORBIDDEN.search(code):
-                offenders.append(f"{path.relative_to(BOLNA_ROOT.parent)}:{i}: {line.strip()}")
+                offenders.append(f"{path.relative_to(VOICEAI_ROOT.parent)}:{i}: {line.strip()}")
     assert not offenders, (
         "asyncio.timeout() is Python 3.11+ and crashes on the 3.10 runtime — use asyncio.wait_for():\n"
         + "\n".join(offenders)

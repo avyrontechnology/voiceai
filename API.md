@@ -1,4 +1,4 @@
-# Bolna API Documentation
+# VoiceAI API Documentation
 
 ## Endpoints
 

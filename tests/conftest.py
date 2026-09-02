@@ -14,9 +14,9 @@ os.environ["OPENAI_API_KEY"] = "test-key"
 import pytest  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 _SWITCH_DECISION = {"target_language": "mr", "target_confidence": 0.95, "reasoning": "clear Marathi"}
 

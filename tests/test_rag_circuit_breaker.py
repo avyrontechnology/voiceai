@@ -9,7 +9,7 @@ probed by a single request, not by every concurrent turn at once.
 import asyncio
 import time
 
-from bolna.helpers.rag_service_client import RAGServiceClient
+from voiceai.helpers.rag_service_client import RAGServiceClient
 
 THRESHOLD = 3
 COOLDOWN = 30.0

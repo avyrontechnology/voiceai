@@ -1,7 +1,7 @@
 __version__ = "0.10.217"
 
 import os
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

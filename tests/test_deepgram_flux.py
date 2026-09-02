@@ -3,7 +3,7 @@
 from urllib.parse import urlparse, parse_qs
 
 
-from bolna.transcriber.deepgram_transcriber import DeepgramTranscriber
+from voiceai.transcriber.deepgram_transcriber import DeepgramTranscriber
 
 
 def _make_transcriber(model="flux-general-en", language="en", **kwargs):

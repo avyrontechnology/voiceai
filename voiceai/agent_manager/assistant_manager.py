@@ -4,9 +4,9 @@ import uuid
 
 from .base_manager import BaseManager
 from .task_manager import TaskManager
-from bolna.helpers.logger_config import configure_logger
-from bolna.models import AGENT_WELCOME_MESSAGE
-from bolna.helpers.utils import update_prompt_with_context
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.models import AGENT_WELCOME_MESSAGE
+from voiceai.helpers.utils import update_prompt_with_context
 
 logger = configure_logger(__name__)
 

@@ -9,10 +9,10 @@ acknowledgment mis-tags stay non-evidence.
 from unittest.mock import MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.language_switcher import LanguageSwitcher
-from bolna.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT, LANGUAGE_SWITCH_TURN_PROMPT
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.language_switcher import LanguageSwitcher
+from voiceai.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT, LANGUAGE_SWITCH_TURN_PROMPT
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 def _pool(events=None, segments=None):

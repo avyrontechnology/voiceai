@@ -13,10 +13,10 @@ from websockets.exceptions import ConnectionClosedError, InvalidHandshake, Conne
 from dotenv import load_dotenv
 
 from .base_transcriber import BaseTranscriber
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import create_ws_data_packet, timestamp_ms
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
 logger = configure_logger(__name__)

@@ -7,18 +7,18 @@ from urllib.parse import quote, urlsplit
 
 import aiohttp
 from yarl import URL
-from bolna.helpers.logger_config import configure_logger
-from bolna.enums import LogComponent, LogDirection
-from bolna.helpers.utils import convert_to_request_log, format_error_message
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.enums import LogComponent, LogDirection
+from voiceai.helpers.utils import convert_to_request_log, format_error_message
 
 logger = configure_logger(__name__)
 
 ALLOWED_URL_SCHEMES = ("http", "https")
 
-# Hosts in BOLNA_TOOL_URL_HOST_ALLOWLIST (comma-separated) bypass the SSRF block,
+# Hosts in VOICEAI_TOOL_URL_HOST_ALLOWLIST (comma-separated) bypass the SSRF block,
 # for deployments that legitimately call an internal endpoint from a tool.
 _ALLOWLISTED_HOSTS = frozenset(
-    h.strip().lower() for h in os.getenv("BOLNA_TOOL_URL_HOST_ALLOWLIST", "").split(",") if h.strip()
+    h.strip().lower() for h in os.getenv("VOICEAI_TOOL_URL_HOST_ALLOWLIST", "").split(",") if h.strip()
 )
 
 

@@ -62,7 +62,7 @@ def _make_history(length=2):
 
 
 def _make_task_manager():
-    from bolna.agent_manager.task_manager import TaskManager
+    from voiceai.agent_manager.task_manager import TaskManager
 
     tm = MagicMock()
     tm.tools = {
@@ -175,7 +175,7 @@ class TestCallSites:
     barge-in invalidation we deliberately removed."""
 
     def test_sync_history_does_not_invalidate(self):
-        from bolna.agent_manager.task_manager import TaskManager
+        from voiceai.agent_manager.task_manager import TaskManager
 
         src = inspect.getsource(TaskManager.sync_history)
         assert "_invalidate_response_chain" not in src, (
@@ -184,7 +184,7 @@ class TestCallSites:
         assert "_set_interruption_hint" in src
 
     def test_handle_transcriber_output_does_not_invalidate(self):
-        from bolna.agent_manager.task_manager import TaskManager
+        from voiceai.agent_manager.task_manager import TaskManager
 
         src = inspect.getsource(TaskManager._handle_transcriber_output)
         assert "_invalidate_response_chain" not in src, (
@@ -192,7 +192,7 @@ class TestCallSites:
         )
 
     def test_cleanup_downstream_cancels_in_flight(self):
-        from bolna.agent_manager.task_manager import TaskManager
+        from voiceai.agent_manager.task_manager import TaskManager
 
         src = inspect.getsource(TaskManager._TaskManager__cleanup_downstream_tasks)
         assert "_cancel_in_flight_llm_response" in src

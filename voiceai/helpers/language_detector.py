@@ -3,11 +3,11 @@ import json
 import time
 import asyncio
 import uuid
-from bolna.llms import OpenAiLLM
-from bolna.prompts import LANGUAGE_DETECTION_PROMPT
-from bolna.enums import LogComponent, LogDirection
-from bolna.helpers.utils import convert_to_request_log
-from bolna.helpers.logger_config import configure_logger
+from voiceai.llms import OpenAiLLM
+from voiceai.prompts import LANGUAGE_DETECTION_PROMPT
+from voiceai.enums import LogComponent, LogDirection
+from voiceai.helpers.utils import convert_to_request_log
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

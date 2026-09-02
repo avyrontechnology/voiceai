@@ -7,10 +7,10 @@ import pytest
 from unittest.mock import AsyncMock
 import websockets
 
-from bolna.models import GeminiLiveConfig, OpenAIRealtimeConfig, S2SConfig
-from bolna.providers import SUPPORTED_S2S_PROVIDERS
-from bolna.s2s import GeminiLiveS2S, OpenAIRealtimeS2S
-from bolna.s2s.events import (
+from voiceai.models import GeminiLiveConfig, OpenAIRealtimeConfig, S2SConfig
+from voiceai.providers import SUPPORTED_S2S_PROVIDERS
+from voiceai.s2s import GeminiLiveS2S, OpenAIRealtimeS2S
+from voiceai.s2s.events import (
     AudioEncoding,
     AudioFormat,
     AudioDelta,
@@ -379,7 +379,7 @@ class TestOpenAIClientMessages:
         assert provider._ws.sent_of_type("response.create")
 
     async def test_dtmf_is_injected_as_user_text(self):
-        # bolna terminates telephony, so OpenAI never sees carrier DTMF frames.
+        # voiceai terminates telephony, so OpenAI never sees carrier DTMF frames.
         provider = make_openai()
         provider._ws = FakeWS()
         await provider.send_dtmf("42#")

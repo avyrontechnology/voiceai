@@ -11,8 +11,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 def _tm(*, has_transfer=False, end_call=False, hangup=False, buffer_age=5.0):

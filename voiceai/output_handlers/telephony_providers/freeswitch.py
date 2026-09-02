@@ -5,9 +5,9 @@ import os
 import time
 import uuid
 
-from bolna.output_handlers.default import DefaultOutputHandler
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import wav_bytes_to_pcm
+from voiceai.output_handlers.default import DefaultOutputHandler
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import wav_bytes_to_pcm
 
 logger = configure_logger(__name__)
 

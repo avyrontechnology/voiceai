@@ -6,14 +6,14 @@ from litellm import acompletion, ContentPolicyViolationError
 from litellm.exceptions import AuthenticationError, RateLimitError, APIError, APIConnectionError
 from dotenv import load_dotenv
 
-from bolna.constants import DEFAULT_LANGUAGE_CODE
-from bolna.enums import LogComponent, LogDirection
-from bolna.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
+from voiceai.constants import DEFAULT_LANGUAGE_CODE
+from voiceai.enums import LogComponent, LogDirection
+from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
 from .llm import BaseLLM
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import LLMStreamChunk, LatencyData
 from .message_models import strip_internal_keys
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

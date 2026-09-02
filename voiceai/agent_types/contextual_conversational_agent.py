@@ -3,10 +3,10 @@ import os
 import time
 from dotenv import load_dotenv
 from .base_agent import BaseAgent
-from bolna.helpers.utils import format_messages
-from bolna.llms import OpenAiLLM
-from bolna.prompts import CHECK_FOR_COMPLETION_PROMPT, VOICEMAIL_DETECTION_PROMPT
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import format_messages
+from voiceai.llms import OpenAiLLM
+from voiceai.prompts import CHECK_FOR_COMPLETION_PROMPT, VOICEMAIL_DETECTION_PROMPT
+from voiceai.helpers.logger_config import configure_logger
 
 load_dotenv()
 logger = configure_logger(__name__)

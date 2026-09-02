@@ -4,16 +4,16 @@ import json
 import time
 from typing import List, Tuple, AsyncGenerator, Optional, Dict
 
-from bolna.models import *
-from bolna.agent_types.base_agent import BaseAgent
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.rag_service_client import RAGServiceClientSingleton
-from bolna.helpers.function_calling_helpers import guard_llm_base_url
-from bolna.helpers.utils import now_ms, format_messages
-from bolna.llms.types import LLMStreamChunk, LatencyData
-from bolna.providers import SUPPORTED_LLM_PROVIDERS
-from bolna.llms import OpenAiLLM
-from bolna.prompts import VOICEMAIL_DETECTION_PROMPT
+from voiceai.models import *
+from voiceai.agent_types.base_agent import BaseAgent
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
+from voiceai.helpers.function_calling_helpers import guard_llm_base_url
+from voiceai.helpers.utils import now_ms, format_messages
+from voiceai.llms.types import LLMStreamChunk, LatencyData
+from voiceai.providers import SUPPORTED_LLM_PROVIDERS
+from voiceai.llms import OpenAiLLM
+from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
 
 logger = configure_logger(__name__)
 

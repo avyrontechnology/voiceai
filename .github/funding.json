@@ -3,7 +3,7 @@
   "entity": {
     "type": "organisation",
     "role": "maintainer",
-    "name": "Bolna",
+    "name": "VoiceAI",
     "email": "hello@bolna.ai",
     "phone": "",
     "description": "Full stack tools for building voice agents",
@@ -13,8 +13,8 @@
   },
   "projects": [
     {
-      "guid": "bolna",
-      "name": "bolna",
+      "guid": "voiceai",
+      "name": "voiceai",
       "description": "Full stack tools for building voice agents",
       "webpageUrl": {
         "url": "https://github.com/bolna-ai/bolna"

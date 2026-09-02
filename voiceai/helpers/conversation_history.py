@@ -1,6 +1,6 @@
 import copy
-from bolna.enums import ChatRole
-from bolna.helpers.logger_config import configure_logger
+from voiceai.enums import ChatRole
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

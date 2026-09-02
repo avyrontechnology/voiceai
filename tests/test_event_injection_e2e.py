@@ -13,10 +13,10 @@ import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.agent_types.graph_agent import GraphAgent
-from bolna.helpers.conversation_history import ConversationHistory
-from bolna.enums import NodeType
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.agent_types.graph_agent import GraphAgent
+from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.enums import NodeType
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +119,9 @@ def _make_graph_agent(config_overrides=None):
     mock_llm.trigger_function_call = False
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=mock_llm)}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=mock_llm)}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
 

@@ -9,7 +9,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.helpers.language_switcher import DEFAULT_HEDGE_AFTER_S, LanguageSwitcher
+from voiceai.helpers.language_switcher import DEFAULT_HEDGE_AFTER_S, LanguageSwitcher
 
 REPLY = json.dumps({"target_language": "mr", "target_confidence": 0.9, "reasoning": "Marathi"})
 

@@ -8,7 +8,7 @@ succeeds against the wrong endpoint — so the URLs are pinned here.
 
 import pytest
 
-from bolna.transcriber.sarvam_transcriber import SarvamTranscriber
+from voiceai.transcriber.sarvam_transcriber import SarvamTranscriber
 
 
 def _transcriber(model, language="hi-IN"):

@@ -9,11 +9,11 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import build_soniox_config, create_ws_data_packet, soniox_ws_url, timestamp_ms
-from bolna.enums import TelephonyProvider
-from bolna.constants import (
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import build_soniox_config, create_ws_data_packet, soniox_ws_url, timestamp_ms
+from voiceai.enums import TelephonyProvider
+from voiceai.constants import (
     SONIOX_AUTO_LANGUAGE_VALUES,
     SONIOX_DEFAULT_MULTILINGUAL_HINTS,
     SONIOX_ENDPOINT_TOKEN,

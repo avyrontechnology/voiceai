@@ -15,10 +15,10 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.language_switcher import LanguageSwitcher
-from bolna.lid.base import LIDBackend
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.language_switcher import LanguageSwitcher
+from voiceai.lid.base import LIDBackend
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 RECENT = TaskManager._TaskManager__recent_detected_turns
 

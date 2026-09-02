@@ -1,4 +1,4 @@
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 from .sarvam import SarvamLID
 from .soniox import SonioxLID

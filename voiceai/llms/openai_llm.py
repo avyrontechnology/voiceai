@@ -5,7 +5,7 @@ import re
 import time
 from typing import Optional
 from urllib.parse import urlparse
-from bolna.llms.http_client_pool import get_shared_http_client
+from voiceai.llms.http_client_pool import get_shared_http_client
 from dotenv import load_dotenv
 from openai import (
     AsyncOpenAI,
@@ -21,16 +21,16 @@ from openai import (
 import websockets
 from websockets.protocol import State as WSState
 
-from bolna.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, default_reasoning_effort
-from bolna.enums import ResponseStreamEvent, ResponseItemType, Verbosity
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import compute_function_pre_call_message, now_ms
-from bolna.helpers.function_calling_helpers import guard_llm_base_url
+from voiceai.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, default_reasoning_effort
+from voiceai.enums import ResponseStreamEvent, ResponseItemType, Verbosity
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import compute_function_pre_call_message, now_ms
+from voiceai.helpers.function_calling_helpers import guard_llm_base_url
 from .openai_base import OpenAICompatibleLLM
 from .message_models import strip_internal_keys
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import APIParams, LLMStreamChunk, LatencyData
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

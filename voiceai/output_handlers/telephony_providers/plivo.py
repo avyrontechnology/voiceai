@@ -1,8 +1,8 @@
 import base64
 import json
 from dotenv import load_dotenv
-from bolna.output_handlers.telephony import TelephonyOutputHandler
-from bolna.helpers.logger_config import configure_logger
+from voiceai.output_handlers.telephony import TelephonyOutputHandler
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

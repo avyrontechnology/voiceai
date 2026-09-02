@@ -10,7 +10,7 @@ import socket
 
 import pytest
 
-from bolna.helpers.function_calling_helpers import SSRFError, validate_outbound_url
+from voiceai.helpers.function_calling_helpers import SSRFError, validate_outbound_url
 
 
 @pytest.mark.parametrize(

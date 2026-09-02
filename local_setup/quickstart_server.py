@@ -6,12 +6,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
-from bolna.helpers.utils import store_file
-from bolna.prompts import *
-from bolna.helpers.logger_config import configure_logger
-from bolna.models import *
-from bolna.llms import LiteLLM
-from bolna.agent_manager.assistant_manager import AssistantManager
+from voiceai.helpers.utils import store_file
+from voiceai.prompts import *
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.models import *
+from voiceai.llms import LiteLLM
+from voiceai.agent_manager.assistant_manager import AssistantManager
 
 load_dotenv()
 logger = configure_logger(__name__)

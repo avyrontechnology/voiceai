@@ -3,8 +3,8 @@ import os
 import time
 from typing import Awaitable, Callable, Optional
 
-from bolna.helpers.logger_config import configure_logger
-from bolna.lid import LIDProvider
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.lid import LIDProvider
 
 logger = configure_logger(__name__)
 

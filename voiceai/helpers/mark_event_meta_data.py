@@ -5,8 +5,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from bolna.constants import IS_USER_ONLINE_MESSAGE
-from bolna.helpers.logger_config import configure_logger
+from voiceai.constants import IS_USER_ONLINE_MESSAGE
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 
@@ -98,7 +98,7 @@ class MarkEventMetaData:
         if value.get("type") != "pre_mark_message":
             self._mark_history[mark_id] = value
         logger.info(
-            "BOLNA_TRACE_MARK update mark_id=%s type=%s seq=%s turn=%s response_uid=%s group_uid=%s counter=%s dur=%.3f text_len=%s",
+            "VOICEAI_TRACE_MARK update mark_id=%s type=%s seq=%s turn=%s response_uid=%s group_uid=%s counter=%s dur=%.3f text_len=%s",
             mark_id,
             value.get("type"),
             value.get("sequence_id"),
@@ -184,7 +184,7 @@ class MarkEventMetaData:
         result = self.mark_event_meta_data.pop(mark_id, {})
         if result:
             logger.info(
-                "BOLNA_TRACE_MARK fetch mark_id=%s type=%s seq=%s turn=%s response_uid=%s group_uid=%s counter=%s",
+                "VOICEAI_TRACE_MARK fetch mark_id=%s type=%s seq=%s turn=%s response_uid=%s group_uid=%s counter=%s",
                 mark_id,
                 result.get("type"),
                 result.get("sequence_id"),
@@ -199,7 +199,7 @@ class MarkEventMetaData:
     def clear_data(self):
         logger.info(f"Clearing mark meta data dict")
         logger.info(
-            "BOLNA_TRACE_MARK clear pending=%s mark_ids=%s",
+            "VOICEAI_TRACE_MARK clear pending=%s mark_ids=%s",
             len(self.mark_event_meta_data),
             list(self.mark_event_meta_data.keys()),
         )

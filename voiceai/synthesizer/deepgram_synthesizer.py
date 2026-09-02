@@ -11,10 +11,10 @@ import websockets
 from dotenv import load_dotenv
 
 from .stream_synthesizer import StreamSynthesizer
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import convert_audio_to_wav, create_ws_data_packet
-from bolna.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import convert_audio_to_wav, create_ws_data_packet
+from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
 
 logger = configure_logger(__name__)
 load_dotenv()

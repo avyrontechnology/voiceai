@@ -7,8 +7,8 @@ context_data for instant routing decisions.
 import operator as op
 from typing import Any, Optional
 
-from bolna.enums import ExpressionOperator, ExpressionLogic, EdgeConditionType, VariableType
-from bolna.helpers.logger_config import configure_logger
+from voiceai.enums import ExpressionOperator, ExpressionLogic, EdgeConditionType, VariableType
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

@@ -6,9 +6,9 @@ which used to drop the field and leave the model on its own default of "low".
 
 from unittest.mock import MagicMock, patch
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.agent_types.graph_agent import GraphAgent
-from bolna.agent_types.knowledgebase_agent import KnowledgeBaseAgent
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.agent_types.graph_agent import GraphAgent
+from voiceai.agent_types.knowledgebase_agent import KnowledgeBaseAgent
 
 
 def _llm_agent_config(**overrides):
@@ -75,8 +75,8 @@ def _captured_llm_kwargs(agent_cls, config):
         return MagicMock()
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
         patch(f"{agent_cls.__module__}.SUPPORTED_LLM_PROVIDERS", {"openai": _capture}),
     ):
         agent_cls(config)
@@ -102,7 +102,7 @@ class TestTaskManagerForwarding:
 
 class TestOpenAiLLMReceivesVerbosity:
     async def test_verbosity_reaches_the_responses_payload(self):
-        from bolna.llms.openai_llm import OpenAiLLM
+        from voiceai.llms.openai_llm import OpenAiLLM
 
         llm = OpenAiLLM(
             **_build_llm_config(_llm_agent_config()), llm_key="test-key", base_url="https://api.openai.com/v1"
@@ -113,7 +113,7 @@ class TestOpenAiLLMReceivesVerbosity:
         assert create_kwargs["text"]["verbosity"] == "high"
 
     async def test_default_is_low_when_unset(self):
-        from bolna.llms.openai_llm import OpenAiLLM
+        from voiceai.llms.openai_llm import OpenAiLLM
 
         cfg = _llm_agent_config()
         cfg.pop("verbosity")
@@ -154,12 +154,12 @@ class TestNonOpenAiProvidersUnaffected:
     """Providers with no notion of verbosity must not break now that it is forwarded."""
 
     def test_litellm_absorbs_verbosity_without_sending_it(self):
-        from bolna.llms.litellm import LiteLLM
+        from voiceai.llms.litellm import LiteLLM
 
         llm = LiteLLM(model="claude-sonnet-5", max_tokens=150, temperature=0.1, verbosity="high", llm_key="k")
         assert "verbosity" not in llm.model_args
 
     def test_gemini_construction_succeeds(self):
-        from bolna.llms.gemini_llm import GeminiLLM
+        from voiceai.llms.gemini_llm import GeminiLLM
 
         GeminiLLM(model="gemini-2.5-flash", max_tokens=150, temperature=0.1, verbosity="high", llm_key="k")

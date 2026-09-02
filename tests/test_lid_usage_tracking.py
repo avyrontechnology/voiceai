@@ -4,14 +4,14 @@ persisted as one `lid_usage` record inside lid_detection_events (JSONB — no ne
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
-MOD = "bolna.helpers.language_switcher"
+MOD = "voiceai.helpers.language_switcher"
 
 
 def make_switcher(payload, usage=None):
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     fake_llm = MagicMock()
     fake_llm.generate = AsyncMock(return_value=(payload, usage or {}))
@@ -77,7 +77,7 @@ async def test_models_used_tracks_the_answering_model():
 
 
 def make_lid(bytes_per_second):
-    from bolna.lid.base import LIDBackend
+    from voiceai.lid.base import LIDBackend
 
     lid = object.__new__(LIDBackend)
     lid.bytes_fed = 0

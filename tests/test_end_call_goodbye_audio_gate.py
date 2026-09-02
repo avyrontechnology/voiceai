@@ -9,8 +9,8 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.agent_manager.interruption_manager import InterruptionManager
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.interruption_manager import InterruptionManager
 
 GOODBYE_SEQ = 9
 SPEECH_ENDED = {"data": {"type": "speech_ended"}, "meta_info": {}}

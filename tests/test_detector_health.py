@@ -8,7 +8,7 @@ this record is the signal.
 
 from unittest.mock import MagicMock
 
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 RECORD = TranscriberPool._record_detector_health
 

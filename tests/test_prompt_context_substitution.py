@@ -4,7 +4,7 @@ The server-owned telephony ids must render empty rather than handing the model a
 and an unknown placeholder must render empty rather than leaving braces in what the agent says.
 """
 
-from bolna.helpers.utils import update_prompt_with_context
+from voiceai.helpers.utils import update_prompt_with_context
 
 TEMPLATE = "Hi {name}, ref {call_sid}, stream {stream_sid}, missing {absent}."
 

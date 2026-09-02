@@ -30,8 +30,8 @@ import uuid
 import traceback
 import audioop
 from collections import deque
-from bolna.output_handlers.telephony import TelephonyOutputHandler
-from bolna.helpers.logger_config import configure_logger
+from voiceai.output_handlers.telephony import TelephonyOutputHandler
+from voiceai.helpers.logger_config import configure_logger
 from dotenv import load_dotenv
 
 logger = configure_logger(__name__)

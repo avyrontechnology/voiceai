@@ -1,6 +1,6 @@
 """Unwrapping the model's JSON before post-call extraction parses it."""
 
-from bolna.helpers.utils import clean_json_string
+from voiceai.helpers.utils import clean_json_string
 
 
 def test_a_fenced_json_block_is_unwrapped():

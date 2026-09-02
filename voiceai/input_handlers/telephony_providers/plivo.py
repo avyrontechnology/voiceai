@@ -1,8 +1,8 @@
 import os
 import plivo as plivosdk
 from dotenv import load_dotenv
-from bolna.input_handlers.telephony import TelephonyInputHandler
-from bolna.helpers.logger_config import configure_logger
+from voiceai.input_handlers.telephony import TelephonyInputHandler
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

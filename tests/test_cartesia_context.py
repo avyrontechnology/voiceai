@@ -3,7 +3,7 @@ one — except the handoff doesn't finalize, so the reply continues it."""
 
 from unittest.mock import MagicMock
 
-from bolna.synthesizer.cartesia_synthesizer import CartesiaSynthesizer
+from voiceai.synthesizer.cartesia_synthesizer import CartesiaSynthesizer
 
 
 def _synth():

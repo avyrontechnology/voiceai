@@ -7,7 +7,7 @@ flagging, ordering by sent_ts, and pre_mark_message exclusion.
 import time
 
 
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 
 
 def _audio_chunk(seq_id: int, text: str, sent_ts: float, duration: float = 0.5) -> dict:

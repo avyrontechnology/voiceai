@@ -5,8 +5,8 @@ import base64
 import json
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
-from bolna.helpers.utils import create_ws_data_packet
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

@@ -12,7 +12,7 @@ Constructor-only: no network happens until run().
 
 import pytest
 
-from bolna.transcriber.smallest_transcriber import SmallestTranscriber
+from voiceai.transcriber.smallest_transcriber import SmallestTranscriber
 
 
 def _transcriber(provider, **kwargs):

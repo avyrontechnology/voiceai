@@ -5,7 +5,7 @@ while another coroutine is already running recv")."""
 import asyncio
 
 
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 
 
 class _FakeSynth:

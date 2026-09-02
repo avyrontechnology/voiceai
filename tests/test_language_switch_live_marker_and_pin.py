@@ -12,9 +12,9 @@ variants never get one, and the main LLM drifts languages mid-call.
 from unittest.mock import MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.language_switcher import LIVE_UNAVAILABLE_MARKER, LanguageSwitcher
-from bolna.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.language_switcher import LIVE_UNAVAILABLE_MARKER, LanguageSwitcher
+from voiceai.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT
 
 
 # ---- idle-flush LIVE marker in decide() ----

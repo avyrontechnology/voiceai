@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import websockets as _ws
 
-from bolna.helpers.utils import audio_to_mulaw8k
-from bolna.models import KalpaConfig, Synthesizer
-from bolna.providers import SUPPORTED_SYNTHESIZER_MODELS
-from bolna.synthesizer.kalpa_synthesizer import (
+from voiceai.helpers.utils import audio_to_mulaw8k
+from voiceai.models import KalpaConfig, Synthesizer
+from voiceai.providers import SUPPORTED_SYNTHESIZER_MODELS
+from voiceai.synthesizer.kalpa_synthesizer import (
     DEFAULT_CHUNK_LENGTH_SCHEDULE,
     KALPA_DEFAULT_MODEL,
     KALPA_NATIVE_SAMPLE_RATE,
@@ -141,7 +141,7 @@ class _FakeSession:
 
 def _patch_http(monkeypatch, body, status=200):
     monkeypatch.setattr(
-        "bolna.synthesizer.kalpa_synthesizer.aiohttp.ClientSession",
+        "voiceai.synthesizer.kalpa_synthesizer.aiohttp.ClientSession",
         lambda *a, **k: _FakeSession(body, status),
     )
 
@@ -267,7 +267,7 @@ def test_a_configured_voice_id_is_used_without_touching_the_catalog(monkeypatch)
     def boom(*a, **k):
         raise AssertionError("should not fetch /v1/voices when voice_id is set")
 
-    monkeypatch.setattr("bolna.synthesizer.kalpa_synthesizer.aiohttp.ClientSession", boom)
+    monkeypatch.setattr("voiceai.synthesizer.kalpa_synthesizer.aiohttp.ClientSession", boom)
     s = _synth(voice_id=VOICE_ID)
     assert asyncio.run(s._resolve_voice_id()) == VOICE_ID
 
@@ -306,7 +306,7 @@ def test_voice_resolution_is_cached_across_instances(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("a later call must not fetch /v1/voices again")
 
-    monkeypatch.setattr("bolna.synthesizer.kalpa_synthesizer.aiohttp.ClientSession", boom)
+    monkeypatch.setattr("voiceai.synthesizer.kalpa_synthesizer.aiohttp.ClientSession", boom)
     assert asyncio.run(_synth(voice_id=None, voice=" KIARA ")._resolve_voice_id()) == VOICE_ID
 
 
@@ -525,7 +525,7 @@ async def test_a_wedged_response_makes_the_sender_reset_the_socket(monkeypatch):
     state is unknowable. The sender closes the socket — the receiver settles the lost turn,
     monitor_connection redials — and the parked turn goes out on the fresh connection,
     instead of being flushed into a session we no longer understand."""
-    monkeypatch.setattr("bolna.synthesizer.kalpa_synthesizer.RESPONSE_IDLE_TIMEOUT", 0.05)
+    monkeypatch.setattr("voiceai.synthesizer.kalpa_synthesizer.RESPONSE_IDLE_TIMEOUT", 0.05)
     s = _synth()
     s._response_idle.clear()  # a previous response is wedged; its done never comes
     closed = asyncio.Event()
@@ -1289,7 +1289,7 @@ def _fake_connect(monkeypatch, replies):
     async def fake(*a, **k):
         return ws
 
-    monkeypatch.setattr("bolna.synthesizer.kalpa_synthesizer.websockets.connect", fake)
+    monkeypatch.setattr("voiceai.synthesizer.kalpa_synthesizer.websockets.connect", fake)
     return ws
 
 
@@ -1359,7 +1359,7 @@ async def test_an_unresolvable_voice_fails_the_connection_permanently(monkeypatc
 
 
 def _wav(seconds=1.0):
-    from bolna.helpers.utils import pcm_to_wav_bytes
+    from voiceai.helpers.utils import pcm_to_wav_bytes
 
     return pcm_to_wav_bytes(_pcm(seconds), sample_rate=KALPA_NATIVE_SAMPLE_RATE)
 
@@ -1432,7 +1432,7 @@ def test_the_one_shot_render_truncates_at_the_cap_too(monkeypatch):
             return _FakeResp(self._body, self._status)
 
     monkeypatch.setattr(
-        "bolna.synthesizer.kalpa_synthesizer.aiohttp.ClientSession",
+        "voiceai.synthesizer.kalpa_synthesizer.aiohttp.ClientSession",
         lambda *a, **k: _CapturingSession(_tts_response(wav)),
     )
     s = _synth()

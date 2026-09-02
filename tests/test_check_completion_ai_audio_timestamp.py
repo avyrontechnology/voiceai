@@ -7,8 +7,8 @@ scored a still-speaking agent as silent and cut the call.
 import time
 from types import SimpleNamespace
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 
 
 # Exercised on a stand-in via the unbound method, as in test_check_completion_stall_backstop.

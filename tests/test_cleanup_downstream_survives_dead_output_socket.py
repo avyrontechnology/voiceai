@@ -10,9 +10,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
-from bolna.output_handlers.telephony_providers.plivo import PlivoOutputHandler
-import bolna.output_handlers.telephony as telephony_module
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.output_handlers.telephony_providers.plivo import PlivoOutputHandler
+import voiceai.output_handlers.telephony as telephony_module
 
 
 class _HangingWebSocket:
@@ -29,7 +29,7 @@ def _make_input_tool():
 
 
 def _make_task_manager(output_tool):
-    from bolna.agent_manager.task_manager import TaskManager
+    from voiceai.agent_manager.task_manager import TaskManager
 
     tm = MagicMock()
     tm.tools = {

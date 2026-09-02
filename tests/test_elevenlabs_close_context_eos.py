@@ -9,7 +9,7 @@ import json
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
-from bolna.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
+from voiceai.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
 
 
 def _audio_msg(ctx, text=""):

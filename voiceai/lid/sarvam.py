@@ -8,8 +8,8 @@ import wave
 
 from dotenv import load_dotenv
 
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
 
 from .base import LIDBackend
 

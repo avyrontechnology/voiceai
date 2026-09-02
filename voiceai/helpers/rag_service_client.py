@@ -27,7 +27,7 @@ class RAGResponse:
 class RAGServiceClient:
     """
     Client for communicating with rag-proxy-server.
-    This replaces all local RAG functionality in bolna agents.
+    This replaces all local RAG functionality in voiceai agents.
     """
 
     def __init__(self, rag_server_url: str, timeout: int = 5):
@@ -121,7 +121,7 @@ class RAGServiceClient:
     ) -> RAGResponse:
         """
         Query multiple collections for conversation context.
-        This is the main method used by bolna agents.
+        This is the main method used by voiceai agents.
 
         Args:
             query: The user's query/message

@@ -9,7 +9,7 @@ mis-paired the user transcript with the wrong agent turn in the latency dict.
 import asyncio
 from unittest.mock import AsyncMock
 
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 class FakeTranscriber:

@@ -5,7 +5,7 @@ requires      = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bolna"
+name = "voiceai"
 version = "0.10.217"
 readme = "README.md"
 authors = [
@@ -32,7 +32,7 @@ pythonpath = ["."]
 addopts = "--strict-markers"
 
 [tool.setuptools]
-package-dir = {"bolna" = "bolna"}
+package-dir = {"voiceai" = "voiceai"}
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -55,6 +55,6 @@ name = "cz_conventional_commits"
 version_provider = "pep621"
 tag_format = "$version"
 version_files = [
-    "bolna/__init__.py:__version__",
+    "voiceai/__init__.py:__version__",
 ]
 update_changelog_on_bump = false

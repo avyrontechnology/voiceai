@@ -7,8 +7,8 @@ to LLM, backward compatibility, unconditional edges, priority ordering, mixed ed
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from bolna.agent_types.graph_agent import GraphAgent, _DETERMINISTIC_REASONING_PREFIX
-from bolna.helpers.expression_evaluator import evaluate_condition
+from voiceai.agent_types.graph_agent import GraphAgent, _DETERMINISTIC_REASONING_PREFIX
+from voiceai.helpers.expression_evaluator import evaluate_condition
 
 
 # ---------------------------------------------------------------------------
@@ -72,9 +72,9 @@ def _make_agent(config_overrides=None):
     mock_openai_llm_cls = MagicMock(return_value=mock_llm)
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
 
@@ -823,7 +823,7 @@ class TestTypedCoercion:
 
     def test_invalid_declared_type_falls_back_to_inference(self):
         cond = {"variable": "age", "operator": "gt", "value": "10"}
-        with patch("bolna.helpers.expression_evaluator.logger") as mock_logger:
+        with patch("voiceai.helpers.expression_evaluator.logger") as mock_logger:
             result = evaluate_condition(cond, {"age": "9"}, {"age": "int"})
         assert result  # inference path: "9" > "10" lexically
         assert mock_logger.warning.call_count == 1  # unknown type warned, then ignored
@@ -870,7 +870,7 @@ class TestVariableTypesThreading:
         agent = _make_agent()
         agent.variable_types = {"recipient_data.age": "number"}
         agent.context_data = {"recipient_data": {"age": "abc"}}
-        with patch("bolna.helpers.expression_evaluator.logger") as mock_logger:
+        with patch("voiceai.helpers.expression_evaluator.logger") as mock_logger:
             matched, _ = agent._evaluate_deterministic_edges([self._age_edge()])
         assert matched is None
         assert mock_logger.warning.call_count == 1
@@ -880,6 +880,6 @@ class TestVariableTypesThreading:
         agent = _make_agent()
         agent.variable_types = {"recipient_data.age": "int"}  # not a valid VariableType
         agent.context_data = {"recipient_data": {"age": "21"}}
-        with patch("bolna.helpers.expression_evaluator.logger") as mock_logger:
+        with patch("voiceai.helpers.expression_evaluator.logger") as mock_logger:
             agent._evaluate_deterministic_edges([self._age_edge()])
         assert mock_logger.warning.call_count == 1

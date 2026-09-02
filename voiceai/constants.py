@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from bolna.enums import ReasoningEffort as RE
+from voiceai.enums import ReasoningEffort as RE
 
 PREPROCESS_DIR = "agent_data"
 PCM16_SCALE = 32768.0

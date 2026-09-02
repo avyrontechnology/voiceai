@@ -4,9 +4,9 @@ agent message even though the tail audio played."""
 import time
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.conversation_history import ConversationHistory
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 
 FULL_TEXT = (
     "aapka final price rupees two thousand five hundred fifty seven padega abhi ye deal limited time ke liye hai"

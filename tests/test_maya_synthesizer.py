@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bolna.models import Synthesizer
-from bolna.providers import SUPPORTED_SYNTHESIZER_MODELS
-from bolna.synthesizer.maya_synthesizer import MAYA_NATIVE_SAMPLE_RATE, MayaSynthesizer
+from voiceai.models import Synthesizer
+from voiceai.providers import SUPPORTED_SYNTHESIZER_MODELS
+from voiceai.synthesizer.maya_synthesizer import MAYA_NATIVE_SAMPLE_RATE, MayaSynthesizer
 
 KEY = "maya_sk_test_dummy"
 
@@ -95,12 +95,12 @@ def test_invalid_options_raise_at_construction_not_mid_call(bad):
         ("hi-IN", "hi"),
         ("ta_IN", "ta"),
         ("HI-in", "hi"),
-        ("od-IN", "or"),  # bolna carries the "od" variant of Odia; Maya uses "or"
+        ("od-IN", "or"),  # voiceai carries the "od" variant of Odia; Maya uses "or"
         ("en", "en"),
     ],
 )
 def test_region_qualified_codes_are_reduced_to_mayas_primary_subtag(given, expected):
-    """bolna's ASR reports "hi-IN", and agent configs are commonly written the same way.
+    """voiceai's ASR reports "hi-IN", and agent configs are commonly written the same way.
     Without this the configured language fails validation outright and every auto-detected
     switch is silently dropped, so the feature would look wired up but never fire."""
     assert _synth(language=given).language == expected
@@ -169,7 +169,7 @@ def test_sender_sends_text_then_flush_on_end_of_llm_stream():
 def test_an_empty_final_push_is_primed_so_the_turn_still_terminates():
     """Maya emits `end` only when an utterance is open, and an empty-string text frame
     does not open one — a bare flush is silently ignored (verified against the live API).
-    bolna's final push can be empty, so whitespace primes the buffer: `end` with zero
+    voiceai's final push can be empty, so whitespace primes the buffer: `end` with zero
     audio frames, instead of a turn that never closes."""
     s = _synth()
     asyncio.run(s.sender("", 1, end_of_llm_stream=True))
@@ -407,7 +407,7 @@ def test_synthesize_wraps_pcm_in_wav_so_the_rate_is_self_describing():
     """The handoff path calls audio_to_mulaw8k(rate_hint=getattr(synth, 'sampling_rate')).
     Headerless 24 kHz PCM would be decoded at the hinted rate and play at a third speed,
     so synthesize() carries a RIFF header and the hint stops mattering."""
-    from bolna.helpers.utils import audio_to_mulaw8k
+    from voiceai.helpers.utils import audio_to_mulaw8k
 
     s = _synth(use_mulaw=True)
     s._generate_http = AsyncMock(return_value=_pcm(1.0))
@@ -465,7 +465,7 @@ def test_config_is_sent_before_establish_connection_returns():
     async def fake_connect(*a, **kw):
         return ws
 
-    import bolna.synthesizer.maya_synthesizer as mod
+    import voiceai.synthesizer.maya_synthesizer as mod
 
     original = mod.websockets.connect
     mod.websockets.connect = fake_connect

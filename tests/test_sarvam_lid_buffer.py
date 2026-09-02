@@ -8,7 +8,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 
-from bolna.lid.sarvam import SarvamLID
+from voiceai.lid.sarvam import SarvamLID
 
 
 def _detector():
@@ -315,7 +315,7 @@ async def test_non_data_frames_counted_but_logged_once_per_type():
         [json.dumps({"type": "events", "data": {}})] * 4 + [json.dumps({"type": "error", "message": "quota"})] * 3
     )
     lid._schedule_reconnect = MagicMock()
-    with patch("bolna.lid.sarvam.logger") as log:
+    with patch("voiceai.lid.sarvam.logger") as log:
         await lid._receiver_loop()
     # "events" frames are requested VAD signals — benign, never counted or warned.
     assert lid.unknown_frames == 3

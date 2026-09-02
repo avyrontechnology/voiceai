@@ -12,4 +12,4 @@ from .openai_transcriber import OpenAITranscriber
 from .soniox_transcriber import SonioxTranscriber
 from .gemini_transcriber import GeminiTranscriber
 from .transcriber_pool import TranscriberPool
-from bolna.lid import LIDProvider, SarvamLID, SonioxLID
+from voiceai.lid import LIDProvider, SarvamLID, SonioxLID

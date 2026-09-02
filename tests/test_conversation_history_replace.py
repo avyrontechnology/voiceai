@@ -2,8 +2,8 @@
 path to swap the garbled locked-pool transcript for the unbiased detector transcript.
 """
 
-from bolna.helpers.conversation_history import ConversationHistory
-from bolna.enums import ChatRole
+from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.enums import ChatRole
 
 
 def _history():

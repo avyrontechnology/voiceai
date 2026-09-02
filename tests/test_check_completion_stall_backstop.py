@@ -7,8 +7,8 @@ playback, in-flight tool/LLM generation, or normal short silences.
 
 from types import SimpleNamespace
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.constants import STALL_HANGUP_FLOOR_S
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.constants import STALL_HANGUP_FLOOR_S
 
 
 # _should_stall_hangup only reads self.hang_conversation_after, so we can exercise the pure

@@ -3,7 +3,7 @@ FROM python:3.10.13-slim
 ENV PYTHONUNBUFFERED=1
 ENV POETRY_REQUESTS_TIMEOUT=120
 
-# System dependencies needed by bolna's audio/ASR/TTS extras
+# System dependencies needed by voiceai's audio/ASR/TTS extras
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libgomp1 \
@@ -21,7 +21,7 @@ EXPOSE 5001 8001 8002
 WORKDIR /voiceai
 
 # docker/pyproject.toml + docker/poetry.lock mirror requirements.txt and are
-# used only to install deps in the image — bolna's own packaging (published
+# used only to install deps in the image — voiceai's own packaging (published
 # to PyPI) stays on setuptools/requirements.txt, untouched by this.
 COPY docker/pyproject.toml docker/poetry.lock ./
 
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/pypoetry \
     && poetry install --no-root \
     && rm -f pyproject.toml poetry.lock
 
-# Now copy the rest of the code and install bolna itself from local source
+# Now copy the rest of the code and install voiceai itself from local source
 COPY . ./
 
 RUN --mount=type=cache,target=/root/.cache/pip \

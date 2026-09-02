@@ -1,6 +1,6 @@
 import asyncio
-from bolna.assistant import Assistant
-from bolna.models import (
+from voiceai.assistant import Assistant
+from voiceai.models import (
     Transcriber,
     Synthesizer,
     ElevenLabsConfig,

@@ -4,7 +4,7 @@ Telephony mulaw carries one byte per sample where PCM carries two, so getting th
 misjudges when the agent has finished speaking.
 """
 
-from bolna.helpers.utils import calculate_audio_duration
+from voiceai.helpers.utils import calculate_audio_duration
 
 
 def test_pcm_duration_counts_two_bytes_per_sample():

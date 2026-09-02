@@ -9,7 +9,7 @@ The guard keys on the language the decide was spawned on, so it fires only once 
 no longer active. An unrecorded spawn language must leave the switch path alone.
 """
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 RUN = TaskManager._TaskManager__run_language_switch
 LIVE = "garbled hi"

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +27,7 @@ def _bypass_ssrf_validation():
     async def _noop(url):
         return None
 
-    with patch("bolna.agent_manager.task_manager.validate_outbound_url", _noop):
+    with patch("voiceai.agent_manager.task_manager.validate_outbound_url", _noop):
         yield
 
 
@@ -101,8 +101,8 @@ async def test_pre_call_webhook_no_template_sends_common_only():
     }
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(
             me, "https://hook.example/notify", "custom_task_transfer", resp, {"turn_id": 1}
@@ -142,8 +142,8 @@ async def test_pre_call_webhook_param_template_controls_body():
     webhook_param = {"who": "%(customer_name)s", "channel": "voice"}  # template, not the function param
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(me, "https://hook.example/notify", "custom_task_x", resp, {}, webhook_param)
         await asyncio.sleep(0)
@@ -172,8 +172,8 @@ async def test_pre_call_webhook_missing_placeholder_defaults_empty():
     }
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(me, "https://hook.example/notify", "transfer_call", resp, {}, webhook_param)
         await asyncio.sleep(0)
@@ -195,8 +195,8 @@ async def test_pre_call_webhook_common_fields_win_over_template():
     webhook_param = {"provider": "bogus", "agent_id": "fake", "note": "%(reason)s"}
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(
             me, "https://hook.example/notify", "custom_task_transfer", resp, {}, webhook_param
@@ -216,8 +216,8 @@ async def test_pre_call_webhook_recorded_in_api_call_details():
     me = _make_self()
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(
             me, "https://hook.example/notify", "custom_task_transfer", {"reason": "x"}, {"turn_id": 1}
@@ -239,8 +239,8 @@ async def test_pre_call_webhook_keeps_strong_task_reference():
     me = _make_self()
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(me, "https://hook.example/notify", "custom_task_x", {"reason": "x"}, {})
         # reference held while in flight
@@ -253,7 +253,7 @@ async def test_pre_call_webhook_keeps_strong_task_reference():
 
 
 async def test_pre_call_webhook_dispatch_mode(monkeypatch):
-    """With PRE_CALL_WEBHOOK_DISPATCH_URL set, bolna POSTs {execution_id, webhook_url,
+    """With PRE_CALL_WEBHOOK_DISPATCH_URL set, voiceai POSTs {execution_id, webhook_url,
     params} to the dispatch endpoint (the backend enriches with the full record)."""
     monkeypatch.setenv("PRE_CALL_WEBHOOK_DISPATCH_URL", "https://ts.example/dispatch_pre_call_webhook")
     me = _make_self()
@@ -261,8 +261,8 @@ async def test_pre_call_webhook_dispatch_mode(monkeypatch):
     webhook_param = {"who": "%(customer_name)s"}
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         TaskManager.fire_pre_call_webhook(me, "https://customer/notify", "custom_task_x", resp, {}, webhook_param)
         await asyncio.sleep(0)
@@ -285,8 +285,8 @@ async def test_pre_call_webhook_lazy_inits_background_tasks():
     delattr(me, "background_tasks")  # simulate __init__ not initializing it
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _FakeSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         # must NOT raise AttributeError
         TaskManager.fire_pre_call_webhook(me, "https://hook.example/notify", "custom_task_x", {"reason": "x"}, {})
@@ -304,8 +304,8 @@ async def test_pre_call_webhook_swallows_errors():
             raise RuntimeError("endpoint down")
 
     with (
-        patch("bolna.agent_manager.task_manager.aiohttp.ClientSession", _BoomSession),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.aiohttp.ClientSession", _BoomSession),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
     ):
         # must not raise even though the POST blows up
         TaskManager.fire_pre_call_webhook(me, "https://hook.example/notify", "custom_task_x", {}, {})
@@ -358,9 +358,9 @@ def _make_transfer_self(tool_conf):
 
 async def _drive_transfer(me):
     with (
-        patch("bolna.agent_manager.task_manager.asyncio.sleep", new=AsyncMock()),
-        patch("bolna.agent_manager.task_manager.convert_to_request_log"),
-        patch("bolna.agent_manager.task_manager.create_ws_data_packet"),
+        patch("voiceai.agent_manager.task_manager.asyncio.sleep", new=AsyncMock()),
+        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
+        patch("voiceai.agent_manager.task_manager.create_ws_data_packet"),
     ):
         await TaskManager._TaskManager__execute_function_call(
             me,

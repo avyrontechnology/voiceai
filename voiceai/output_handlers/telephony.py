@@ -8,9 +8,9 @@ import uuid
 import traceback
 from dotenv import load_dotenv
 from .default import DefaultOutputHandler
-from bolna.constants import AUDIO_STREAM_END_SENTINELS
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import calculate_audio_duration
+from voiceai.constants import AUDIO_STREAM_END_SENTINELS
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import calculate_audio_duration
 
 logger = configure_logger(__name__)
 load_dotenv()
@@ -84,7 +84,7 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                         ):
                             self.mark_event_meta_data.welcome_pre_mark_id = mark_id
                         logger.info(
-                            "BOLNA_TRACE_TEL send_pre_mark mark_id=%s seq=%s turn=%s response_uid=%s group_uid=%s category=%s",
+                            "VOICEAI_TRACE_TEL send_pre_mark mark_id=%s seq=%s turn=%s response_uid=%s group_uid=%s category=%s",
                             mark_id,
                             meta_info.get("sequence_id"),
                             meta_info.get("turn_id"),
@@ -142,7 +142,7 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                     # sending of post-mark message
                     self.mark_event_meta_data.update_data(mark_id, mark_event_meta_data)
                     logger.info(
-                        "BOLNA_TRACE_TEL send_post_mark mark_id=%s seq=%s turn=%s response_uid=%s group_uid=%s final=%s category=%s text_len=%s",
+                        "VOICEAI_TRACE_TEL send_post_mark mark_id=%s seq=%s turn=%s response_uid=%s group_uid=%s final=%s category=%s text_len=%s",
                         mark_id,
                         meta_info.get("sequence_id"),
                         meta_info.get("turn_id"),

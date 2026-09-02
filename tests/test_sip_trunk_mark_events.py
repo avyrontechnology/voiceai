@@ -11,12 +11,12 @@ import asyncio
 from collections import deque
 
 
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
-from bolna.input_handlers.telephony_providers.sip_trunk import (
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.input_handlers.telephony_providers.sip_trunk import (
     SipTrunkInputHandler,
     _parse_asterisk_control_message,
 )
-from bolna.output_handlers.telephony_providers.sip_trunk import (
+from voiceai.output_handlers.telephony_providers.sip_trunk import (
     AUDIO_ENTRY,
     MARK_ENTRY,
     SipTrunkOutputHandler,

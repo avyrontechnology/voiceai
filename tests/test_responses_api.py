@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from openai import APIError, BadRequestError
-from bolna.llms.openai_llm import OpenAiLLM
-from bolna.llms.azure_llm import AzureLLM
-from bolna.llms.types import FunctionCallPayload
+from voiceai.llms.openai_llm import OpenAiLLM
+from voiceai.llms.azure_llm import AzureLLM
+from voiceai.llms.types import FunctionCallPayload
 
 
 def _make_llm(**overrides):
@@ -473,13 +473,13 @@ class TestTaskManagerInvalidationHook:
 
 class TestConfigPropagation:
     def test_use_responses_api_in_llm_model(self):
-        from bolna.models import Llm
+        from voiceai.models import Llm
 
         config = Llm(use_responses_api=True)
         assert config.use_responses_api is True
 
     def test_use_responses_api_defaults_false(self):
-        from bolna.models import Llm
+        from voiceai.models import Llm
 
         config = Llm()
         assert config.use_responses_api is False
@@ -1216,13 +1216,13 @@ class TestCreateKwargsParameters:
 
 class TestCompactThresholdConfig:
     def test_compact_threshold_in_llm_model(self):
-        from bolna.models import Llm
+        from voiceai.models import Llm
 
         config = Llm(compact_threshold=25000)
         assert config.compact_threshold == 25000
 
     def test_compact_threshold_defaults_none(self):
-        from bolna.models import Llm
+        from voiceai.models import Llm
 
         config = Llm()
         assert config.compact_threshold is None
@@ -1294,8 +1294,8 @@ class TestWSTransportRouting:
 
 class TestOpenAIWSConnection:
     def test_terminal_events_from_enum(self):
-        from bolna.llms.openai_llm import OpenAIWSConnection
-        from bolna.enums import ResponseStreamEvent
+        from voiceai.llms.openai_llm import OpenAIWSConnection
+        from voiceai.enums import ResponseStreamEvent
 
         assert OpenAIWSConnection.TERMINAL_EVENTS == ResponseStreamEvent.terminal_events()
         assert ResponseStreamEvent.COMPLETED in OpenAIWSConnection.TERMINAL_EVENTS
@@ -1304,7 +1304,7 @@ class TestOpenAIWSConnection:
         assert ResponseStreamEvent.ERROR in OpenAIWSConnection.TERMINAL_EVENTS
 
     def test_terminal_events_matches_string_values(self):
-        from bolna.llms.openai_llm import OpenAIWSConnection
+        from voiceai.llms.openai_llm import OpenAIWSConnection
 
         assert "response.completed" in OpenAIWSConnection.TERMINAL_EVENTS
         assert "response.failed" in OpenAIWSConnection.TERMINAL_EVENTS

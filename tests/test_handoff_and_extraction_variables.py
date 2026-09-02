@@ -14,7 +14,7 @@ Asserted at the seam — the rendering contract — rather than by standing up a
 whole TaskManager, which needs transcriber/synthesizer/LLM pools.
 """
 
-from bolna.helpers.utils import update_prompt_with_context
+from voiceai.helpers.utils import update_prompt_with_context
 
 CONTEXT = {"recipient_data": {"customer_name": "Asha", "plan": "gold"}}
 

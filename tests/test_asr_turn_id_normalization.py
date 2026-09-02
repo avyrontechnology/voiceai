@@ -3,7 +3,7 @@ user_bot_latencies / LLM asr_turn_id use ints (transcriber turn_counter). Compar
 the shapes silently fails ("turn_5" in {5} is False), which duplicated every covered Whisper
 turn in user_bot_latencies. asr_id_to_int is the single boundary coercion."""
 
-from bolna.agent_manager.task_manager import asr_id_to_int
+from voiceai.agent_manager.task_manager import asr_id_to_int
 
 
 def test_int_passthrough():

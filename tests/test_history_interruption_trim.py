@@ -6,8 +6,8 @@ was heard the assistant turn is removed outright, along with the tool result it 
 orphan, so the next LLM request carries no record of speech the caller never received.
 """
 
-from bolna.enums import ChatRole
-from bolna.helpers.conversation_history import ConversationHistory
+from voiceai.enums import ChatRole
+from voiceai.helpers.conversation_history import ConversationHistory
 
 FULL = "We are open from nine to five, Monday through Friday."
 

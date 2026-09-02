@@ -8,7 +8,7 @@ turn must never be re-emitted.
 import asyncio
 import json
 
-from bolna.transcriber.deepgram_transcriber import DeepgramTranscriber
+from voiceai.transcriber.deepgram_transcriber import DeepgramTranscriber
 
 
 def _make_nova(output_queue=None, **kwargs):

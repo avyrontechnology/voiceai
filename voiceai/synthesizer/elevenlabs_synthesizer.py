@@ -11,10 +11,10 @@ import aiohttp
 import websockets
 
 from .stream_synthesizer import StreamSynthesizer
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import create_ws_data_packet, resample
-from bolna.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import create_ws_data_packet, resample
+from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
 
 logger = configure_logger(__name__)
 

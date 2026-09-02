@@ -4,10 +4,10 @@ exactly 1.0 on essentially every segment (Soniox tags an utterance's tokens unif
 across all prod QA calls, including a full English→Telugu-script transliteration), so it carried
 no information while trivially passing the detector-corroboration threshold."""
 
-from bolna.constants import SONIOX_ENDPOINT_TOKEN
-from bolna.lid.provider import LIDProvider
-from bolna.lid.sarvam import SarvamLID
-from bolna.lid.soniox import SonioxLID
+from voiceai.constants import SONIOX_ENDPOINT_TOKEN
+from voiceai.lid.provider import LIDProvider
+from voiceai.lid.sarvam import SarvamLID
+from voiceai.lid.soniox import SonioxLID
 
 
 def _detector():

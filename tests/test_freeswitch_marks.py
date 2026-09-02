@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bolna.input_handlers.telephony_providers.freeswitch import FreeSwitchInputHandler
-from bolna.output_handlers.telephony_providers.freeswitch import FreeSwitchOutputHandler
+from voiceai.input_handlers.telephony_providers.freeswitch import FreeSwitchInputHandler
+from voiceai.output_handlers.telephony_providers.freeswitch import FreeSwitchOutputHandler
 
 
 def _make_output(settle=0.01):
@@ -144,7 +144,7 @@ async def test_stale_final_echo_after_estimator_completion_is_ignored():
 async def test_cleared_echo_drops_mark_without_ack_heard_text_or_turn_end():
     # cleared = dropped unplayed; no heard text, no turn-end, and NO ack stamp (an acked
     # cleared mark would advance last-ack tail crediting for audio never played)
-    from bolna.helpers.mark_event_meta_data import MarkEventMetaData
+    from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 
     registry = MarkEventMetaData()
     registry.update_data("m-x", {"type": "", "sequence_id": 2, "turn_id": 2, "text_synthesized": "never played"})

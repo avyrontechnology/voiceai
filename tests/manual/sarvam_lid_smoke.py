@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-from bolna.lid.sarvam import SarvamLID
+from voiceai.lid.sarvam import SarvamLID
 
 CHUNK_DURATION_S = 0.2  # 200ms per chunk, matching sarvam_transcriber
 

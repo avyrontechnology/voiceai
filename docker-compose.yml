@@ -1,7 +1,7 @@
 services:
 
-  bolna-app:
-    container_name: bolna-app
+  voiceai-app:
+    container_name: voiceai-app
     build: .
     restart: on-failure
     ports:
@@ -32,7 +32,7 @@ services:
     depends_on:
       - redis
       - ngrok
-      - bolna-app
+      - voiceai-app
     networks:
       - voiceai
     dns:
@@ -51,7 +51,7 @@ services:
     depends_on:
       - redis
       - ngrok
-      - bolna-app
+      - voiceai-app
     networks:
       - voiceai
     dns:

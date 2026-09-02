@@ -5,9 +5,9 @@ from typing import Optional
 
 from openai import BadRequestError, APIError
 
-from bolna.constants import GPT5_MODEL_PREFIX
-from bolna.enums import ChatRole, ResponseStreamEvent, ResponseItemType, LogComponent, LogDirection
-from bolna.helpers.utils import (
+from voiceai.constants import GPT5_MODEL_PREFIX
+from voiceai.enums import ChatRole, ResponseStreamEvent, ResponseItemType, LogComponent, LogDirection
+from voiceai.helpers.utils import (
     convert_to_request_log,
     compute_function_pre_call_message,
     now_ms,
@@ -16,7 +16,7 @@ from bolna.helpers.utils import (
 from .llm import BaseLLM
 from .message_models import MessageFormatAdapter
 from .types import APIParams, LLMStreamChunk, LatencyData, FunctionCallPayload
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

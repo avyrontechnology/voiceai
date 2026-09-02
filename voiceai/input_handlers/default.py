@@ -6,9 +6,9 @@ from typing import Optional
 from starlette.websockets import WebSocketDisconnect
 
 from dotenv import load_dotenv
-from bolna.constants import IS_USER_ONLINE_MESSAGE
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import create_ws_data_packet
+from voiceai.constants import IS_USER_ONLINE_MESSAGE
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet
 
 logger = configure_logger(__name__)
 load_dotenv()
@@ -148,7 +148,7 @@ class DefaultInputHandler:
         return self.mark_event_meta_data.fetch_data(mark_id)
 
     def process_mark_message(self, packet):
-        logger.info("BOLNA_TRACE_ACK recv mark_id=%s", packet.get("name"))
+        logger.info("VOICEAI_TRACE_ACK recv mark_id=%s", packet.get("name"))
         mark_event_meta_data_obj = self.get_mark_event_meta_data_obj(packet)
         if not mark_event_meta_data_obj:
             logger.info(
@@ -189,7 +189,7 @@ class DefaultInputHandler:
                     self.response_heard_by_response.get(response_uid, "") + heard_text
                 )
         logger.info(
-            "BOLNA_TRACE_ACK applied mark_id=%s type=%s seq=%s turn=%s response_uid=%s final=%s heard_len=%s last_heard_turn=%s last_heard_response_uid=%s",
+            "VOICEAI_TRACE_ACK applied mark_id=%s type=%s seq=%s turn=%s response_uid=%s final=%s heard_len=%s last_heard_turn=%s last_heard_response_uid=%s",
             packet.get("name"),
             message_type,
             mark_event_meta_data_obj.get("sequence_id"),

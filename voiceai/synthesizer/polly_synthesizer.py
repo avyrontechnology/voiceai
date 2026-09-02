@@ -7,9 +7,9 @@ from contextlib import AsyncExitStack
 from dotenv import load_dotenv
 
 from .base_synthesizer import BaseSynthesizer
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import convert_audio_to_wav
-from bolna.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import convert_audio_to_wav
+from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
 
 logger = configure_logger(__name__)
 load_dotenv()

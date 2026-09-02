@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydub import AudioSegment
 
-from bolna.agent_manager.task_manager import HANDOFF_CLIP_CACHE, TaskManager
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.agent_manager.task_manager import HANDOFF_CLIP_CACHE, TaskManager
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +133,7 @@ async def test_prewarm_renders_all_labels_and_survives_failure():
 
 
 async def test_elevenlabs_clip_uses_wire_format_and_skips_non_mulaw():
-    from bolna.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
+    from voiceai.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
 
     s = MagicMock(spec=["use_mulaw", "_generate_http"])
     s._generate_http = AsyncMock(return_value=b"\x7f" * 100)
@@ -273,7 +273,7 @@ async def test_clip_cache_keys_are_wire_specific():
 
 
 async def test_elevenlabs_pcm_clip_uses_native_pcm_format():
-    from bolna.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
+    from voiceai.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer
 
     s = MagicMock(spec=["_generate_http"])
     s._generate_http = AsyncMock(return_value=b"\x00\x01" * 100)
@@ -351,7 +351,7 @@ async def test_mulaw_stream_synth_still_prewarms_on_pcm_wire():
 
 def test_handoff_mulaw_wire_tracks_output_handler_registry():
     """The wire decision and the telephony handler registry must not drift apart."""
-    from bolna.providers import SUPPORTED_OUTPUT_TELEPHONY_HANDLERS
+    from voiceai.providers import SUPPORTED_OUTPUT_TELEPHONY_HANDLERS
 
     tm = _tm()
     wire = TaskManager._TaskManager__handoff_mulaw_wire.__get__(tm, TaskManager)
@@ -364,7 +364,7 @@ def test_handoff_mulaw_wire_tracks_output_handler_registry():
 
 
 async def test_cartesia_pcm_clip_uses_raw_pcm_output_format():
-    from bolna.synthesizer.cartesia_synthesizer import CartesiaSynthesizer
+    from voiceai.synthesizer.cartesia_synthesizer import CartesiaSynthesizer
 
     s = MagicMock(spec=["_generate_http"])
     s._generate_http = AsyncMock(return_value=b"\x00\x01" * 100)
@@ -378,7 +378,7 @@ async def test_cartesia_pcm_clip_uses_raw_pcm_output_format():
 
 def test_audio_to_pcm_target_rate_is_keyword_only():
     """Positional-by-analogy with audio_to_mulaw8k would silently mean the source hint."""
-    from bolna.helpers.utils import audio_to_pcm
+    from voiceai.helpers.utils import audio_to_pcm
 
     with pytest.raises(TypeError):
         audio_to_pcm(_wav_bytes(), 24000)

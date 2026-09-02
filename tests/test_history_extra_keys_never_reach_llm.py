@@ -4,16 +4,16 @@ message_category) that must never reach a provider.
 Only the anthropic-family transformers and the Responses adapter rebuild the payload from
 known keys; the nine OpenAI-compatible providers forward the message dict verbatim, so the
 LLM adapters strip before sending. These tests pin both halves — what litellm does on its
-own, and what bolna actually puts on the wire.
+own, and what voiceai actually puts on the wire.
 """
 
 import json
 
 import pytest
 
-from bolna.enums import ChatRole
-from bolna.helpers.conversation_history import ConversationHistory
-from bolna.llms.message_models import (
+from voiceai.enums import ChatRole
+from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.llms.message_models import (
     INTERNAL_MESSAGE_KEYS,
     ChatMessage,
     MessageFormatAdapter,
@@ -94,7 +94,7 @@ def test_litellm_rebuilding_providers_drop_extra_keys(provider, model):
     ],
 )
 def test_openai_compatible_providers_would_forward_extra_keys(provider, model):
-    """These pass the dict through untouched, which is why bolna strips before calling them.
+    """These pass the dict through untouched, which is why voiceai strips before calling them.
     Pinned so the day litellm starts sanitising, we notice the guard is redundant."""
     assert "asr_turn_id" in json.dumps(_transform(provider, model), default=str)
 
@@ -115,8 +115,8 @@ def test_openai_compatible_providers_would_forward_extra_keys(provider, model):
         ("vllm", "facebook/opt-125m"),
     ],
 )
-def test_nothing_leaks_once_bolna_strips(provider, model):
-    """The guarantee that matters: what bolna actually sends carries no bookkeeping keys,
+def test_nothing_leaks_once_voiceai_strips(provider, model):
+    """The guarantee that matters: what voiceai actually sends carries no bookkeeping keys,
     for every provider, without relying on the server to ignore them."""
     sent = strip_internal_keys([{"role": "user", "content": "hello", **EXTRA}])
     body = json.dumps(_transform(provider, model, messages=sent), default=str)

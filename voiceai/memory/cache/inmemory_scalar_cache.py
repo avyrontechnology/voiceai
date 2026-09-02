@@ -1,5 +1,5 @@
 from .base_cache import BaseCache
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 import time
 
 logger = configure_logger(__name__)

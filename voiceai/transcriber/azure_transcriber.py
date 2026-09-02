@@ -7,9 +7,9 @@ from azure.cognitiveservices.speech import AudioStreamWaveFormat, AudioStreamCon
 from dotenv import load_dotenv
 from .base_transcriber import BaseTranscriber
 import azure.cognitiveservices.speech as speechsdk
-from bolna.helpers.utils import create_ws_data_packet, timestamp_ms
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

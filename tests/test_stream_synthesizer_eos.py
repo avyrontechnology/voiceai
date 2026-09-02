@@ -13,7 +13,7 @@ was popped.
 from collections import deque
 
 
-from bolna.synthesizer.stream_synthesizer import StreamSynthesizer
+from voiceai.synthesizer.stream_synthesizer import StreamSynthesizer
 
 
 class FakeStreamSynth:

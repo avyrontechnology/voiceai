@@ -4,16 +4,16 @@ request/selection/confirmation; speaking another language alone never switches."
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from bolna.prompts import (
+from voiceai.prompts import (
     EXPLICIT_LANGUAGE_SWITCH_SYSTEM_PROMPT,
     LANGUAGE_SWITCH_SYSTEM_PROMPT,
 )
 
-MOD = "bolna.helpers.language_switcher"
+MOD = "voiceai.helpers.language_switcher"
 
 
 def make_switcher(generate_return, labels=("en", "hi", "te"), explicit_only=True):
-    from bolna.helpers.language_switcher import LanguageSwitcher
+    from voiceai.helpers.language_switcher import LanguageSwitcher
 
     fake_llm = MagicMock()
     fake_llm.generate = AsyncMock(return_value=(generate_return, {}))
@@ -155,9 +155,9 @@ async def test_canonical_yes_to_two_options_is_ambiguous_stay():
 
 # ── task_manager: explicit mode bypasses detection gates, keeps structural ones ───
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 def make_tm(monkeypatch, decision, explicit_only=True, synth_labels=("en", "hi")):

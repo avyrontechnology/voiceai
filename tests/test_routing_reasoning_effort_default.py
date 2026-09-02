@@ -8,8 +8,8 @@ deployment names miss it entirely.
 import pytest
 from unittest.mock import MagicMock, patch
 
-from bolna.agent_types.graph_agent import GraphAgent
-from bolna.constants import GPT5_MODEL_PREFIX, MODEL_REASONING_EFFORT_MAP
+from voiceai.agent_types.graph_agent import GraphAgent
+from voiceai.constants import GPT5_MODEL_PREFIX, MODEL_REASONING_EFFORT_MAP
 
 # Routing only sends reasoning_effort for the gpt-5 family. The map also carries the
 # realtime speech-to-speech models, which accept an effort but are never a routing model.
@@ -30,9 +30,9 @@ def _make_agent(**config_overrides):
     config.update(config_overrides)
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock()}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock()}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         return GraphAgent(config)
 

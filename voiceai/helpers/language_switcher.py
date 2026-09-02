@@ -4,16 +4,16 @@ import json
 import time
 import uuid
 
-from bolna.llms import LiteLLM
-from bolna.prompts import (
+from voiceai.llms import LiteLLM
+from voiceai.prompts import (
     EXPLICIT_LANGUAGE_SWITCH_SYSTEM_PROMPT,
     EXPLICIT_LANGUAGE_SWITCH_TURN_PROMPT,
     LANGUAGE_SWITCH_SYSTEM_PROMPT,
     LANGUAGE_SWITCH_TURN_PROMPT,
 )
-from bolna.enums import LogComponent, LogDirection
-from bolna.helpers.utils import convert_to_request_log
-from bolna.helpers.logger_config import configure_logger
+from voiceai.enums import LogComponent, LogDirection
+from voiceai.helpers.utils import convert_to_request_log
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 
@@ -35,7 +35,7 @@ def resolve_switch_llm_credentials(model: str) -> tuple[str, str, str]:
     """(api_key, api_base, api_version) for the switch LLM, provider-aware.
 
     LANGUAGE_SWITCH_LLM_API_* wins; else the provider's standard env — ANTHROPIC_API_KEY
-    for claude, AZURE_OPENAI_* for azure/* (matches bolna/llms/azure_llm.py), else OPENAI_API_KEY.
+    for claude, AZURE_OPENAI_* for azure/* (matches voiceai/llms/azure_llm.py), else OPENAI_API_KEY.
     """
     key = os.getenv("LANGUAGE_SWITCH_LLM_API_KEY") or ""
     base = os.getenv("LANGUAGE_SWITCH_LLM_API_BASE") or ""

@@ -9,7 +9,7 @@ import asyncio
 from types import SimpleNamespace
 
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 
 class _RecordingInputHandler:

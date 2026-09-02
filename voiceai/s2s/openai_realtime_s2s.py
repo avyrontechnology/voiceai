@@ -6,7 +6,7 @@ from typing import AsyncGenerator, List, Optional
 
 import websockets
 
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 from .base_s2s import MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_S, BaseS2SProvider
 from .events import (
     AudioDelta,
@@ -350,7 +350,7 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         await self._send(payload)
 
     async def send_dtmf(self, digits: str) -> None:
-        # bolna terminates telephony, so the provider never sees the carrier's DTMF frames.
+        # voiceai terminates telephony, so the provider never sees the carrier's DTMF frames.
         await self._send(
             {
                 "type": "conversation.item.create",

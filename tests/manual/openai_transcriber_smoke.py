@@ -8,7 +8,7 @@ What it does:
   4. Asserts that we get: speech_started → interim deltas → transcript → speech_ended
 
 Run:
-    cd /path/to/bolna
+    cd /path/to/voiceai
     OPENAI_API_KEY=sk-... python tests/manual/openai_transcriber_smoke.py [path/to/speech.wav]
 
 The WAV file must be mono or stereo PCM, any sample rate — the transcriber resamples.
@@ -26,7 +26,7 @@ import os
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from bolna.transcriber.openai_transcriber import OpenAITranscriber
+from voiceai.transcriber.openai_transcriber import OpenAITranscriber
 
 # ── tunables ──────────────────────────────────────────────────────────────────
 CHUNK_MS = 20  # audio feed granularity (ms)

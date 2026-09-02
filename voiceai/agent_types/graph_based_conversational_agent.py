@@ -3,8 +3,8 @@ import json
 import asyncio
 import traceback
 from .base_agent import BaseAgent
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import update_prompt_with_context, get_md5_hash
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import update_prompt_with_context, get_md5_hash
 
 logger = configure_logger(__name__)
 

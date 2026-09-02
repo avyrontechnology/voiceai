@@ -9,9 +9,9 @@ import json
 import os
 import time
 import traceback
-from bolna.input_handlers.telephony import TelephonyInputHandler
-from bolna.helpers.utils import create_ws_data_packet
-from bolna.helpers.logger_config import configure_logger
+from voiceai.input_handlers.telephony import TelephonyInputHandler
+from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.helpers.logger_config import configure_logger
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
 

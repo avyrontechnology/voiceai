@@ -1,6 +1,6 @@
 """trailing_utterance_text: the caller's last utterance (trailing segments within the gap); '' → caller uses full concat."""
 
-from bolna.agent_manager.task_manager import trailing_utterance_text
+from voiceai.agent_manager.task_manager import trailing_utterance_text
 
 
 def _seg(text, ts, lang="en"):

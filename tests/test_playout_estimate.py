@@ -7,7 +7,7 @@ credits nothing at all. The result feeds the barge-in trim, which is why over-cr
 dangerous direction.
 """
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 CHUNKS = [
     {"text": "We are open ", "duration": 1.0},

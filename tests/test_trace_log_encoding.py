@@ -2,8 +2,8 @@
 Data column. With ensure_ascii (the json.dumps default) Devanagari renders as \\uXXXX 'code' in
 the dashboard trace view; ensure_ascii=False keeps it as readable text."""
 
-import bolna.helpers.utils as utils
-from bolna.enums import LogComponent, LogDirection
+import voiceai.helpers.utils as utils
+from voiceai.enums import LogComponent, LogDirection
 
 
 def _message(component, data):

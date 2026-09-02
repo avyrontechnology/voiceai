@@ -9,7 +9,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-from bolna.helpers.language_switcher import (
+from voiceai.helpers.language_switcher import (
     DEFAULT_LANGUAGE_SWITCH_LLM,
     LanguageSwitcher,
     resolve_switch_llm_credentials,
@@ -46,7 +46,7 @@ async def test_runtime_fallback_after_consecutive_failures(monkeypatch):
     sw._llm = MagicMock()
     sw._llm.generate = AsyncMock(side_effect=Exception("AccessDeniedException"))
 
-    with patch("bolna.helpers.language_switcher.LiteLLM"):
+    with patch("voiceai.helpers.language_switcher.LiteLLM"):
         await sw.decide("hello", "", "hi")
         assert sw.model == BEDROCK  # 1 failure: still on bedrock
         await sw.decide("hello", "", "hi")
@@ -128,7 +128,7 @@ async def test_errored_attempts_still_trigger_the_fallback_when_hedged(monkeypat
     sw._log_decision = MagicMock()
     sw._llm = MagicMock()
     sw._llm.generate = AsyncMock(side_effect=Exception("AccessDeniedException"))
-    with patch("bolna.helpers.language_switcher.LiteLLM"):
+    with patch("voiceai.helpers.language_switcher.LiteLLM"):
         await sw.decide("hello", "", "hi")
         await sw.decide("hello", "", "hi")
         assert sw.model == DEFAULT

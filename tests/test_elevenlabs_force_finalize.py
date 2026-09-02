@@ -11,7 +11,7 @@ gate, so only the stale commit is swallowed.
 import asyncio
 
 
-from bolna.transcriber.elevenlabs_transcriber import ElevenLabsTranscriber
+from voiceai.transcriber.elevenlabs_transcriber import ElevenLabsTranscriber
 
 
 def make_transcriber():

@@ -2,7 +2,7 @@ import os
 import json
 import re
 from urllib.parse import urlparse
-from bolna.llms.http_client_pool import get_shared_http_client
+from voiceai.llms.http_client_pool import get_shared_http_client
 from dotenv import load_dotenv
 from openai import (
     AsyncAzureOpenAI,
@@ -17,14 +17,14 @@ from openai import (
     BadRequestError,
 )
 
-from bolna.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, canonical_model, default_reasoning_effort
-from bolna.enums import Verbosity
-from bolna.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
+from voiceai.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, canonical_model, default_reasoning_effort
+from voiceai.enums import Verbosity
+from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
 from .openai_base import OpenAICompatibleLLM
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import LLMStreamChunk, LatencyData
 from .message_models import strip_internal_keys
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 load_dotenv()

@@ -10,9 +10,9 @@ from dotenv import load_dotenv
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import create_ws_data_packet, resample, timestamp_ms, ulaw_to_pcm
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet, resample, timestamp_ms, ulaw_to_pcm
 
 logger = configure_logger(__name__)
 load_dotenv()

@@ -2,7 +2,7 @@ import asyncio
 import time
 from typing import Awaitable, Callable, Optional
 
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
 

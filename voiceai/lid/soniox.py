@@ -4,15 +4,15 @@ import os
 
 from dotenv import load_dotenv
 
-from bolna.constants import (
+from voiceai.constants import (
     SONIOX_DEFAULT_MULTILINGUAL_HINTS,
     SONIOX_ENDPOINT_TOKEN,
     SONIOX_WEBSOCKET_HOST,
 )
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.ssl_context import get_ssl_context
-from bolna.helpers.utils import build_soniox_config, soniox_ws_url
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.helpers.utils import build_soniox_config, soniox_ws_url
 
 from .base import LIDBackend
 

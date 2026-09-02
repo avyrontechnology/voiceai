@@ -20,7 +20,7 @@ import websockets
 import aiohttp
 from pydub import AudioSegment
 
-from bolna.constants import (
+from voiceai.constants import (
     ACCIDENTAL_INTERRUPTION_PHRASES,
     DEFAULT_USER_ONLINE_MESSAGE,
     DEFAULT_USER_ONLINE_MESSAGE_TRIGGER_DURATION,
@@ -49,19 +49,19 @@ from bolna.constants import (
     WEB_BASED_CALL_PROVIDER,
     WEBCALL_TTS_SAMPLE_RATE,
 )
-from bolna.helpers.function_calling_helpers import (
+from voiceai.helpers.function_calling_helpers import (
     trigger_api,
     computed_api_response,
     prepare_api_request,
     validate_outbound_url,
 )
-from bolna.helpers.conversation_history import ConversationHistory
+from voiceai.helpers.conversation_history import ConversationHistory
 from .base_manager import BaseManager
 from .interruption_manager import InterruptionManager
-from bolna.agent_types import *
-from bolna.providers import *
-from bolna.s2s import events as s2s_events
-from bolna.enums import (
+from voiceai.agent_types import *
+from voiceai.providers import *
+from voiceai.s2s import events as s2s_events
+from voiceai.enums import (
     TelephonyProvider,
     LogComponent,
     LogDirection,
@@ -70,13 +70,13 @@ from bolna.enums import (
     ChatRole,
     ToolScope,
 )
-from bolna.exceptions import BolnaComponentError, LLMError, SynthesizerError, TranscriberError
-from bolna.prompts import *
-from bolna.helpers.language_detector import LanguageDetector
-from bolna.helpers.language_switcher import LanguageSwitcher
-from bolna.transcriber.transcriber_pool import TranscriberPool
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
-from bolna.helpers.utils import (
+from voiceai.exceptions import VoiceAIComponentError, LLMError, SynthesizerError, TranscriberError
+from voiceai.prompts import *
+from voiceai.helpers.language_detector import LanguageDetector
+from voiceai.helpers.language_switcher import LanguageSwitcher
+from voiceai.transcriber.transcriber_pool import TranscriberPool
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.helpers.utils import (
     structure_system_prompt,
     compute_function_pre_call_message,
     select_message_by_language,
@@ -108,10 +108,10 @@ from bolna.helpers.utils import (
     format_error_message,
     enrich_context_with_time_variables,
 )
-from bolna.helpers.logger_config import configure_logger
+from voiceai.helpers.logger_config import configure_logger
 from ..helpers.mark_event_meta_data import MarkEventMetaData
 from ..helpers.observable_variable import ObservableVariable
-from bolna.models import S2SConfig
+from voiceai.models import S2SConfig
 from .models import ComponentLatencies
 from .voicemail_handler import VoicemailHandler
 
@@ -1388,7 +1388,7 @@ class TaskManager(BaseManager):
         else:
             # raising a plain string surfaces as TypeError("exceptions must derive from
             # BaseException") and hides which provider was unsupported — this exact failure
-            # masked the missing-freeswitch-handler case when a PyPI bolna shadowed the branch
+            # masked the missing-freeswitch-handler case when a PyPI voiceai shadowed the branch
             raise ValueError(f"Unsupported input provider: {self.task_config['tools_config']['input']['provider']}")
 
     async def __await_stream_sid(self, timeout=10.0):
@@ -2606,7 +2606,7 @@ class TaskManager(BaseManager):
         meta_info_copy["response_group_uid"] = response_uid
         meta_info_copy.pop("parent_response_uid", None)
         logger.info(
-            "BOLNA_TRACE_META new_response seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s origin=%s",
+            "VOICEAI_TRACE_META new_response seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s origin=%s",
             meta_info_copy.get("sequence_id"),
             meta_info_copy.get("turn_id"),
             meta_info_copy.get("response_uid"),
@@ -2633,7 +2633,7 @@ class TaskManager(BaseManager):
         ):
             followup_meta_info.pop(key, None)
         logger.info(
-            "BOLNA_TRACE_META followup seq=%s turn=%s response_uid=%s group_uid=%s parent_response_uid=%s request_id=%s parent_seq=%s parent_turn=%s",
+            "VOICEAI_TRACE_META followup seq=%s turn=%s response_uid=%s group_uid=%s parent_response_uid=%s request_id=%s parent_seq=%s parent_turn=%s",
             followup_meta_info.get("sequence_id"),
             followup_meta_info.get("turn_id"),
             followup_meta_info.get("response_uid"),
@@ -2705,7 +2705,7 @@ class TaskManager(BaseManager):
             start_time = time.time()
             try:
                 json_data = await self.tools["llm_agent"].generate(self.history)
-            except BolnaComponentError:
+            except VoiceAIComponentError:
                 raise
             except Exception as e:
                 raise LLMError(
@@ -3912,7 +3912,7 @@ class TaskManager(BaseManager):
                             self.conversation_history.sync_interim(messages)
 
                     await self._handle_llm_output(next_step, text_chunk, should_bypass_synth, meta_info)
-        except BolnaComponentError:
+        except VoiceAIComponentError:
             raise
         except Exception as e:
             raise LLMError(str(e), provider=self.llm_config.get("provider"), model=self.llm_config.get("model")) from e
@@ -4416,7 +4416,7 @@ class TaskManager(BaseManager):
             else:
                 logger.error("unsupported task type: {}".format(self.task_config["task_type"]))
             self.llm_task = None
-        except BolnaComponentError as e:
+        except VoiceAIComponentError as e:
             self.response_in_pipeline = False
             self._synthesis_awaiting_first_audio = False
             await self._end_call_on_component_error(e, HangupReason.LLM_ERROR)
@@ -4467,7 +4467,7 @@ class TaskManager(BaseManager):
             "message_category": meta_info.get("message_category"),
         }
         logger.info(
-            "BOLNA_TRACE_TM stage_assistant_history seq=%s turn=%s response_uid=%s text_len=%s",
+            "VOICEAI_TRACE_TM stage_assistant_history seq=%s turn=%s response_uid=%s text_len=%s",
             sequence_id,
             turn_id,
             response_uid,
@@ -4495,7 +4495,7 @@ class TaskManager(BaseManager):
         if staged["turn_id"] is not None:
             self._turn_msg_map[staged["turn_id"]] = self.conversation_history.messages[-1]
         logger.info(
-            "BOLNA_TRACE_TM commit_assistant_history seq=%s turn=%s response_uid=%s text_len=%s",
+            "VOICEAI_TRACE_TM commit_assistant_history seq=%s turn=%s response_uid=%s text_len=%s",
             sequence_id,
             staged["turn_id"],
             staged["response_uid"],
@@ -4507,7 +4507,7 @@ class TaskManager(BaseManager):
         if staged is None:
             return
         logger.info(
-            "BOLNA_TRACE_TM drop_assistant_history seq=%s turn=%s response_uid=%s reason=%s",
+            "VOICEAI_TRACE_TM drop_assistant_history seq=%s turn=%s response_uid=%s reason=%s",
             sequence_id,
             staged["turn_id"],
             staged["response_uid"],
@@ -4527,7 +4527,7 @@ class TaskManager(BaseManager):
         self._drop_staged_assistant_history(sequence_id, reason)
         self.interruption_manager.retire_sequence_id(sequence_id)
         logger.info(
-            "BOLNA_TRACE_TM drop_response seq=%s turn=%s response_uid=%s reason=%s",
+            "VOICEAI_TRACE_TM drop_response seq=%s turn=%s response_uid=%s reason=%s",
             sequence_id,
             turn_id,
             response_uid,
@@ -4577,7 +4577,7 @@ class TaskManager(BaseManager):
         self.regen_settle_payload = (transcriber_message, meta_info)
         self.regen_settle_task = asyncio.create_task(self.__regen_after_settle())
         logger.info(
-            "BOLNA_TRACE_TM regen_settle armed seq=%s turn=%s window=%ss text=%r",
+            "VOICEAI_TRACE_TM regen_settle armed seq=%s turn=%s window=%ss text=%r",
             meta_info.get("sequence_id"),
             meta_info.get("turn_id"),
             LLM_REGEN_SETTLE_S,
@@ -4592,7 +4592,7 @@ class TaskManager(BaseManager):
             return
         transcriber_message, meta_info = payload
         logger.info(
-            "BOLNA_TRACE_TM regen_settle fired seq=%s turn=%s text=%r",
+            "VOICEAI_TRACE_TM regen_settle fired seq=%s turn=%s text=%r",
             meta_info.get("sequence_id"),
             meta_info.get("turn_id"),
             safe_log_text(transcriber_message, 80),
@@ -4601,7 +4601,7 @@ class TaskManager(BaseManager):
 
     async def _handle_transcriber_output(self, next_task, transcriber_message, meta_info):
         logger.info(
-            "BOLNA_TRACE_TM handle_transcript next=%s seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s text_len=%s text=%r",
+            "VOICEAI_TRACE_TM handle_transcript next=%s seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s text_len=%s text=%r",
             next_task,
             meta_info.get("sequence_id"),
             meta_info.get("turn_id"),
@@ -4647,7 +4647,7 @@ class TaskManager(BaseManager):
         overlapped = next_task == "llm" and (any(activity.values()) or self.regen_settle_armed())
         if overlapped:
             logger.info(
-                "BOLNA_TRACE_TM cleanup_before_user_append seq=%s turn=%s response_uid=%s response_in_pipeline=%s audio_playing=%s pending_marks=%s pending_sequences=%s pending_generation=%s",
+                "VOICEAI_TRACE_TM cleanup_before_user_append seq=%s turn=%s response_uid=%s response_in_pipeline=%s audio_playing=%s pending_marks=%s pending_sequences=%s pending_generation=%s",
                 meta_info.get("sequence_id"),
                 meta_info.get("turn_id"),
                 meta_info.get("response_uid"),
@@ -4666,7 +4666,7 @@ class TaskManager(BaseManager):
             # Cleanup invalidated every pending seq id; without this _synthesize drops this turn.
             self.interruption_manager.revalidate_sequence_id(current_sequence_id)
             logger.info(
-                "BOLNA_TRACE_TM revalidated_current_seq_after_cleanup seq=%s turn=%s response_uid=%s",
+                "VOICEAI_TRACE_TM revalidated_current_seq_after_cleanup seq=%s turn=%s response_uid=%s",
                 meta_info.get("sequence_id"),
                 meta_info.get("turn_id"),
                 meta_info.get("response_uid"),
@@ -4678,7 +4678,7 @@ class TaskManager(BaseManager):
             transcriber_message, asr_turn_id=asr_id_to_int(meta_info.get("asr_turn_id"))
         )
         logger.info(
-            "BOLNA_TRACE_TM append_user seq=%s turn=%s response_uid=%s history_len=%s text=%r",
+            "VOICEAI_TRACE_TM append_user seq=%s turn=%s response_uid=%s history_len=%s text=%r",
             meta_info.get("sequence_id"),
             meta_info.get("turn_id"),
             meta_info.get("response_uid"),
@@ -4787,7 +4787,7 @@ class TaskManager(BaseManager):
 
         # Log to CSV if not already done
         if self.run_id and not self._error_logged:
-            if isinstance(error, BolnaComponentError):
+            if isinstance(error, VoiceAIComponentError):
                 error_msg = format_error_message(error.component, error.provider or error.model or "-", str(error))
                 model = error.model or error.provider or "-"
             else:
@@ -5064,7 +5064,7 @@ class TaskManager(BaseManager):
                         transcript_content = message["data"].get("content", "")
                         word_count = len(transcript_content.strip().split(" "))
                         logger.info(
-                            "BOLNA_TRACE_TM final_transcript next=%s req=%s word_count=%s audio_playing=%s response_in_pipeline=%s text=%r",
+                            "VOICEAI_TRACE_TM final_transcript next=%s req=%s word_count=%s audio_playing=%s response_in_pipeline=%s text=%r",
                             next_task,
                             meta_info.get("request_id"),
                             word_count,
@@ -8245,7 +8245,7 @@ class TaskManager(BaseManager):
                     # clean finish in the log otherwise.
                     logger.info(f"Conversation tasks cancelled | pending={sum(1 for t in tasks if not t.done())}")
                 except Exception as e:
-                    if not isinstance(e, BolnaComponentError):
+                    if not isinstance(e, VoiceAIComponentError):
                         logger.error(f"Error: {e}")
                     else:
                         # Typed component errors were only ever written to the request log, so
@@ -8254,7 +8254,7 @@ class TaskManager(BaseManager):
                             f"Component error | component={e.component} provider={e.provider} model={e.model} error={e}"
                         )
                     if self.run_id and not self._error_logged:
-                        if isinstance(e, BolnaComponentError):
+                        if isinstance(e, VoiceAIComponentError):
                             error_msg = format_error_message(e.component, e.provider or e.model or "-", str(e))
                             model = e.model or "-"
                         else:
@@ -8275,7 +8275,7 @@ class TaskManager(BaseManager):
                 if _stored_err is not None:
                     self._component_error = None
                     err_cls = _stored_err["cls"]
-                    if issubclass(err_cls, BolnaComponentError):
+                    if issubclass(err_cls, VoiceAIComponentError):
                         raise err_cls(
                             _stored_err["message"], provider=_stored_err["provider"], model=_stored_err["model"]
                         )
@@ -8320,7 +8320,7 @@ class TaskManager(BaseManager):
                         await self._process_followup_task()
                     else:
                         await self._run_llm_task(self.input_parameters)
-                except BolnaComponentError:
+                except VoiceAIComponentError:
                     raise
                 except Exception as e:
                     raise
@@ -8332,13 +8332,13 @@ class TaskManager(BaseManager):
         except Exception as e:
             # Cancel all tasks on error
             error_message = str(e)
-            if not isinstance(e, BolnaComponentError):
+            if not isinstance(e, VoiceAIComponentError):
                 logger.error(f"Exception in task manager run: {error_message}")
 
             # Log call-breaking exception to CSV trace with component attribution (skip if already logged)
             if self.run_id and not self._error_logged:
                 meta_info = {"request_id": self.task_id, "sequence_id": None}
-                if isinstance(e, BolnaComponentError):
+                if isinstance(e, VoiceAIComponentError):
                     error_msg = format_error_message(e.component, e.provider or e.model or "-", error_message)
                     model = e.model or "-"
                 else:

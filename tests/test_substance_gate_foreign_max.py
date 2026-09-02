@@ -14,9 +14,9 @@ import re
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.synthesizer.synthesizer_pool import SynthesizerPool
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 def _tm(monkeypatch, segments, buffer_max):

@@ -9,7 +9,7 @@ pipeline idle and merged the prompt into the open synth stream.
 
 from types import SimpleNamespace
 
-from bolna.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.task_manager import TaskManager
 
 
 # _pipeline_busy only reads three flags, so we exercise the pure predicate on a lightweight

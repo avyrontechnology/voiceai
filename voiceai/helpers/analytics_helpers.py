@@ -6,8 +6,8 @@ from dateutil import parser
 import copy
 from .utils import format_messages
 from .logger_config import configure_logger
-from bolna.prompts import CHECK_FOR_COMPLETION_PROMPT
-from bolna.constants import HIGH_LEVEL_ASSISTANT_ANALYTICS_DATA
+from voiceai.prompts import CHECK_FOR_COMPLETION_PROMPT
+from voiceai.constants import HIGH_LEVEL_ASSISTANT_ANALYTICS_DATA
 
 
 load_dotenv()

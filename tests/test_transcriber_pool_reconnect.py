@@ -7,7 +7,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.transcriber.transcriber_pool import TranscriberPool
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 class FakeTranscriber:

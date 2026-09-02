@@ -2,7 +2,7 @@ from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
-from bolna.enums import ToolScope
+from voiceai.enums import ToolScope
 
 
 class APIParams(BaseModel):

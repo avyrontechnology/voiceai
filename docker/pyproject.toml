@@ -2,7 +2,7 @@
 name = "voiceai-docker"
 version = "0.1.0"
 description = "Docker-only dependency set for voiceai — mirrors ../requirements.txt. Not published."
-authors = ["Bolna AI"]
+authors = ["VoiceAI"]
 package-mode = false
 
 [tool.poetry.dependencies]

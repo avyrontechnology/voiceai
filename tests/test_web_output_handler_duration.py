@@ -9,8 +9,8 @@ the wire format the browser sees is unchanged.
 import asyncio
 import json
 
-from bolna.helpers.mark_event_meta_data import MarkEventMetaData
-from bolna.output_handlers.default import DefaultOutputHandler
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.output_handlers.default import DefaultOutputHandler
 
 
 class _FakeWebSocket:

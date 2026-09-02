@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from unittest.mock import patch
 
-from bolna.llms.tool_call_accumulator import ToolCallAccumulator
+from voiceai.llms.tool_call_accumulator import ToolCallAccumulator
 
 TOOLS = [
     {"function": {"name": "book", "parameters": {"required": ["date"], "properties": {}}}},
@@ -28,7 +28,7 @@ API_PARAMS = {
 @pytest.fixture(autouse=True)
 def _no_request_logging():
     """The success path logs the call, which needs a live loop and is not what these tests pin."""
-    with patch("bolna.llms.tool_call_accumulator.convert_to_request_log"):
+    with patch("voiceai.llms.tool_call_accumulator.convert_to_request_log"):
         yield
 
 

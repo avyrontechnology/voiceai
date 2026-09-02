@@ -6,8 +6,8 @@ from typing import AsyncGenerator, List, Optional
 
 import websockets
 
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import clean_gemini_schema
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import clean_gemini_schema
 from .base_s2s import MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_S, BaseS2SProvider
 from .events import (
     AudioDelta,

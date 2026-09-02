@@ -8,7 +8,7 @@ legacy payloads, 24000 for web calls). Web/freeswitch playback runs at 24kHz:
 import base64
 import struct
 
-from bolna.agent_manager.task_manager import welcome_pcm_upsampled
+from voiceai.agent_manager.task_manager import welcome_pcm_upsampled
 
 
 def pcm_b64(num_samples: int) -> str:

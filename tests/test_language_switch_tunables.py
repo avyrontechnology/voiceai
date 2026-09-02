@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.constants import (
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.constants import (
     LANGUAGE_SWITCH_AUDIO_GAP_S,
     LANGUAGE_SWITCH_DECIDE_TIMEOUT_S,
     LANGUAGE_SWITCH_MAX_HOLD_S,

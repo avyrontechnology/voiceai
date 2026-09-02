@@ -9,9 +9,9 @@ from dotenv import load_dotenv
 from google.cloud import speech_v1p1beta1 as speech
 
 from .base_transcriber import BaseTranscriber
-from bolna.enums import TelephonyProvider
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import create_ws_data_packet, timestamp_ms
+from voiceai.enums import TelephonyProvider
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
 logger = configure_logger(__name__)

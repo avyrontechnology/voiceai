@@ -1,7 +1,7 @@
 import json
-from bolna.constants import END_CALL_FUNCTION_PREFIX
-from bolna.helpers.utils import convert_to_request_log, compute_function_pre_call_message
-from bolna.helpers.logger_config import configure_logger
+from voiceai.constants import END_CALL_FUNCTION_PREFIX
+from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message
+from voiceai.helpers.logger_config import configure_logger
 from .types import FunctionCallPayload
 
 logger = configure_logger(__name__)

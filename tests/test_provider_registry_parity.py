@@ -7,14 +7,14 @@ nothing can ever reach.
 
 import pytest
 
-from bolna.enums import (
+from voiceai.enums import (
     LLMProvider,
     S2SProvider,
     SynthesizerProvider,
     TelephonyProvider,
     TranscriberProvider,
 )
-from bolna.providers import (
+from voiceai.providers import (
     SUPPORTED_INPUT_HANDLERS,
     SUPPORTED_INPUT_TELEPHONY_HANDLERS,
     SUPPORTED_LLM_PROVIDERS,

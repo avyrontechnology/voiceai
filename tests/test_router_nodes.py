@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pydantic import ValidationError
 
-from bolna.agent_types.graph_agent import GraphAgent, _DETERMINISTIC_REASONING_PREFIX
-from bolna.models import GraphNode, GraphAgentConfig
-from bolna.enums import NodeType
-from bolna.llms.types import LLMStreamChunk
+from voiceai.agent_types.graph_agent import GraphAgent, _DETERMINISTIC_REASONING_PREFIX
+from voiceai.models import GraphNode, GraphAgentConfig
+from voiceai.enums import NodeType
+from voiceai.llms.types import LLMStreamChunk
 
 
 # ---------------------------------------------------------------------------
@@ -36,9 +36,9 @@ def _make_agent(config):
     mock_openai_llm_cls = MagicMock(return_value=mock_llm)
 
     with (
-        patch("bolna.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
-        patch("bolna.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
-        patch("bolna.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
+        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
+        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(config)
 

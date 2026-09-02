@@ -9,8 +9,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.agent_manager.interruption_manager import InterruptionManager
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.agent_manager.interruption_manager import InterruptionManager
 
 
 _TAIL_FINAL = {

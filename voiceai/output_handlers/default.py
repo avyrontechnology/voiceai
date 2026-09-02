@@ -3,9 +3,9 @@ import uuid
 import time
 import base64
 from dotenv import load_dotenv
-from bolna.constants import AUDIO_STREAM_END_SENTINELS, UNCOMPRESSED_AUDIO_FORMATS, WEBCALL_TTS_SAMPLE_RATE
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import calculate_audio_duration
+from voiceai.constants import AUDIO_STREAM_END_SENTINELS, UNCOMPRESSED_AUDIO_FORMATS, WEBCALL_TTS_SAMPLE_RATE
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import calculate_audio_duration
 
 logger = configure_logger(__name__)
 load_dotenv()

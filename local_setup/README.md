@@ -1,13 +1,13 @@
 ## Local docker setup
 
-A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `bolna` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
+A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `voiceai` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
 
 The setup consists of four containers:
 
 1. Telephony web server:
    * Choosing Twilio: for initiating the calls one will need to set up a [Twilio account](https://www.twilio.com/docs/usage/tutorials/how-to-use-your-free-trial-account)
    * Choosing Plivo: for initiating the calls one will need to set up a [Plivo account](https://www.plivo.com/)
-2. Bolna server: for creating and handling agents 
+2. VoiceAI server: for creating and handling agents 
 3. `ngrok`: for tunneling. One will need to add the `authtoken` to `ngrok-config.yml`
 4. `redis`: for persisting agents & prompt data
 
@@ -44,9 +44,9 @@ Alternatively, you can manually build and run the services:
 To run specific services only:
 
 ```bash
-docker compose up -d bolna-app twilio-app
+docker compose up -d voiceai-app twilio-app
 # or
-docker compose up -d bolna-app plivo-app
+docker compose up -d voiceai-app plivo-app
 ```
 
 Once the docker containers are up, you can now start to create your agents and instruct them to initiate calls.

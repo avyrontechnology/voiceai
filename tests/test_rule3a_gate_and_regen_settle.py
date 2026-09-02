@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bolna.agent_manager.task_manager import TaskManager, is_alphanumeric_readout
-from bolna.constants import LLM_REGEN_SETTLE_S
-from bolna.helpers.utils import safe_log_text
+from voiceai.agent_manager.task_manager import TaskManager, is_alphanumeric_readout
+from voiceai.constants import LLM_REGEN_SETTLE_S
+from voiceai.helpers.utils import safe_log_text
 
 
 # ── rule-3a helper ───────────────────────────────────────────────────────────────

@@ -6,12 +6,12 @@ from openai import OpenAI, AzureOpenAI, APIStatusError, APIConnectionError
 from dotenv import load_dotenv
 import json
 
-from bolna.models import *
-from bolna.agent_types.base_agent import BaseAgent
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.rag_service_client import RAGServiceClientSingleton
-from bolna.helpers.function_calling_helpers import guard_llm_base_url
-from bolna.helpers.utils import (
+from voiceai.models import *
+from voiceai.agent_types.base_agent import BaseAgent
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
+from voiceai.helpers.function_calling_helpers import guard_llm_base_url
+from voiceai.helpers.utils import (
     now_ms,
     format_messages,
     update_prompt_with_context,
@@ -20,15 +20,15 @@ from bolna.helpers.utils import (
     get_md5_hash,
     select_message_by_language,
 )
-from bolna.helpers.expression_evaluator import evaluate_edge_expression, describe_edge_expression
-from bolna.enums import EdgeConditionType, NodeType, ToolScope
-from bolna.llms.types import LLMStreamChunk, LatencyData
-from bolna.llms import OpenAiLLM
-from bolna.llms.azure_llm import should_overflow
-from bolna.llms.http_client_pool import get_shared_sync_http_client
-from bolna.providers import SUPPORTED_LLM_PROVIDERS
-from bolna.prompts import VOICEMAIL_DETECTION_PROMPT
-from bolna.constants import GPT5_MODEL_PREFIX, LANGUAGE_NAMES, canonical_model, default_reasoning_effort
+from voiceai.helpers.expression_evaluator import evaluate_edge_expression, describe_edge_expression
+from voiceai.enums import EdgeConditionType, NodeType, ToolScope
+from voiceai.llms.types import LLMStreamChunk, LatencyData
+from voiceai.llms import OpenAiLLM
+from voiceai.llms.azure_llm import should_overflow
+from voiceai.llms.http_client_pool import get_shared_sync_http_client
+from voiceai.providers import SUPPORTED_LLM_PROVIDERS
+from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
+from voiceai.constants import GPT5_MODEL_PREFIX, LANGUAGE_NAMES, canonical_model, default_reasoning_effort
 
 from typing import List, Tuple, AsyncGenerator, Optional, Dict, Any
 

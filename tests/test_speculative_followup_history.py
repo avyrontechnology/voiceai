@@ -15,8 +15,8 @@ import types
 from unittest.mock import MagicMock
 
 
-from bolna.agent_manager.task_manager import TaskManager
-from bolna.helpers.conversation_history import ConversationHistory
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.conversation_history import ConversationHistory
 
 
 def _msg(data="", end=False, fc=False):

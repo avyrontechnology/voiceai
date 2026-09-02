@@ -8,9 +8,9 @@ import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech import CancellationErrorCode
 
 from .base_synthesizer import BaseSynthesizer
-from bolna.helpers.logger_config import configure_logger
-from bolna.helpers.utils import create_ws_data_packet
-from bolna.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
 
 logger = configure_logger(__name__)
 load_dotenv()
