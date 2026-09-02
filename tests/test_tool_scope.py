@@ -40,7 +40,9 @@ def _make_graph_agent(nodes, current_node_id="n1"):
     }
     with (
         patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=MagicMock())}),
+        patch(
+            "voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=MagicMock())}
+        ),
         patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)

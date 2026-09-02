@@ -23,7 +23,12 @@ from enum import Enum
 from dotenv import load_dotenv
 from pydantic import create_model
 from .logger_config import configure_logger
-from voiceai.constants import PREPROCESS_DIR, PRE_FUNCTION_CALL_MESSAGE, TRANSFERING_CALL_FILLER, END_CALL_FUNCTION_PREFIX
+from voiceai.constants import (
+    PREPROCESS_DIR,
+    PRE_FUNCTION_CALL_MESSAGE,
+    TRANSFERING_CALL_FILLER,
+    END_CALL_FUNCTION_PREFIX,
+)
 from voiceai.enums import LogComponent, LogDirection, UsageSource
 from voiceai.prompts import DATE_PROMPT
 from pydub import AudioSegment
