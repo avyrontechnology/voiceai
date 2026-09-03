@@ -349,6 +349,31 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         await self._wait_for_response_done()
         await self._send(payload)
 
+    async def send_text(self, text: str) -> None:
+        """User-typed chat turn: append as a caller message, then elicit a reply.
+
+        Cancels first (barge-in semantics): a typed turn means the user wants
+        attention now, and response.create is rejected while the greeting or
+        a previous answer is still active. Cancelling an idle session is a
+        recoverable no-op (see RECOVERABLE_ERROR_CODES).
+        """
+        try:
+            await self._send({"type": "response.cancel"})
+        except Exception:
+            pass
+        await self._send(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            }
+        )
+        await self._wait_for_response_done()
+        await self._send({"type": "response.create"})
+
     async def send_dtmf(self, digits: str) -> None:
         # voiceai terminates telephony, so the provider never sees the carrier's DTMF frames.
         await self._send(

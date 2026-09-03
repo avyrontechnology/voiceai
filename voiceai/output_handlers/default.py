@@ -69,6 +69,18 @@ class DefaultOutputHandler:
     def get_provider(self):
         return self.io_provider
 
+    async def set_stream_sid(self, stream_sid):
+        """Accept the stream id minted by the input handler.
+
+        Telephony handlers receive a carrier stream id; browser legs mint
+        one locally (DefaultInputHandler.get_stream_sid). The default
+        handler sends unconditionally, so this only records it — callers
+        await it like every other output handler, and without this method
+        the s2s stream-sid handshake raises AttributeError and the model
+        greeting is skipped.
+        """
+        self.stream_sid = stream_sid
+
     def set_hangup_sent(self):
         self.is_last_hangup_chunk_sent = True
 
@@ -131,6 +143,9 @@ class DefaultOutputHandler:
                     self.welcome_message_sent_ts = time.time() * 1000
 
                 response = {"data": data, "type": packet["meta_info"]["type"]}
+                if packet["meta_info"]["type"] == "text":
+                    # Lets browser/chat legs tell agent lines from caller lines.
+                    response["role"] = packet["meta_info"].get("role", "agent")
                 await self.websocket.send_json(response)
 
                 # sending of post-mark message

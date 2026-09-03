@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 load_dotenv()
@@ -39,17 +40,28 @@ def populate_ngrok_tunnels():
         print(f"Error: Unable to fetch data. Status code: {response.status_code}")
 
 
-@app.post("/call")
-async def make_call(request: Request):
+class CallDetails(BaseModel):
+    agent_id: str = Field(..., description="The ID of the agent to handle the call.")
+    recipient_phone_number: str = Field(..., description="The phone number to call in E.164 format (e.g., +1234567890).")
+
+class ErrorResponse(BaseModel):
+    detail: str = Field(..., description="Error description message.")
+
+@app.post(
+    "/call",
+    summary="Initiate Outbound Call (Twilio)",
+    description="Initiates an outbound call using Twilio to the specified recipient phone number and connects it to the specified agent.",
+    tags=["Twilio Telephony"],
+    responses={
+        200: {"description": "Call initiated successfully."},
+        404: {"model": ErrorResponse, "description": "Agent or recipient phone number not provided."},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def make_call(call_details: CallDetails):
     try:
-        call_details = await request.json()
-        agent_id = call_details.get("agent_id", None)
-
-        if not agent_id:
-            raise HTTPException(status_code=404, detail="Agent not provided")
-
-        if not call_details or "recipient_phone_number" not in call_details:
-            raise HTTPException(status_code=404, detail="Recipient phone number not provided")
+        agent_id = call_details.agent_id
+        recipient_phone_number = call_details.recipient_phone_number
 
         telephony_host, voiceai_host = populate_ngrok_tunnels()
 
@@ -58,7 +70,7 @@ async def make_call(request: Request):
 
         try:
             call = twilio_client.calls.create(
-                to=call_details.get("recipient_phone_number"),
+                to=recipient_phone_number,
                 from_=twilio_phone_number,
                 url=f"{telephony_host}/twilio_connect?voiceai_host={voiceai_host}&agent_id={agent_id}",
                 method="POST",
@@ -74,8 +86,16 @@ async def make_call(request: Request):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@app.post("/twilio_connect")
-async def twilio_connect(voiceai_host: str = Query(...), agent_id: str = Query(...)):
+@app.post(
+    "/twilio_connect",
+    summary="Twilio TwiML Connect Callback",
+    description="Callback endpoint for Twilio to provide TwiML instructions for streaming audio to the VoiceAI WebSocket server.",
+    tags=["Twilio Telephony"],
+    responses={
+        200: {"description": "TwiML instructions returned successfully."},
+    }
+)
+async def twilio_connect(voiceai_host: str = Query(..., description="The public URL of the VoiceAI websocket host"), agent_id: str = Query(..., description="The ID of the agent to connect")):
     try:
         response = VoiceResponse()
 

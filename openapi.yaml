@@ -1,0 +1,2578 @@
+openapi: 3.1.0
+info:
+  title: FastAPI
+  version: 0.1.0
+paths:
+  /agent/{agent_id}:
+    get:
+      tags:
+      - Agents
+      summary: Get Agent Configuration
+      description: Fetches an agent's complete configuration by its unique ID.
+      operationId: get_agent_agent__agent_id__get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Agent configuration successfully retrieved.
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Agents
+      summary: Update Existing Agent
+      description: Overwrites an existing agent's configuration. Recalculates extraction
+        prompts if needed.
+      operationId: edit_agent_agent__agent_id__put
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentPayload'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentUpdatedResponse'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Agents
+      summary: Delete Agent
+      description: Removes an agent's configuration from the system by ID.
+      operationId: delete_agent_agent__agent_id__delete
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDeletedResponse'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent:
+    post:
+      tags:
+      - Agents
+      summary: Create New Agent
+      description: Creates a new agent configuration, generates an ID, and stores
+        it in Redis. If extraction tasks are present, it will automatically generate
+        extraction prompts.
+      operationId: create_agent_agent_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentPayload'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCreatedResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /all:
+    get:
+      tags:
+      - Agents
+      summary: List All Agents
+      description: Fetches all agents and their configurations currently stored in
+        Redis.
+      operationId: get_all_agents_all_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentListResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /twilio/call:
+    post:
+      tags:
+      - Twilio Telephony
+      summary: Initiate Outbound Call (Twilio)
+      description: Initiates an outbound call using Twilio to the specified recipient
+        phone number and connects it to the specified agent.
+      operationId: make_call_call_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallDetails'
+        required: true
+      responses:
+        '200':
+          description: Call initiated successfully.
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Agent or recipient phone number not provided.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /twilio/twilio_connect:
+    post:
+      tags:
+      - Twilio Telephony
+      summary: Twilio TwiML Connect Callback
+      description: Callback endpoint for Twilio to provide TwiML instructions for
+        streaming audio to the VoiceAI WebSocket server.
+      operationId: twilio_connect_twilio_connect_post
+      parameters:
+      - name: voiceai_host
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The public URL of the VoiceAI websocket host
+          title: Voiceai Host
+        description: The public URL of the VoiceAI websocket host
+      - name: agent_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The ID of the agent to connect
+          title: Agent Id
+        description: The ID of the agent to connect
+      responses:
+        '200':
+          description: TwiML instructions returned successfully.
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /plivo/call:
+    post:
+      tags:
+      - Plivo Telephony
+      summary: Initiate Outbound Call (Plivo)
+      description: Initiates an outbound call using Plivo to the specified recipient
+        phone number and connects it to the specified agent.
+      operationId: make_call_call_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallDetails'
+        required: true
+      responses:
+        '200':
+          description: Call initiated successfully.
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Agent or recipient phone number not provided.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /plivo/plivo_connect:
+    post:
+      tags:
+      - Plivo Telephony
+      summary: Plivo Answer URL Callback
+      description: Callback endpoint for Plivo to provide XML instructions for streaming
+        audio to the VoiceAI WebSocket server.
+      operationId: plivo_connect_plivo_connect_post
+      parameters:
+      - name: voiceai_host
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The public URL of the VoiceAI websocket host
+          title: Voiceai Host
+        description: The public URL of the VoiceAI websocket host
+      - name: agent_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The ID of the agent to connect
+          title: Agent Id
+        description: The ID of the agent to connect
+      responses:
+        '200':
+          description: XML instructions returned successfully.
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /plivo/plivo_hangup_callback:
+    post:
+      summary: Plivo Hangup Callback
+      operationId: plivo_hangup_callback_plivo_hangup_callback_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+components:
+  schemas:
+    APIParams:
+      properties:
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        method:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Method
+          default: POST
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+        param:
+          anyOf:
+          - type: string
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Param
+        headers:
+          anyOf:
+          - type: string
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Headers
+        pre_call_message:
+          anyOf:
+          - type: string
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Pre Call Message
+        pre_call_webhook_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pre Call Webhook Url
+        pre_call_webhook_param:
+          anyOf:
+          - type: string
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Pre Call Webhook Param
+        scope:
+          anyOf:
+          - $ref: '#/components/schemas/ToolScope'
+          - type: 'null'
+        nodes:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Nodes
+      type: object
+      title: APIParams
+    AgentCreatedResponse:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The unique identifier for the created agent.
+        state:
+          type: string
+          title: State
+          description: State of the agent creation.
+          default: created
+      type: object
+      required:
+      - agent_id
+      title: AgentCreatedResponse
+    AgentDeletedResponse:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The unique identifier for the deleted agent.
+        state:
+          type: string
+          title: State
+          description: State of the agent deletion.
+          default: deleted
+      type: object
+      required:
+      - agent_id
+      title: AgentDeletedResponse
+    AgentListItem:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The ID of the agent.
+        data:
+          additionalProperties: true
+          type: object
+          title: Data
+          description: The agent configuration data.
+      type: object
+      required:
+      - agent_id
+      - data
+      title: AgentListItem
+    AgentListResponse:
+      properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/AgentListItem'
+          type: array
+          title: Agents
+          description: List of all available agents.
+      type: object
+      required:
+      - agents
+      title: AgentListResponse
+    AgentModel:
+      properties:
+        agent_name:
+          type: string
+          title: Agent Name
+          description: A recognizable name for this agent.
+        agent_type:
+          type: string
+          title: Agent Type
+          description: Type of agent architecture. E.g., 'other', 'graph_agent', 'llm_agent'.
+          default: other
+        tasks:
+          items:
+            $ref: '#/components/schemas/Task'
+          type: array
+          title: Tasks
+          description: List of tasks to execute in order. Can include conversations,
+            extractions, etc.
+        agent_welcome_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Welcome Message
+          description: First message spoken by the agent upon connecting the call.
+          default: This call is being recorded for quality assurance and training.
+            Please speak now.
+      type: object
+      required:
+      - agent_name
+      - tasks
+      title: AgentModel
+    AgentRouteConfig:
+      properties:
+        utterances:
+          items:
+            type: string
+          type: array
+          title: Utterances
+          description: Example utterances that should route to this agent.
+        threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Threshold
+          description: Confidence threshold required to route.
+          default: 0.85
+      type: object
+      required:
+      - utterances
+      title: AgentRouteConfig
+    AgentUpdatedResponse:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The unique identifier for the updated agent.
+        state:
+          type: string
+          title: State
+          description: State of the agent update.
+          default: updated
+      type: object
+      required:
+      - agent_id
+      title: AgentUpdatedResponse
+    AzureConfig:
+      properties:
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+        language:
+          type: string
+          title: Language
+        speed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Speed
+          default: 1.0
+      type: object
+      required:
+      - voice
+      - model
+      - language
+      title: AzureConfig
+    CartesiaConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+        language:
+          type: string
+          title: Language
+        speed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Speed
+          default: 1.0
+      type: object
+      required:
+      - voice_id
+      - voice
+      - model
+      - language
+      title: CartesiaConfig
+    ConversationConfig:
+      properties:
+        optimize_latency:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Optimize Latency
+          description: Whether to aggressively optimize for lower latency across the
+            pipeline.
+          default: true
+        hangup_after_silence:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Hangup After Silence
+          description: Time in seconds of silence before the system automatically
+            hangs up the call.
+          default: 20
+        incremental_delay:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Incremental Delay
+          description: Incremental delay in milliseconds used to handle long pauses
+            in conversation.
+          default: 900
+        number_of_words_for_interruption:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Number Of Words For Interruption
+          description: Minimum number of words detected before triggering a barge-in/interruption.
+          default: 1
+        interruption_backoff_period:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Interruption Backoff Period
+          description: Time in milliseconds to ignore further audio immediately after
+            an interruption.
+          default: 100
+        hangup_after_LLMCall:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Hangup After Llmcall
+          description: Whether to automatically hang up after the LLM agent completes
+            its primary goal.
+          default: false
+        call_cancellation_prompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Call Cancellation Prompt
+          description: Prompt/instruction used to detect if the user wants to cancel
+            or end the call.
+        backchanneling:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Backchanneling
+          description: Enable active listening/backchanneling (e.g., saying 'mm-hmm'
+            while the user speaks).
+          default: false
+        backchanneling_message_gap:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backchanneling Message Gap
+          description: Minimum gap in seconds between consecutive backchanneling messages.
+          default: 5
+        backchanneling_start_delay:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backchanneling Start Delay
+          description: Delay in seconds before initiating backchanneling behavior.
+          default: 5
+        ambient_noise:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Ambient Noise
+          description: Whether to play synthetic ambient noise in the background.
+          default: false
+        call_terminate:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Call Terminate
+          description: Maximum total call duration in seconds before forced termination.
+          default: 90
+        use_fillers:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Fillers
+          description: Whether to use filler words ('uh', 'um') before LLM responses
+            to reduce perceived latency.
+          default: false
+        trigger_user_online_message_after:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Trigger User Online Message After
+          description: Time in seconds of inactivity before prompting the user to
+            see if they are still there.
+          default: 10
+        check_user_online_message:
+          anyOf:
+          - type: string
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Check User Online Message
+          description: The message played when checking if the user is still online.
+          default: Hey, are you still there
+        check_if_user_online:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Check If User Online
+          description: Enable proactive checks to see if the user is still on the
+            line.
+          default: true
+        dtmf_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Dtmf Enabled
+          description: Whether to enable processing of DTMF (keypad) tones.
+          default: false
+        voicemail:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Voicemail
+          description: Whether to enable voicemail detection.
+          default: false
+        voicemail_detection_duration:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Voicemail Detection Duration
+          description: Time window in seconds to detect voicemail signals.
+          default: 30.0
+        voicemail_check_interval:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Voicemail Check Interval
+          description: Minimum time in seconds between interim voicemail checks.
+          default: 7.0
+        voicemail_min_transcript_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Voicemail Min Transcript Length
+          description: Minimum number of transcribed words to trigger an interim voicemail
+            check.
+          default: 7
+      type: object
+      title: ConversationConfig
+    CreateAgentPayload:
+      properties:
+        agent_config:
+          $ref: '#/components/schemas/AgentModel'
+          description: The main agent configuration including tools, tasks, and settings.
+        agent_prompts:
+          anyOf:
+          - additionalProperties:
+              additionalProperties:
+                type: string
+              type: object
+            type: object
+          - type: 'null'
+          title: Agent Prompts
+          description: Optional prompts mapped by intent/context.
+      type: object
+      required:
+      - agent_config
+      title: CreateAgentPayload
+    DeepgramConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+      type: object
+      required:
+      - voice_id
+      - voice
+      - model
+      title: DeepgramConfig
+    Edge:
+      properties:
+        start_node:
+          type: string
+          title: Start Node
+        end_node:
+          type: string
+          title: End Node
+        condition:
+          anyOf:
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Condition
+      type: object
+      required:
+      - start_node
+      - end_node
+      title: Edge
+    EdgeConditionType:
+      type: string
+      enum:
+      - llm
+      - expression
+      - unconditional
+      - event
+      title: EdgeConditionType
+    ElevenLabsConfig:
+      properties:
+        voice:
+          type: string
+          title: Voice
+        voice_id:
+          type: string
+          title: Voice Id
+        model:
+          type: string
+          title: Model
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          default: 0.5
+        similarity_boost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Similarity Boost
+          default: 0.75
+        speed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Speed
+          default: 1.0
+        style:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Style
+          default: 0.0
+      type: object
+      required:
+      - voice
+      - voice_id
+      - model
+      title: ElevenLabsConfig
+    ErrorResponse:
+      properties:
+        detail:
+          type: string
+          title: Detail
+          description: Error description message.
+      type: object
+      required:
+      - detail
+      title: ErrorResponse
+    ExpressionCondition:
+      properties:
+        variable:
+          type: string
+          title: Variable
+          description: Dot-notation key, e.g. 'detected_language' or 'recipient_data.timezone'
+        operator:
+          $ref: '#/components/schemas/ExpressionOperator'
+          description: The operator to apply for the condition.
+        value:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Value
+          description: The value to compare against.
+      type: object
+      required:
+      - variable
+      - operator
+      title: ExpressionCondition
+    ExpressionGroup:
+      properties:
+        logic:
+          $ref: '#/components/schemas/ExpressionLogic'
+          description: Logical operator (AND/OR) to combine multiple conditions.
+          default: and
+        conditions:
+          items:
+            $ref: '#/components/schemas/ExpressionCondition'
+          type: array
+          title: Conditions
+          description: List of conditions to evaluate.
+      type: object
+      title: ExpressionGroup
+    ExpressionLogic:
+      type: string
+      enum:
+      - and
+      - or
+      title: ExpressionLogic
+    ExpressionOperator:
+      type: string
+      enum:
+      - eq
+      - neq
+      - gt
+      - gte
+      - lt
+      - lte
+      - in
+      - not_in
+      - contains
+      - exists
+      - not_exists
+      title: ExpressionOperator
+    GeminiLiveConfig:
+      properties:
+        model:
+          type: string
+          title: Model
+          description: The Gemini Live model ID to use.
+          default: gemini-3.1-flash-live-preview
+        voice:
+          type: string
+          title: Voice
+          description: The default voice to use.
+          default: Kore
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+          description: Language setting.
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          description: Temperature for generation.
+        start_sensitivity:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Sensitivity
+          description: Voice activation start sensitivity.
+        end_sensitivity:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Sensitivity
+          description: Voice activation end sensitivity.
+        vad_silence_duration_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vad Silence Duration Ms
+          description: VAD silence duration in ms.
+          default: 600
+        vad_prefix_padding_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vad Prefix Padding Ms
+          description: Prefix padding for VAD.
+        enable_session_resumption:
+          type: boolean
+          title: Enable Session Resumption
+          description: Whether to resume the session gracefully if it closes automatically.
+          default: true
+        enable_context_compression:
+          type: boolean
+          title: Enable Context Compression
+          description: Whether to compress context to save tokens over long sessions.
+          default: true
+      type: object
+      title: GeminiLiveConfig
+    GraphEdge:
+      properties:
+        to_node_id:
+          type: string
+          title: To Node Id
+          description: Target node ID to transition to.
+        condition:
+          type: string
+          title: Condition
+          description: Human-readable description of when to transition.
+          default: ''
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Label
+          description: Optional label for the edge.
+        condition_type:
+          anyOf:
+          - $ref: '#/components/schemas/EdgeConditionType'
+          - type: 'null'
+          description: Type of condition triggering the transition. None maps to 'llm'.
+        expression:
+          anyOf:
+          - $ref: '#/components/schemas/ExpressionGroup'
+          - type: 'null'
+          description: Expression to evaluate if condition_type is 'expression'.
+        event_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Event Name
+          description: Event name to match if condition_type is 'event'.
+        function_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Function Name
+          description: Name of the function the LLM must call to transition, e.g.
+            'go_to_city_question'.
+        function_description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Function Description
+          description: Detailed description of the transition function for the LLM.
+        parameters:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Parameters
+          description: Optional parameters to collect during transition, mapping names
+            to types.
+        priority:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Priority
+          description: Evaluation priority within the same condition type tier. Lower
+            is evaluated first.
+      type: object
+      required:
+      - to_node_id
+      title: GraphEdge
+      description: 'Edge definition for graph-based conversation flow.
+
+
+        Each edge represents a possible transition from the current node.
+
+        The LLM will call the transition function when the condition is met.'
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    IOModel:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        format:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Format
+          default: wav
+      type: object
+      required:
+      - provider
+      title: IOModel
+    KalpaConfig:
+      properties:
+        voice:
+          type: string
+          title: Voice
+          default: Kiara
+        voice_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Voice Id
+        model:
+          type: string
+          title: Model
+          default: kalpa-tts-multilingual-beta-v0.1
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+        acoustic_temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Acoustic Temperature
+        max_new_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max New Tokens
+        audio_quality:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Audio Quality
+        chunk_length_schedule:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Chunk Length Schedule
+      type: object
+      title: KalpaConfig
+    KnowledgeAgentConfig:
+      properties:
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: The primary LLM model used for generation.
+          default: gpt-3.5-turbo
+        max_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Tokens
+          description: Maximum number of tokens to generate.
+          default: 100
+        family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Family
+          description: The family of the model (e.g., openai, anthropic).
+          default: openai
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          description: Sampling temperature to control randomness.
+          default: 0.1
+        request_json:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Request Json
+          description: Whether to enforce JSON output from the model.
+          default: false
+        stop:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Stop
+          description: List of stop sequences.
+        top_k:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Top K
+          description: Top-K sampling parameter.
+          default: 0
+        top_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Top P
+          description: Top-P (nucleus) sampling parameter.
+          default: 0.9
+        min_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min P
+          description: Min-P sampling parameter.
+          default: 0.1
+        frequency_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Frequency Penalty
+          description: Penalty for frequent tokens.
+          default: 0.0
+        presence_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Presence Penalty
+          description: Penalty for new tokens based on presence.
+          default: 0.0
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: The LLM provider (e.g., openai, azure, groq).
+          default: openai
+        base_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Url
+          description: Custom base URL for the LLM API.
+        reasoning_effort:
+          anyOf:
+          - $ref: '#/components/schemas/ReasoningEffort'
+          - type: 'null'
+          description: Reasoning effort configuration for reasoning models (e.g.,
+            o1).
+        verbosity:
+          anyOf:
+          - $ref: '#/components/schemas/Verbosity'
+          - type: 'null'
+          description: Verbosity level of the LLM responses.
+        use_responses_api:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Responses Api
+          description: Whether to use a specific responses API.
+          default: false
+        compact_threshold:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Compact Threshold
+          description: Threshold for compacting message history context.
+        agent_information:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Information
+          description: System prompt and instructions for the agent.
+          default: Knowledge-based AI assistant
+        prompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prompt
+          description: Additional context or base prompt.
+        rag_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Rag Config
+          description: Configuration for RAG knowledge retrieval.
+        llm_provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Llm Provider
+          description: The LLM provider to use.
+          default: openai
+        context_data:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Context Data
+          description: Context data injected into the agent's knowledge space.
+      type: object
+      title: KnowledgeAgentConfig
+    KnowledgebaseAgent:
+      properties:
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: The model to use for the LLM.
+          default: gpt-3.5-turbo
+        max_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Tokens
+          description: Maximum number of tokens to generate.
+          default: 100
+        family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Family
+          description: The family of the model (e.g., openai, anthropic).
+          default: openai
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          description: Sampling temperature to control randomness.
+          default: 0.1
+        request_json:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Request Json
+          description: Whether to enforce JSON output from the model.
+          default: false
+        stop:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Stop
+          description: List of stop sequences.
+        top_k:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Top K
+          description: Top-K sampling parameter.
+          default: 0
+        top_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Top P
+          description: Top-P (nucleus) sampling parameter.
+          default: 0.9
+        min_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min P
+          description: Min-P sampling parameter.
+          default: 0.1
+        frequency_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Frequency Penalty
+          description: Penalty for frequent tokens.
+          default: 0.0
+        presence_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Presence Penalty
+          description: Penalty for new tokens based on presence.
+          default: 0.0
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: The provider to use for the LLM.
+          default: openai
+        base_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Url
+          description: Custom base URL for the LLM API.
+        reasoning_effort:
+          anyOf:
+          - $ref: '#/components/schemas/ReasoningEffort'
+          - type: 'null'
+          description: Reasoning effort configuration for reasoning models (e.g.,
+            o1).
+        verbosity:
+          anyOf:
+          - $ref: '#/components/schemas/Verbosity'
+          - type: 'null'
+          description: Verbosity level of the LLM responses.
+        use_responses_api:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Responses Api
+          description: Whether to use a specific responses API.
+          default: false
+        compact_threshold:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Compact Threshold
+          description: Threshold for compacting message history context.
+        vector_store:
+          $ref: '#/components/schemas/VectorStore'
+          description: The vector store configuration to retrieve documents from.
+      type: object
+      required:
+      - vector_store
+      title: KnowledgebaseAgent
+    LanceDBProviderConfig:
+      properties:
+        vector_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Vector Id
+        vector_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Vector Ids
+        similarity_top_k:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Similarity Top K
+          default: 5
+        score_threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Score Threshold
+          default: 0.1
+        reranker:
+          anyOf:
+          - $ref: '#/components/schemas/RerankerConfig'
+          - type: 'null'
+          default:
+            enabled: false
+            model_type: minilm-l6-v2
+            candidate_count: 20
+            final_count: 5
+      additionalProperties: true
+      type: object
+      title: LanceDBProviderConfig
+    Llm:
+      properties:
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: The primary LLM model used for generation.
+          default: gpt-3.5-turbo
+        max_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Tokens
+          description: Maximum number of tokens to generate.
+          default: 100
+        family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Family
+          description: The family of the model (e.g., openai, anthropic).
+          default: openai
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          description: Sampling temperature to control randomness.
+          default: 0.1
+        request_json:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Request Json
+          description: Whether to enforce JSON output from the model.
+          default: false
+        stop:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Stop
+          description: List of stop sequences.
+        top_k:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Top K
+          description: Top-K sampling parameter.
+          default: 0
+        top_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Top P
+          description: Top-P (nucleus) sampling parameter.
+          default: 0.9
+        min_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min P
+          description: Min-P sampling parameter.
+          default: 0.1
+        frequency_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Frequency Penalty
+          description: Penalty for frequent tokens.
+          default: 0.0
+        presence_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Presence Penalty
+          description: Penalty for new tokens based on presence.
+          default: 0.0
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: The LLM provider (e.g., openai, azure, groq).
+          default: openai
+        base_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Url
+          description: Custom base URL for the LLM API.
+        reasoning_effort:
+          anyOf:
+          - $ref: '#/components/schemas/ReasoningEffort'
+          - type: 'null'
+          description: Reasoning effort configuration for reasoning models (e.g.,
+            o1).
+        verbosity:
+          anyOf:
+          - $ref: '#/components/schemas/Verbosity'
+          - type: 'null'
+          description: Verbosity level of the LLM responses.
+        use_responses_api:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Responses Api
+          description: Whether to use a specific responses API.
+          default: false
+        compact_threshold:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Compact Threshold
+          description: Threshold for compacting message history context.
+      type: object
+      title: Llm
+    LlmAgent:
+      properties:
+        agent_flow_type:
+          type: string
+          title: Agent Flow Type
+          description: The flow type, such as 'preprocessed'.
+        agent_type:
+          type: string
+          title: Agent Type
+          description: 'The type of the agent: ''simple_llm_agent'', ''graph_agent'',
+            ''multiagent'', etc.'
+        llm_config:
+          anyOf:
+          - $ref: '#/components/schemas/KnowledgebaseAgent'
+          - $ref: '#/components/schemas/LlmAgentGraph'
+          - $ref: '#/components/schemas/MultiAgent'
+          - $ref: '#/components/schemas/SimpleLlmAgent'
+          - $ref: '#/components/schemas/KnowledgeAgentConfig'
+          title: Llm Config
+          description: The detailed configuration specific to the agent_type.
+      type: object
+      required:
+      - agent_flow_type
+      - agent_type
+      - llm_config
+      title: LlmAgent
+    LlmAgentGraph:
+      properties:
+        nodes:
+          items:
+            $ref: '#/components/schemas/Node'
+          type: array
+          title: Nodes
+        edges:
+          items:
+            $ref: '#/components/schemas/Edge'
+          type: array
+          title: Edges
+      type: object
+      required:
+      - nodes
+      - edges
+      title: LlmAgentGraph
+    MayaConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+          default: en
+      type: object
+      required:
+      - voice_id
+      - voice
+      - model
+      title: MayaConfig
+    MongoDBProviderConfig:
+      properties:
+        connection_string:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Connection String
+        db_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Db Name
+        collection_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Collection Name
+        index_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Index Name
+        llm_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Llm Model
+          default: gpt-3.5-turbo
+        embedding_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Embedding Model
+          default: text-embedding-3-small
+        embedding_dimensions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Embedding Dimensions
+          default: 256
+      type: object
+      title: MongoDBProviderConfig
+    MultiAgent:
+      properties:
+        agent_map:
+          additionalProperties:
+            $ref: '#/components/schemas/Llm'
+          type: object
+          title: Agent Map
+          description: Map of agent names to their LLM configurations.
+        agent_routing_config:
+          additionalProperties:
+            $ref: '#/components/schemas/AgentRouteConfig'
+          type: object
+          title: Agent Routing Config
+          description: Routing logic configuration mapped by agent name.
+        default_agent:
+          type: string
+          title: Default Agent
+          description: The name of the agent to route to by default.
+        embedding_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Embedding Model
+          description: Embedding model to use for intent routing matching.
+          default: Snowflake/snowflake-arctic-embed-l
+      type: object
+      required:
+      - agent_map
+      - agent_routing_config
+      - default_agent
+      title: MultiAgent
+    Node:
+      properties:
+        id:
+          type: string
+          title: Id
+        type:
+          type: string
+          title: Type
+        llm:
+          $ref: '#/components/schemas/Llm'
+        exit_criteria:
+          type: string
+          title: Exit Criteria
+        exit_response:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Exit Response
+        exit_prompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Exit Prompt
+        is_root:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Is Root
+          default: false
+      type: object
+      required:
+      - id
+      - type
+      - llm
+      - exit_criteria
+      title: Node
+    NodeType:
+      type: string
+      enum:
+      - llm
+      - static
+      - router
+      title: NodeType
+    OpenAIConfig:
+      properties:
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+      type: object
+      required:
+      - voice
+      - model
+      title: OpenAIConfig
+    OpenAIRealtimeConfig:
+      properties:
+        model:
+          type: string
+          title: Model
+          description: The OpenAI Realtime model ID to use.
+          default: gpt-realtime-2.1
+        voice:
+          type: string
+          title: Voice
+          description: The default voice to use for audio generation.
+          default: marin
+        speed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Speed
+          description: Playback rate of the generated audio (0.25 to 1.5).
+          default: 1.0
+        turn_detection_type:
+          type: string
+          title: Turn Detection Type
+          description: 'Type of turn detection: ''semantic_vad'' or ''server_vad''.'
+          default: semantic_vad
+        eagerness:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Eagerness
+          description: How eagerly the model responds (auto, low, medium, high).
+          default: auto
+        vad_threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Vad Threshold
+          description: VAD threshold (for server_vad only).
+          default: 0.5
+        vad_silence_duration_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vad Silence Duration Ms
+          description: Silence duration in ms before triggering VAD.
+          default: 500
+        vad_prefix_padding_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vad Prefix Padding Ms
+          description: Prefix padding for VAD in ms.
+          default: 300
+        reasoning_effort:
+          anyOf:
+          - $ref: '#/components/schemas/ReasoningEffort'
+          - type: 'null'
+          description: Reasoning effort level (if supported by model).
+        max_output_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Output Tokens
+          description: Maximum output tokens for generation.
+        transcription_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Transcription Model
+          description: Model used for transcribing input audio.
+          default: gpt-4o-mini-transcribe
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+          description: Language constraint for the session.
+      type: object
+      title: OpenAIRealtimeConfig
+    PixaConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+        language:
+          type: string
+          title: Language
+        top_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Top P
+          default: 0.95
+        repetition_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Repetition Penalty
+          default: 1.3
+      type: object
+      required:
+      - voice_id
+      - voice
+      - model
+      - language
+      title: PixaConfig
+    PollyConfig:
+      properties:
+        voice:
+          type: string
+          title: Voice
+        engine:
+          type: string
+          title: Engine
+        language:
+          type: string
+          title: Language
+      type: object
+      required:
+      - voice
+      - engine
+      - language
+      title: PollyConfig
+    ReasoningEffort:
+      type: string
+      enum:
+      - none
+      - minimal
+      - low
+      - medium
+      - high
+      - xhigh
+      title: ReasoningEffort
+    RerankerConfig:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+          default: false
+        model_type:
+          type: string
+          title: Model Type
+          default: minilm-l6-v2
+        candidate_count:
+          type: integer
+          title: Candidate Count
+          default: 20
+        final_count:
+          type: integer
+          title: Final Count
+          default: 5
+      type: object
+      title: RerankerConfig
+      description: Configuration for document reranking in RAG systems.
+    RimeConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        language:
+          type: string
+          title: Language
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+      type: object
+      required:
+      - voice_id
+      - language
+      - voice
+      - model
+      title: RimeConfig
+    S2SConfig:
+      properties:
+        provider:
+          type: string
+          title: Provider
+          description: The S2S multimodal provider, e.g. 'openai_realtime' or 'gemini_live'.
+        provider_config:
+          anyOf:
+          - $ref: '#/components/schemas/OpenAIRealtimeConfig'
+          - $ref: '#/components/schemas/GeminiLiveConfig'
+          title: Provider Config
+          description: Configuration specific to the chosen S2S provider.
+        welcome_audio_gate_ms:
+          type: integer
+          title: Welcome Audio Gate Ms
+          description: Milliseconds to suppress inbound audio at connection start
+            to avoid VAD tripping on the agent's greeting.
+          default: 1500
+      type: object
+      required:
+      - provider
+      - provider_config
+      title: S2SConfig
+    SarvamConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        language:
+          type: string
+          title: Language
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+        speed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Speed
+          default: 1.0
+      type: object
+      required:
+      - voice_id
+      - language
+      - voice
+      - model
+      title: SarvamConfig
+    SimpleLlmAgent:
+      properties:
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: The primary LLM model used for generation.
+          default: gpt-3.5-turbo
+        max_tokens:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Tokens
+          description: Maximum number of tokens to generate.
+          default: 100
+        family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Family
+          description: The family of the model (e.g., openai, anthropic).
+          default: openai
+        temperature:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature
+          description: Sampling temperature to control randomness.
+          default: 0.1
+        request_json:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Request Json
+          description: Whether to enforce JSON output from the model.
+          default: false
+        stop:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Stop
+          description: List of stop sequences.
+        top_k:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Top K
+          description: Top-K sampling parameter.
+          default: 0
+        top_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Top P
+          description: Top-P (nucleus) sampling parameter.
+          default: 0.9
+        min_p:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min P
+          description: Min-P sampling parameter.
+          default: 0.1
+        frequency_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Frequency Penalty
+          description: Penalty for frequent tokens.
+          default: 0.0
+        presence_penalty:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Presence Penalty
+          description: Penalty for new tokens based on presence.
+          default: 0.0
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: The LLM provider (e.g., openai, azure, groq).
+          default: openai
+        base_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Base Url
+          description: Custom base URL for the LLM API.
+        reasoning_effort:
+          anyOf:
+          - $ref: '#/components/schemas/ReasoningEffort'
+          - type: 'null'
+          description: Reasoning effort configuration for reasoning models (e.g.,
+            o1).
+        verbosity:
+          anyOf:
+          - $ref: '#/components/schemas/Verbosity'
+          - type: 'null'
+          description: Verbosity level of the LLM responses.
+        use_responses_api:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Use Responses Api
+          description: Whether to use a specific responses API.
+          default: false
+        compact_threshold:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Compact Threshold
+          description: Threshold for compacting message history context.
+        agent_flow_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Flow Type
+          default: streaming
+        extraction_details:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Extraction Details
+        summarization_details:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summarization Details
+      type: object
+      title: SimpleLlmAgent
+    SmallestConfig:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        language:
+          type: string
+          title: Language
+        voice:
+          type: string
+          title: Voice
+        model:
+          type: string
+          title: Model
+      type: object
+      required:
+      - voice_id
+      - language
+      - voice
+      - model
+      title: SmallestConfig
+    Synthesizer:
+      properties:
+        provider:
+          type: string
+          title: Provider
+          description: The text-to-speech provider to use (e.g., 'elevenlabs', 'polly',
+            'deepgram').
+        provider_config:
+          anyOf:
+          - $ref: '#/components/schemas/PollyConfig'
+          - $ref: '#/components/schemas/ElevenLabsConfig'
+          - $ref: '#/components/schemas/AzureConfig'
+          - $ref: '#/components/schemas/RimeConfig'
+          - $ref: '#/components/schemas/SmallestConfig'
+          - $ref: '#/components/schemas/SarvamConfig'
+          - $ref: '#/components/schemas/PixaConfig'
+          - $ref: '#/components/schemas/CartesiaConfig'
+          - $ref: '#/components/schemas/DeepgramConfig'
+          - $ref: '#/components/schemas/OpenAIConfig'
+          - $ref: '#/components/schemas/MayaConfig'
+          - $ref: '#/components/schemas/KalpaConfig'
+          title: Provider Config
+          description: Provider-specific configuration details.
+        stream:
+          type: boolean
+          title: Stream
+          description: Whether to stream synthesized audio back to the client.
+          default: false
+        buffer_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Buffer Size
+          description: Buffer size in characters before sending text to the synthesizer.
+          default: 40
+        audio_format:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Audio Format
+          description: Audio format for the synthesized output.
+          default: pcm
+        caching:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Caching
+          description: Enable caching of frequently synthesized phrases.
+          default: true
+      type: object
+      required:
+      - provider
+      - provider_config
+      title: Synthesizer
+    Task:
+      properties:
+        tools_config:
+          $ref: '#/components/schemas/ToolsConfig'
+          description: Configuration mapping for tools, STT, TTS, and the LLM agent
+            used in this task.
+        toolchain:
+          $ref: '#/components/schemas/ToolsChainModel'
+          description: Execution pipeline and chain for the tasks (e.g., parallel
+            vs sequential).
+        task_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Type
+          description: Type of the task. E.g., 'conversation', 'extraction', 'summarization'.
+          default: conversation
+        task_config:
+          $ref: '#/components/schemas/ConversationConfig'
+          description: Conversation settings, including latency optimizations and
+            termination logic.
+      type: object
+      required:
+      - tools_config
+      - toolchain
+      title: Task
+    ToolDescription:
+      properties:
+        type:
+          type: string
+          title: Type
+          description: The type of the tool (usually 'function').
+          default: function
+        function:
+          $ref: '#/components/schemas/ToolFunction'
+          description: The definition of the function.
+      type: object
+      required:
+      - function
+      title: ToolDescription
+    ToolDescriptionLegacy:
+      properties:
+        name:
+          type: string
+          title: Name
+          description: The name of the tool function.
+        description:
+          type: string
+          title: Description
+          description: A description of what the tool does.
+        parameters:
+          additionalProperties: true
+          type: object
+          title: Parameters
+          description: JSON Schema defining the expected parameters.
+      type: object
+      required:
+      - name
+      - description
+      - parameters
+      title: ToolDescriptionLegacy
+    ToolFunction:
+      properties:
+        name:
+          type: string
+          title: Name
+          description: The name of the tool function.
+        description:
+          type: string
+          title: Description
+          description: A description of what the tool does.
+        parameters:
+          additionalProperties: true
+          type: object
+          title: Parameters
+          description: JSON Schema defining the expected parameters.
+        strict:
+          type: boolean
+          title: Strict
+          description: Whether to strictly enforce the parameter schema.
+          default: true
+      type: object
+      required:
+      - name
+      - description
+      - parameters
+      title: ToolFunction
+    ToolModel:
+      properties:
+        tools:
+          anyOf:
+          - type: string
+          - items:
+              anyOf:
+              - $ref: '#/components/schemas/ToolDescription'
+              - $ref: '#/components/schemas/ToolDescriptionLegacy'
+            type: array
+          - type: 'null'
+          title: Tools
+          description: List of tool definitions or a string reference to tools.
+        tools_params:
+          additionalProperties:
+            $ref: '#/components/schemas/APIParams'
+          type: object
+          title: Tools Params
+          description: Configuration mapping for API endpoints these tools might call.
+      type: object
+      required:
+      - tools_params
+      title: ToolModel
+    ToolScope:
+      type: string
+      enum:
+      - global
+      - node
+      title: ToolScope
+      description: 'Where a graph-agent tool is exposed: GLOBAL (every node) or NODE
+        (only its listed nodes).'
+    ToolsChainModel:
+      properties:
+        execution:
+          type: string
+          pattern: ^(parallel|sequential)$
+          title: Execution
+          description: 'Execution mode: ''parallel'' or ''sequential''.'
+        pipelines:
+          items:
+            items:
+              type: string
+            type: array
+          type: array
+          title: Pipelines
+          description: A list of lists, where each sublist is a pipeline of tool names
+            to execute.
+      type: object
+      required:
+      - execution
+      - pipelines
+      title: ToolsChainModel
+    ToolsConfig:
+      properties:
+        llm_agent:
+          anyOf:
+          - $ref: '#/components/schemas/LlmAgent'
+          - $ref: '#/components/schemas/SimpleLlmAgent'
+          - type: 'null'
+          title: Llm Agent
+          description: Configuration for the LLM agent responsible for understanding
+            and responding to user intent.
+        synthesizer:
+          anyOf:
+          - $ref: '#/components/schemas/Synthesizer'
+          - type: 'null'
+          description: Configuration for the Text-To-Speech (TTS) synthesizer.
+        transcriber:
+          anyOf:
+          - $ref: '#/components/schemas/Transcriber'
+          - type: 'null'
+          description: Configuration for the Speech-To-Text (STT) transcriber.
+        input:
+          anyOf:
+          - $ref: '#/components/schemas/IOModel'
+          - type: 'null'
+          description: Configuration for processing incoming audio streams.
+        output:
+          anyOf:
+          - $ref: '#/components/schemas/IOModel'
+          - type: 'null'
+          description: Configuration for processing outgoing audio streams.
+        api_tools:
+          anyOf:
+          - $ref: '#/components/schemas/ToolModel'
+          - type: 'null'
+          description: External API tools that the LLM agent can call during the conversation.
+        s2s:
+          anyOf:
+          - $ref: '#/components/schemas/S2SConfig'
+          - type: 'null'
+          description: Configuration for server-to-server (S2S) multimodal audio providers
+            (like OpenAI Realtime).
+        switch_tool_description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Switch Tool Description
+          description: Description used when handing off to another agent in a multi-agent
+            scenario.
+        switch_handoff_messages:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Switch Handoff Messages
+          description: Messages played to the user during agent handoffs, mapped by
+            language/intent.
+        agent_names:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Agent Names
+          description: Mapping of agent names for multi-agent dispatching.
+      type: object
+      title: ToolsConfig
+    Transcriber:
+      properties:
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: The transcriber model to use.
+          default: nova-2
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+          description: Language code for transcription (e.g., 'en', 'es').
+        stream:
+          type: boolean
+          title: Stream
+          description: Whether to stream audio data to the transcriber.
+          default: false
+        sampling_rate:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Sampling Rate
+          description: Audio sampling rate in Hz.
+          default: 16000
+        encoding:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Encoding
+          description: Audio encoding format.
+          default: linear16
+        endpointing:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Endpointing
+          description: Duration of silence in ms to trigger endpointing (utterance
+            completion).
+          default: 500
+        keywords:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Keywords
+          description: Comma-separated keywords to boost transcription accuracy.
+        task:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task
+          description: Task type, usually 'transcribe'.
+          default: transcribe
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: The speech-to-text provider to use.
+          default: deepgram
+        multilingual:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Multilingual
+          description: Multilingual configuration settings.
+        active:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Active
+          description: Active status identifier.
+        eot_threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Eot Threshold
+          description: End-of-turn threshold for flux models.
+        eager_eot_threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Eager Eot Threshold
+          description: Eager end-of-turn threshold.
+        eot_timeout_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Eot Timeout Ms
+          description: End-of-turn timeout in milliseconds.
+        language_hints:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Language Hints
+          description: List of probable languages to hint the transcriber.
+        delay:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Delay
+          description: Delay configuration ('low', 'medium', 'high').
+          default: medium
+        noise_reduction:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Noise Reduction
+          description: Whether to apply noise reduction to the incoming audio.
+          default: false
+        vad_threshold:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Vad Threshold
+          description: Voice Activity Detection (VAD) confidence threshold.
+          default: 0.5
+        vad_prefix_padding_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Vad Prefix Padding Ms
+          description: Padding in milliseconds applied before VAD triggers.
+          default: 300
+      type: object
+      title: Transcriber
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    VectorStore:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        provider_config:
+          anyOf:
+          - $ref: '#/components/schemas/LanceDBProviderConfig'
+          - $ref: '#/components/schemas/MongoDBProviderConfig'
+          title: Provider Config
+      type: object
+      required:
+      - provider
+      - provider_config
+      title: VectorStore
+    Verbosity:
+      type: string
+      enum:
+      - low
+      - medium
+      - high
+      title: Verbosity
+    CallDetails:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The ID of the agent to handle the call.
+        recipient_phone_number:
+          type: string
+          title: Recipient Phone Number
+          description: The phone number to call in E.164 format (e.g., +1234567890).
+      type: object
+      required:
+      - agent_id
+      - recipient_phone_number
+      title: CallDetails

@@ -445,6 +445,18 @@ class TaskManager(BaseManager):
                 self.task_config["tools_config"]["input"]["provider"] = "default"
                 self.task_config["tools_config"]["output"]["provider"] = "default"
 
+            if self.__is_s2s():
+                # Browser-leg realtime agents carry no telephony handlers (input /
+                # output are null in the record). Without this, every direct
+                # tools_config["input"]["provider"] access below throws, and no
+                # IO handlers exist for the websocket leg. Default routing gives
+                # them the JSON-speaking Default handlers (16k PCM up, 24k down).
+                tools_config = self.task_config["tools_config"]
+                if not (tools_config.get("input") or {}).get("provider"):
+                    tools_config["input"] = {"provider": "default", "format": "wav"}
+                if not (tools_config.get("output") or {}).get("provider"):
+                    tools_config["output"] = {"provider": "default", "format": "wav"}
+
             self.default_io = self.task_config["tools_config"]["output"]["provider"] == "default"
             self.observable_variables["agent_hangup_observable"] = ObservableVariable(False)
             self.observable_variables["agent_hangup_observable"].add_observer(self.agent_hangup_observer)
@@ -7706,6 +7718,9 @@ class TaskManager(BaseManager):
 
         self.output_task = asyncio.create_task(self._s2s_output_loop())
         self.hangup_task = asyncio.create_task(self.__check_for_completion())
+        # Typed chat over the same socket: {"type": "text"} frames land in
+        # llm_queue via the input handler; nothing else consumes it on s2s.
+        self._s2s_track_task(asyncio.create_task(self._s2s_text_loop()))
         if self.conversation_config.get("dtmf_enabled", False):
             self.tools["input"].is_dtmf_active = True
             self.dtmf_task = asyncio.create_task(self._s2s_dtmf_loop())
@@ -7864,12 +7879,35 @@ class TaskManager(BaseManager):
                 if event.is_final and event.content:
                     logger.info(f"S2S agent: {event.content[:200]}")
                     self.conversation_history.append_assistant(event.content)
+                    # Browser/chat legs have no other transcript source.
+                    await self.buffered_output_queue.put(
+                        {
+                            "data": event.content,
+                            "meta_info": {
+                                "type": "text",
+                                "role": "agent",
+                                "message_category": "agent_transcript",
+                                "sequence_id": -1,
+                            },
+                        }
+                    )
 
             elif isinstance(event, s2s_events.InputTranscript):
                 if event.is_final and event.content:
                     logger.info(f"S2S caller: {event.content[:200]}")
                     self.user_spoke = True
                     self.conversation_history.append_user(event.content)
+                    await self.buffered_output_queue.put(
+                        {
+                            "data": event.content,
+                            "meta_info": {
+                                "type": "text",
+                                "role": "user",
+                                "message_category": "user_transcript",
+                                "sequence_id": -1,
+                            },
+                        }
+                    )
                     self.time_since_last_spoken_human_word = time.time()
                     # Cleared here rather than in the output loop: the prompt's audio is not
                     # distinguishable from any other turn, but the caller answering is.
@@ -8040,6 +8078,36 @@ class TaskManager(BaseManager):
             except Exception as e:
                 # Nothing re-creates this task, so exiting leaves the caller in silence.
                 logger.error(f"S2S output loop error, dropped one packet: {e}")
+
+    async def _s2s_text_loop(self):
+        """Forward user-typed chat turns to the realtime model as caller text.
+
+        The reply flows back through the normal audio + transcript events, so
+        chat and voice share one conversation. A conflicting in-flight
+        response must not kill the call — drop the turn with a log instead.
+        """
+        s2s = self.tools["s2s"]
+        if not hasattr(s2s, "send_text"):
+            logger.warning(f"{self.s2s_provider_name} has no text input; typed chat disabled")
+            return
+        while not self.conversation_ended:
+            try:
+                message = await self.llm_queue.get()
+            except asyncio.CancelledError:
+                break
+            text = (message.get("data") or "").strip() if isinstance(message, dict) else ""
+            if not text:
+                continue
+            try:
+                self.user_spoke = True
+                self.conversation_history.append_user(text)
+                self.time_since_last_spoken_human_word = time.time()
+                self.asked_if_user_is_still_there = False
+                await s2s.send_text(text)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"S2S text chat turn dropped, continuing voice: {e}")
 
     async def _s2s_dtmf_loop(self):
         """Forward carrier keypad digits to the model as text; no provider sees our media leg."""

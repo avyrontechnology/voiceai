@@ -362,6 +362,13 @@ class GeminiLiveS2S(BaseS2SProvider):
             {"clientContent": {"turns": [{"role": "user", "parts": [{"text": text}]}], "turnComplete": True}}
         )
 
+    async def send_text(self, text: str) -> None:
+        """User-typed chat turn; Gemini resumes generating once it lands."""
+        self._start_turn_clock()
+        await self._send(
+            {"clientContent": {"turns": [{"role": "user", "parts": [{"text": text}]}], "turnComplete": True}}
+        )
+
     async def send_dtmf(self, digits: str) -> None:
         await self._send(
             {
