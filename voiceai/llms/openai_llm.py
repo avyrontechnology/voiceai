@@ -146,7 +146,10 @@ class OpenAiLLM(OpenAICompatibleLLM):
         **kwargs,
     ):
         super().__init__(max_tokens, buffer_size)
-        self.model = model
+        # UI wizard persists LiteLLM-style IDs ("openai/gpt-4o-mini"); the direct OpenAI
+        # client rejects the prefix with 400 invalid model ID, killing the call. Strip it
+        # (GeminiLLM already does the same) so a re-saved record keeps working.
+        self.model = model.split("/")[-1] if isinstance(model, str) and "/" in model else model
 
         self.custom_tools = kwargs.get("api_tools", None)
         self.language = language
@@ -166,9 +169,9 @@ class OpenAiLLM(OpenAICompatibleLLM):
 
         max_tokens_key = "max_tokens"
         self.model_args = {}
-        if model.startswith(GPT5_MODEL_PREFIX):
+        if self.model.startswith(GPT5_MODEL_PREFIX):
             max_tokens_key = "max_completion_tokens"
-            self.model_args["reasoning_effort"] = kwargs.get("reasoning_effort") or default_reasoning_effort(model)
+            self.model_args["reasoning_effort"] = kwargs.get("reasoning_effort") or default_reasoning_effort(self.model)
             self.model_args["verbosity"] = kwargs.get("verbosity", None) or Verbosity.LOW.value
             self.reasoning_summary = kwargs.get("reasoning_summary")
 

@@ -18,6 +18,9 @@ from voiceai.constants import SARVAM_MODEL_SAMPLING_RATE_MAPPING, SARVAM_TTS_SUP
 
 logger = configure_logger(__name__)
 
+# bulbul:v2 only serves these speakers (per Sarvam 400 message); everything else needs bulbul:v3.
+BULBUL_V2_SPEAKERS = frozenset({"anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh"})
+
 
 class SarvamSynthesizer(StreamSynthesizer):
     def __init__(
@@ -39,6 +42,12 @@ class SarvamSynthesizer(StreamSynthesizer):
             **kwargs,
         )
         self.api_key = os.environ["SARVAM_API_KEY"] if synthesizer_key is None else synthesizer_key
+        # shubh (and the other 30+ bulbul:v3 personas) 400s on bulbul:v2, whose speakers are
+        # only anushka/abhilash/manisha/vidya/arya/karun/hitesh. Stale agent records carry
+        # voice_id=shubh + model=bulbul:v2; upgrade the model instead of killing the call.
+        if model == "bulbul:v2" and (voice_id or "").lower() not in BULBUL_V2_SPEAKERS:
+            logger.warning(f"Sarvam TTS: speaker {voice_id!r} incompatible with bulbul:v2, using bulbul:v3")
+            model = "bulbul:v3"
         self.voice_id = voice_id
         self.model = model
         self.stream = stream
@@ -74,15 +83,30 @@ class SarvamSynthesizer(StreamSynthesizer):
     def _process_audio_data(self, audio):
         fmt = get_synth_audio_format(audio)
 
-        if fmt == "wav" and self.model == "bulbul:v3":
-            received_sampling_rate = int.from_bytes(audio[24:28], byteorder="little")
-            if self.original_sampling_rate != received_sampling_rate:
-                logger.warning(
-                    f"Expected sampling rate {self.original_sampling_rate} does not match "
-                    f"received {received_sampling_rate} for model {self.model}. Using received."
+        if fmt == "wav":
+            # The WAV header declares the true rate (REST honors speech_sample_rate;
+            # WS announces it in a header-only first chunk), so trust it over the mapping.
+            header_rate = int.from_bytes(audio[24:28], byteorder="little")
+            if len(audio) <= 64:
+                # Header-only WS chunk: remember the rate, no audio to play.
+                if self.original_sampling_rate != header_rate:
+                    logger.warning(
+                        f"Expected sampling rate {self.original_sampling_rate} does not match "
+                        f"received {header_rate} for model {self.model}. Using received."
+                    )
+                    self.original_sampling_rate = header_rate
+                return None
+            try:
+                resampled_audio = resample(
+                    audio,
+                    int(self.sampling_rate),
+                    format=fmt,
+                    original_sample_rate=header_rate,
                 )
-                self.original_sampling_rate = received_sampling_rate
-            return None  # Header-only chunk for bulbul:v3
+            except Exception as e:
+                logger.error(f"Error in resampling audio: {e}")
+                return None
+            return wav_bytes_to_pcm(resampled_audio)
 
         try:
             resampled_audio = resample(
@@ -95,8 +119,6 @@ class SarvamSynthesizer(StreamSynthesizer):
             logger.error(f"Error in resampling audio: {e}")
             return None
 
-        if fmt == "wav":
-            return wav_bytes_to_pcm(resampled_audio)
         return resampled_audio
 
     # ------------------------------------------------------------------
@@ -261,7 +283,15 @@ class SarvamSynthesizer(StreamSynthesizer):
                 if response.status == 200:
                     data = await response.json()
                     if data and isinstance(data.get("audios", []), list) and data["audios"]:
-                        return data["audios"][0]
+                        raw = data["audios"][0]
+                        if isinstance(raw, str):
+                            # REST returns base64-encoded audio; downstream expects bytes.
+                            try:
+                                return base64.b64decode(raw)
+                            except Exception:
+                                logger.error("Sarvam TTS: audios[0] is not valid base64")
+                                return None
+                        return raw
                 else:
                     logger.error(f"Error: {response.status} - {await response.text()}")
 

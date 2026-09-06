@@ -10,18 +10,22 @@ from typing import Any, Dict, List, Optional
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
     ApiKey,
+    AuthEvent,
     Batch,
     Execution,
     GraphDoc,
     GraphVersion,
     InboundConfig,
     Integration,
+    Invite,
     KnowledgeBase,
     LedgerEntry,
     Organization,
     PhoneNumber,
+    SessionRecord,
     SubAccount,
     Tool,
+    User,
     VectorStoreConfig,
     VoiceEntry,
     Wallet,
@@ -60,6 +64,10 @@ class MemoryStore:
             "workflow_runs": {},
             "workflow_campaigns": {},
             "api_keys": {},
+            "users": {},
+            "sessions": {},
+            "invites": {},
+            "auth_events": {},
         }
         self._wallet = Wallet().model_dump(mode="json")
         self._ledger: List[Dict[str, Any]] = []
@@ -337,12 +345,105 @@ class MemoryStore:
     async def delete_api_key(self, key_id: str) -> bool:
         return self._delete("api_keys", key_id)
 
+    # -- users ---------------------------------------------------------------------
+
+    async def save_user(self, user: User) -> None:
+        self._put("users", user.user_id, user.model_dump(mode="json"))
+
+    async def get_user(self, user_id: str) -> Optional[User]:
+        raw = self._get("users", user_id)
+        return User(**raw) if raw else None
+
+    async def get_user_by_email(self, email: str) -> Optional[User]:
+        needle = email.strip().lower()
+        for raw in self._all("users"):
+            if str(raw.get("email", "")).strip().lower() == needle:
+                return User(**raw)
+        return None
+
+    async def list_users(self) -> List[User]:
+        return [User(**raw) for raw in self._all("users")]
+
+    async def count_users(self) -> int:
+        return len(self._data["users"])
+
+    async def delete_user(self, user_id: str) -> bool:
+        return self._delete("users", user_id)
+
+    # -- sessions (server-side, TTL-checked on read) ---------------------------------------------------------------------
+
+    async def save_session(self, session: SessionRecord) -> None:
+        self._put("sessions", session.token_hash, session.model_dump(mode="json"))
+
+    async def get_session(self, token_hash: str) -> Optional[SessionRecord]:
+        from datetime import datetime, timezone
+
+        raw = self._get("sessions", token_hash)
+        if not raw:
+            return None
+        session = SessionRecord(**raw)
+        if session.expires_at.tzinfo is None:
+            valid = session.expires_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
+        else:
+            valid = session.expires_at > datetime.now(timezone.utc)
+        if not valid:
+            self._delete("sessions", token_hash)
+            return None
+        return session
+
+    async def delete_session(self, token_hash: str) -> bool:
+        return self._delete("sessions", token_hash)
+
+    async def delete_user_sessions(self, user_id: str) -> int:
+        doomed = [
+            token_hash
+            for token_hash, raw in self._data["sessions"].items()
+            if raw.get("user_id") == user_id
+        ]
+        for token_hash in doomed:
+            self._delete("sessions", token_hash)
+        return len(doomed)
+
+    # -- invites ---------------------------------------------------------------------
+
+    async def save_invite(self, invite: Invite) -> None:
+        self._put("invites", invite.invite_id, invite.model_dump(mode="json"))
+
+    async def get_invite(self, invite_id: str) -> Optional[Invite]:
+        raw = self._get("invites", invite_id)
+        return Invite(**raw) if raw else None
+
+    async def list_invites(self) -> List[Invite]:
+        return [Invite(**raw) for raw in self._all("invites")]
+
+    async def delete_invite(self, invite_id: str) -> bool:
+        return self._delete("invites", invite_id)
+
+    # -- audit ---------------------------------------------------------------------
+
+    async def add_auth_event(self, event: AuthEvent) -> None:
+        self._put("auth_events", event.event_id, event.model_dump(mode="json"))
+
+    async def list_auth_events(self, limit: int = 100) -> List[AuthEvent]:
+        items = [AuthEvent(**raw) for raw in self._all("auth_events")]
+        items.sort(key=lambda e: e.created_at, reverse=True)
+        return items[:limit]
+
     # -- workspace reset ---------------------------------------------------------------------
+    # Auth collections (users/sessions/invites/auth_events) are NEVER wiped:
+    # clearing them would brick every login with no recovery path.
+
+    _AUTH_COLLECTIONS = ("users", "sessions", "invites", "auth_events")
 
     async def reset_platform(self) -> Dict[str, int]:
-        cleared = {collection: len(items) for collection, items in self._data.items()}
+        cleared = {
+            collection: len(items)
+            for collection, items in self._data.items()
+            if collection not in self._AUTH_COLLECTIONS
+        }
         for collection in self._data:
-            self._data[collection] = {}
+            if collection not in self._AUTH_COLLECTIONS:
+                self._data[collection] = {}
         cleared["ledger"] = len(self._ledger)
         self._ledger = []
         self._wallet = Wallet().model_dump(mode="json")
@@ -668,6 +769,80 @@ class RedisStore(MemoryStore):
 
     async def delete_api_key(self, key_id: str) -> bool:
         return (await self._redis.delete(self._key("api_keys", key_id))) > 0
+
+    # -- users / sessions / invites / audit (Redis-backed; sessions use real TTL) -------
+
+    async def save_user(self, user: User) -> None:
+        await self._write("users", user.user_id, user.model_dump(mode="json"))
+
+    async def get_user(self, user_id: str) -> Optional[User]:
+        raw = await self._read("users", user_id)
+        return User(**raw) if raw else None
+
+    async def get_user_by_email(self, email: str) -> Optional[User]:
+        needle = email.strip().lower()
+        for raw in await self._list_collection("users"):
+            if str(raw.get("email", "")).strip().lower() == needle:
+                return User(**raw)
+        return None
+
+    async def list_users(self) -> List[User]:
+        return [User(**raw) for raw in await self._list_collection("users")]
+
+    async def count_users(self) -> int:
+        return len(await self._redis.keys(f"{_KEY_PREFIX}:users:*"))
+
+    async def delete_user(self, user_id: str) -> bool:
+        return (await self._redis.delete(self._key("users", user_id))) > 0
+
+    async def save_session(self, session: SessionRecord) -> None:
+        import json
+        from datetime import datetime, timezone
+
+        ttl = int((session.expires_at - datetime.now(timezone.utc)).total_seconds())
+        if ttl <= 0:
+            return
+        await self._redis.set(
+            self._key("sessions", session.token_hash),
+            json.dumps(session.model_dump(mode="json")),
+            ex=ttl,
+        )
+
+    async def get_session(self, token_hash: str) -> Optional[SessionRecord]:
+        raw = await self._read("sessions", token_hash)
+        return SessionRecord(**raw) if raw else None
+
+    async def delete_session(self, token_hash: str) -> bool:
+        return (await self._redis.delete(self._key("sessions", token_hash))) > 0
+
+    async def delete_user_sessions(self, user_id: str) -> int:
+        count = 0
+        for raw in await self._list_collection("sessions"):
+            if raw.get("user_id") == user_id:
+                await self._redis.delete(self._key("sessions", raw["token_hash"]))
+                count += 1
+        return count
+
+    async def save_invite(self, invite: Invite) -> None:
+        await self._write("invites", invite.invite_id, invite.model_dump(mode="json"))
+
+    async def get_invite(self, invite_id: str) -> Optional[Invite]:
+        raw = await self._read("invites", invite_id)
+        return Invite(**raw) if raw else None
+
+    async def list_invites(self) -> List[Invite]:
+        return [Invite(**raw) for raw in await self._list_collection("invites")]
+
+    async def delete_invite(self, invite_id: str) -> bool:
+        return (await self._redis.delete(self._key("invites", invite_id))) > 0
+
+    async def add_auth_event(self, event: AuthEvent) -> None:
+        await self._write("auth_events", event.event_id, event.model_dump(mode="json"))
+
+    async def list_auth_events(self, limit: int = 100) -> List[AuthEvent]:
+        items = [AuthEvent(**raw) for raw in await self._list_collection("auth_events")]
+        items.sort(key=lambda e: e.created_at, reverse=True)
+        return items[:limit]
 
     async def reset_platform(self) -> Dict[str, int]:
         cleared: Dict[str, int] = {}

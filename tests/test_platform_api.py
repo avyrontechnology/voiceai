@@ -8,6 +8,7 @@ in-memory store so the suite stays offline and deterministic.
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from tests.auth_helpers import signup_owner
 
 from voiceai.platform import create_platform_app
 from voiceai.platform.store import MemoryStore
@@ -18,6 +19,7 @@ async def client():
     app = create_platform_app(MemoryStore())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await signup_owner(ac)
         yield ac
 
 

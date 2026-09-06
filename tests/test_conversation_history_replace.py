@@ -40,3 +40,35 @@ def test_no_user_message_returns_false():
     h = ConversationHistory()
     h.setup_system_prompt({"role": ChatRole.SYSTEM, "content": "prompt"})
     assert h.replace_last_user("anything", "x") is False
+
+
+def _sarvam_history():
+    h = ConversationHistory()
+    h.setup_system_prompt({"role": ChatRole.SYSTEM, "content": "prompt"})
+    h.append_user("हां जी", asr_turn_id=1)
+    return h
+
+
+def test_cumulative_resend_replaces_same_asr_turn():
+    h = _sarvam_history()
+    assert h.replace_last_user_if_prefix("हां जी मेरा नाम विक्रम", asr_turn_id=1) is True
+    users = [m for m in h.messages if m.get("role") == ChatRole.USER]
+    assert len(users) == 1
+    assert users[0]["content"] == "हां जी मेरा नाम विक्रम"
+
+
+def test_new_asr_turn_appends_instead():
+    h = _sarvam_history()
+    assert h.replace_last_user_if_prefix("हां जी मेरा नाम विक्रम", asr_turn_id=2) is False
+    users = [m for m in h.messages if m.get("role") == ChatRole.USER]
+    assert len(users) == 1  # unchanged; caller appends the new turn
+
+
+def test_non_prefix_appends():
+    h = _sarvam_history()
+    assert h.replace_last_user_if_prefix("phone number batao", asr_turn_id=1) is False
+
+
+def test_identical_text_is_not_a_replace():
+    h = _sarvam_history()
+    assert h.replace_last_user_if_prefix("हां जी", asr_turn_id=1) is False

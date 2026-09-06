@@ -246,8 +246,10 @@ class DefaultInputHandler:
 
     def __process_text(self, text):
         logger.info(f"Sequences {self.input_types}")
+        # Text-only tasks have no audio input type; default the sequence
+        # instead of KeyError-ing (which kills this listen loop entirely).
         ws_data_packet = create_ws_data_packet(
-            data=text, meta_info={"io": "default", "type": "text", "sequence": self.input_types["audio"]}
+            data=text, meta_info={"io": "default", "type": "text", "sequence": self.input_types.get("audio", 0)}
         )
 
         if self.turn_based_conversation:

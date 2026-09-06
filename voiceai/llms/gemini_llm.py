@@ -45,7 +45,8 @@ class GeminiLLM(BaseLLM):
             self.model = self.model[len("models/") :]
 
         self.temperature = temperature
-        api_key = kwargs.get("llm_key", os.getenv("GOOGLE_API_KEY"))
+        # S2S and the transcriber accept GEMINI_API_KEY; accept it here too so one key works everywhere.
+        api_key = kwargs.get("llm_key", os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
         self.client = genai.Client(api_key=api_key)
 
         self.api_params = kwargs.get("api_tools", {}).get("tools_params", {})

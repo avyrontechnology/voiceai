@@ -146,6 +146,10 @@ class DefaultOutputHandler:
                 if packet["meta_info"]["type"] == "text":
                     # Lets browser/chat legs tell agent lines from caller lines.
                     response["role"] = packet["meta_info"].get("role", "agent")
+                    # Caller-turn correlation for in-place bubble updates; absent on
+                    # agent lines and older senders — UI treats missing as append.
+                    if packet["meta_info"].get("asr_turn_id") is not None:
+                        response["asr_turn_id"] = packet["meta_info"]["asr_turn_id"]
                 await self.websocket.send_json(response)
 
                 # sending of post-mark message

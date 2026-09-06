@@ -32,6 +32,30 @@ class ConversationHistory:
         LLM adapters call strip_internal_keys() before sending, so extras never reach a provider."""
         self._messages.append({"role": ChatRole.USER, "content": content, **kwargs})
 
+    def replace_last_user_if_prefix(self, new_content: str, asr_turn_id=None) -> bool:
+        """Collapse cumulative ASR re-emissions into a single user row.
+
+        Streaming transcribers re-send the turn-so-far with every segment
+        ("A" -> "A B" -> "A B C"); appending each buries history in redundant
+        rows and confuses the LLM (doubled digits like "8 7 4 2 8 7 4 2").
+        When the most recent row is a user turn of the same ASR turn that the
+        new text extends, replace it instead of appending. Returns True when
+        replaced (caller must skip its append).
+        """
+        new_content = (new_content or "").strip()
+        if not new_content or not self._messages:
+            return False
+        last = self._messages[-1]
+        if last.get("role") != ChatRole.USER:
+            return False
+        if asr_turn_id is not None and last.get("asr_turn_id") != asr_turn_id:
+            return False
+        prev = (last.get("content") or "").strip()
+        if prev and new_content.startswith(prev) and new_content != prev:
+            last["content"] = new_content
+            return True
+        return False
+
     def replace_last_user(self, expected_content: str, new_content: str) -> bool:
         """Replace the most recent user message's content, but only if it still matches
         expected_content — guards against correcting the wrong turn when a newer user

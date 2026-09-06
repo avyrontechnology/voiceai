@@ -67,3 +67,56 @@ async def test_record_engine_execution_never_raises():
 
     assert await record_engine_execution(BrokenStore(), agent_id="a") is None
     assert await record_engine_execution(None, agent_id="a") is None
+
+
+async def test_record_engine_execution_prefers_task_output():
+    """Browser-leg rows must carry transcript, true duration, latency and hangup."""
+    from datetime import datetime, timezone
+
+    store = MemoryStore()
+    call_start_ms = datetime(2026, 9, 6, 12, 0, 0, tzinfo=timezone.utc).timestamp() * 1000
+    execution = await record_engine_execution(
+        store,
+        agent_id="agent-1",
+        run_id="run-9",
+        history=[],
+        task_outputs=[],
+        output={
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi!"},
+            ],
+            "conversation_time": 137.2,
+            "latency_dict": {
+                "llm_latencies": {"turn_latencies": [{"total_stream_duration_ms": 1000}]},
+                "transcriber_latencies": {"turn_latencies": [{"total_stream_duration_ms": 500}]},
+                "synthesizer_latencies": {"turn_latencies": []},
+            },
+            "hangup_detail": "s2s_error",
+            "progression_data": {"call_start_epoch_ms": call_start_ms},
+        },
+    )
+    assert execution is not None
+    assert [(t.role, t.text) for t in execution.transcript] == [("user", "hello"), ("agent", "hi!")]
+    assert execution.duration_s == 137.2
+    assert execution.latency is not None
+    assert execution.latency.llm_ms == 1000
+    assert execution.latency.transcriber_ms == 500
+    assert execution.latency.e2e_ms == 137200
+    assert execution.hangup_code == "s2s_error"
+
+
+async def test_record_engine_execution_falls_back_without_output():
+    store = MemoryStore()
+    execution = await record_engine_execution(
+        store,
+        agent_id="agent-1",
+        run_id="run-10",
+        history=[{"role": "user", "content": "hello"}],
+        task_outputs=[],
+    )
+    assert execution is not None
+    assert len(execution.transcript) == 1
+    assert execution.duration_s == 0
+    assert execution.latency is None
+    assert execution.hangup_code == "completed"

@@ -321,6 +321,11 @@ class ApiKey(BaseModel):
     key_id: str
     name: str
     prefix: str
+    # bcrypt hash of the full secret (secret itself is never stored).
+    key_hash: Optional[str] = None
+    scopes: List[str] = Field(default_factory=list)
+    expires_at: Optional[datetime] = None
+    created_by: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: Optional[datetime] = None
 
@@ -331,6 +336,183 @@ class ApiKeyListResponse(BaseModel):
 
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(..., min_length=1)
+    scopes: List[str] = Field(default_factory=list)
+    expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
+    scopes: List[str] = Field(default_factory=list)
+    expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
+
+
+# ---------------------------------------------------------------------------
+# Auth: users, sessions, invites, audit. Passwords are bcrypt hashes;
+# session tokens and invite tokens are stored hashed (sha256), never raw.
+# ---------------------------------------------------------------------------
+
+UserRole = Literal["owner", "admin", "member", "viewer"]
+
+#: Scope strings for API keys. "*" grants everything (owner-level).
+ALL_SCOPES = [
+    "agents:read",
+    "agents:write",
+    "calls:read",
+    "calls:write",
+    "batches:read",
+    "batches:write",
+    "platform:read",
+    "platform:write",
+    "users:read",
+    "users:write",
+    "keys:read",
+    "keys:write",
+    "admin",
+]
+
+#: What each session role is allowed to do (API keys use explicit scopes).
+ROLE_SCOPES: Dict[str, List[str]] = {
+    "viewer": ["agents:read", "calls:read", "batches:read", "platform:read"],
+    "member": [
+        "agents:read",
+        "agents:write",
+        "calls:read",
+        "calls:write",
+        "batches:read",
+        "batches:write",
+        "platform:read",
+        "platform:write",
+    ],
+    "admin": [
+        "agents:read",
+        "agents:write",
+        "calls:read",
+        "calls:write",
+        "batches:read",
+        "batches:write",
+        "platform:read",
+        "platform:write",
+        "users:read",
+        "keys:read",
+        "keys:write",
+        "admin",
+    ],
+    "owner": ["*"],
+}
+
+ROLE_RANK: Dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+
+
+class User(BaseModel):
+    user_id: str
+    email: str = Field(..., pattern=EMAIL_PATTERN)
+    name: Optional[str] = None
+    password_hash: str
+    role: UserRole = "member"
+    org_id: str = "default"
+    disabled: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+    last_login_at: Optional[datetime] = None
+
+
+class UserResponse(BaseModel):
+    user_id: str
+    email: str
+    name: Optional[str] = None
+    role: UserRole
+    org_id: str = "default"
+    disabled: bool = False
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+
+class UserListResponse(BaseModel):
+    users: List[UserResponse]
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(..., pattern=EMAIL_PATTERN)
+    name: Optional[str] = Field(None, min_length=1)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., pattern=EMAIL_PATTERN)
+    password: str = Field(..., min_length=1, max_length=128)
+    remember: bool = Field(False, description="Extend the session to 30 days instead of the default week.")
+
+
+class InviteRequest(BaseModel):
+    email: str = Field(..., pattern=EMAIL_PATTERN)
+    name: Optional[str] = Field(None, min_length=1)
+    role: UserRole = "member"
+
+
+class Invite(BaseModel):
+    invite_id: str
+    email: str
+    name: Optional[str] = None
+    role: UserRole = "member"
+    token_hash: str
+    expires_at: datetime
+    accepted: bool = False
+    created_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class InviteListResponse(BaseModel):
+    invites: List[Invite]
+
+
+class CreateInviteResponse(BaseModel):
+    invite_id: str
+    email: str
+    role: UserRole
+    token: str = Field(..., description="Raw invite token, shown once. Accept via POST /auth/accept.")
+    expires_at: datetime
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    name: Optional[str] = Field(None, min_length=1)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class SetRoleRequest(BaseModel):
+    role: UserRole
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class SessionRecord(BaseModel):
+    token_hash: str
+    user_id: str
+    org_id: str = "default"
+    kind: Literal["session", "ws-ticket"] = "session"
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+
+
+class AuthMeResponse(BaseModel):
+    user: UserResponse
+    scopes: List[str] = Field(default_factory=list)
+
+
+class WsTicketResponse(BaseModel):
+    ticket: str = Field(..., description="Single-use websocket ticket, valid 60s.")
+    expires_in: int = 60
+
+
+class AuthEvent(BaseModel):
+    event_id: str
+    type: str
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    detail: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AuthEventListResponse(BaseModel):
+    events: List[AuthEvent]
 
 
 class CreateApiKeyResponse(BaseModel):

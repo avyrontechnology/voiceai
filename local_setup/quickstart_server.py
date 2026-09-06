@@ -2,7 +2,7 @@ import os
 import asyncio
 import uuid
 import traceback
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
@@ -12,6 +12,13 @@ from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
 from voiceai.llms import LiteLLM
 from voiceai.agent_manager.assistant_manager import AssistantManager
+from voiceai.platform.auth import (
+    Principal,
+    get_store as auth_store,
+    redeem_ws_ticket,
+    require_scope,
+    token_hash,
+)
 
 load_dotenv()
 logger = configure_logger(__name__)
@@ -22,8 +29,20 @@ active_websockets: List[WebSocket] = []
 
 app = FastAPI()
 
+# Credentials (cookies) never work with a "*" origin, so auth requires an
+# explicit allowlist. Same default the UI expects for local dev.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -74,7 +93,7 @@ class AgentListResponse(BaseModel):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def get_agent(agent_id: str):
+async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's information by ID."""
     try:
         agent_data = await redis_client.get(agent_id)
@@ -99,7 +118,7 @@ async def get_agent(agent_id: str):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def get_agent_prompts(agent_id: str):
+async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's stored prompts by ID."""
     try:
         agent_data = await redis_client.get(agent_id)
@@ -130,7 +149,7 @@ async def get_agent_prompts(agent_id: str):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def create_agent(agent_data: CreateAgentPayload):
+async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depends(require_scope("agents:write"))):
     agent_uuid = str(uuid.uuid4())
     data_for_db = agent_data.agent_config.model_dump()
     data_for_db["assistant_status"] = "seeding"
@@ -174,7 +193,11 @@ async def create_agent(agent_data: CreateAgentPayload):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
+async def edit_agent(
+    agent_id: str,
+    agent_data: CreateAgentPayload = Body(...),
+    _auth: Principal = Depends(require_scope("agents:write")),
+):
     """Edits an existing agent based on the provided agent_id."""
     try:
         existing_data = await redis_client.get(agent_id)
@@ -231,7 +254,7 @@ async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def delete_agent(agent_id: str):
+async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:write"))):
     """Deletes an agent by ID."""
     try:
         agent_exists = await redis_client.exists(agent_id)
@@ -256,7 +279,7 @@ async def delete_agent(agent_id: str):
         500: {"model": ErrorResponse, "description": "Internal server error."}
     }
 )
-async def get_all_agents():
+async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches all agents stored in Redis."""
     try:
         from voiceai.platform.agent_records import collect_agent_records
@@ -267,11 +290,15 @@ async def get_all_agents():
             return {"agents": []}
         pairs = []
         for key in agent_keys:
+            # Bare UUID keys are agent records; namespaced platform keys (data with
+            # colons, index sets) are skipped before GET — reading a set as a
+            # string raises WRONGTYPE and spams the log on every directory load.
+            if ":" in key:
+                continue
             try:
                 pairs.append((key, await redis_client.get(key)))
             except Exception as e:
-                # Index sets and other non-string keys cannot be read as agents.
-                logger.error(f"An error occurred with key {key}: {e}")
+                logger.debug(f"Skipping unreadable agent key {key}: {e}")
         return {"agents": collect_agent_records(pairs)}
 
     except Exception as e:
@@ -297,10 +324,47 @@ except Exception as exc:  # platform is additive; agent CRUD must keep working w
 #############################################################################################
 # Websocket
 #############################################################################################
+async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str]) -> bool:
+    """Gate live voice on a session cookie or a single-use ?token= ticket.
+
+    Requires calls:write (member+): viewers may watch telemetry but never
+    place live or simulated calls.
+    """
+    try:
+        store = getattr(websocket.app.state, "platform_store", None)
+        if store is None:
+            logger.warning("Voice socket denied: platform store unavailable")
+            return False
+        principal = None
+        if token:
+            principal = await redeem_ws_ticket(store, token)
+        if principal is None:
+            session_token = websocket.cookies.get("otoba_session")
+            if session_token:
+                from voiceai.platform.auth import _principal_from_session
+
+                principal = await _principal_from_session(store, session_token)
+        if principal is None or not principal.has_scope("calls:write"):
+            logger.warning("Voice socket denied: unauthenticated or missing calls:write")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Voice socket auth error: {e}", exc_info=True)
+        return False
+
+
 @app.websocket("/chat/v1/{agent_id}")
-async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: str = Query(None)):
+async def websocket_endpoint(
+    agent_id: str,
+    websocket: WebSocket,
+    user_agent: str = Query(None),
+    token: Optional[str] = Query(None),
+):
     logger.info("Connected to ws")
     await websocket.accept()
+    if not await _authorize_voice_socket(websocket, token):
+        await websocket.close(code=4401)
+        return
     active_websockets.append(websocket)
     agent_config, context_data = None, None
     try:
@@ -329,6 +393,17 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
             from voiceai.platform.engine_hook import record_engine_execution
 
             platform_store = getattr(app.state, "platform_store", None)
+            # Last conversation payload carries the transcript, true call timings,
+            # latency breakdown and hangup detail — without it every browser-leg
+            # row lands with an empty transcript and ~0s duration.
+            last_output = next(
+                (
+                    output
+                    for output in reversed(task_outputs)
+                    if isinstance(output, dict) and output.get("messages")
+                ),
+                None,
+            )
             await record_engine_execution(
                 platform_store,
                 agent_id=agent_id,
@@ -336,6 +411,7 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
                 history=[],
                 task_outputs=task_outputs,
                 direction="inbound",
+                output=last_output,
             )
         except Exception as hook_error:
             logger.warning(f"Execution logging skipped: {hook_error}")

@@ -82,7 +82,7 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         self.reasoning_effort = reasoning_effort
         self.max_output_tokens = max_output_tokens
         self.transcription_model = transcription_model
-        self.language = language
+        self.language = self._normalize_language(language)
         self.speed = speed
 
         self._ws = None
@@ -91,6 +91,28 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         self._current_response_transcript = ""
         self._response_done_event = asyncio.Event()
         self._response_done_event.set()
+
+    # Common full-name → ISO 639-1 mappings so agent configs with human-readable
+    # language names ("hindi", "english") don't crash the OpenAI Realtime API.
+    _LANG_NAME_TO_CODE = {
+        "hindi": "hi", "english": "en", "spanish": "es", "french": "fr",
+        "german": "de", "italian": "it", "portuguese": "pt", "japanese": "ja",
+        "korean": "ko", "chinese": "zh", "arabic": "ar", "russian": "ru",
+        "dutch": "nl", "turkish": "tr", "polish": "pl", "swedish": "sv",
+        "thai": "th", "vietnamese": "vi", "indonesian": "id", "urdu": "ur",
+        "tamil": "ta", "marathi": "mr", "kannada": "kn", "telugu": "te",
+        "bengali": "bn", "gujarati": "gu", "malayalam": "ml", "punjabi": "pa",
+    }
+
+    @classmethod
+    def _normalize_language(cls, language: Optional[str]) -> Optional[str]:
+        if not language:
+            return language
+        lowered = language.strip().lower()
+        mapped = cls._LANG_NAME_TO_CODE.get(lowered, lowered)
+        if mapped != language:
+            logger.info(f"Normalized S2S language: {language!r} -> {mapped!r}")
+        return mapped
 
     @property
     def is_reasoning_model(self) -> bool:

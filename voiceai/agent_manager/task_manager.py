@@ -85,6 +85,7 @@ from voiceai.helpers.utils import (
     create_ws_data_packet,
     get_file_names_in_directory,
     get_raw_audio_bytes,
+    get_synth_audio_format,
     is_valid_md5,
     get_required_input_types,
     format_messages,
@@ -336,11 +337,12 @@ class TaskManager(BaseManager):
         # Speech-to-speech agents carry no llm_agent/transcriber/synthesizer at all.
         self.s2s_config = task["tools_config"].get("s2s")
 
-        if (
-            task["tools_config"].get("llm_agent")
-            and task["tools_config"]["llm_agent"]["llm_config"].get("assistant_id", None) is not None
-        ):
-            self.kwargs["assistant_id"] = task["tools_config"]["llm_agent"]["llm_config"]["assistant_id"]
+        llm_agent_cfg = task["tools_config"].get("llm_agent") or {}
+        # UI sends a flat SimpleLlmAgent ({model, provider, ...}); graph/multi agents nest it
+        # under llm_config. Support both so a UI-saved voice agent doesn't KeyError here.
+        nested_llm_cfg = llm_agent_cfg.get("llm_config", llm_agent_cfg)
+        if nested_llm_cfg.get("assistant_id", None) is not None:
+            self.kwargs["assistant_id"] = nested_llm_cfg["assistant_id"]
 
         logger.info(f"doing task {task}")
         self.task_id = task_id
@@ -441,6 +443,14 @@ class TaskManager(BaseManager):
         self.output_handler_set = False
         # IO HANDLERS
         if task_id == 0:
+            # UI-saved voice agents persist input/output as null when telephony is
+            # unconfigured. Default them so the browser leg gets Default handlers
+            # instead of a TypeError on ["provider"] below.
+            tools_config = self.task_config["tools_config"]
+            if not (tools_config.get("input") or {}).get("provider"):
+                tools_config["input"] = {"provider": "default", "format": "wav"}
+            if not (tools_config.get("output") or {}).get("provider"):
+                tools_config["output"] = {"provider": "default", "format": "wav"}
             if self.is_web_based_call:
                 self.task_config["tools_config"]["input"]["provider"] = "default"
                 self.task_config["tools_config"]["output"]["provider"] = "default"
@@ -516,6 +526,15 @@ class TaskManager(BaseManager):
         self._response_turn_id = 0
         self._turn_msg_map = {}  # turn_id → assistant message dict ref in _messages
         self._pending_assistant_history = {}  # sequence_id -> {content, turn_id, response_uid}
+        # Replies awaiting forwarding as chat transcript frames. Drained after each
+        # turn (browser legs only) — voice-only calls never visit the typed-chat
+        # llm queue, so draining only there stranded them until the next typed
+        # message flushed the whole backlog at once.
+        self._pending_chat_forward: list = []
+        # Recently forwarded transcript lines (bounded): eager speculative turns and
+        # the confirming real turn stage identical text — without this the panel
+        # would show every reply twice.
+        self._forwarded_chat_texts: list = []
 
         # Language detection
         self.language_detector = LanguageDetector(self.task_config["task_config"], run_id=self.run_id)
@@ -856,7 +875,7 @@ class TaskManager(BaseManager):
         else:
             self.__setup_transcriber()
             self.__setup_synthesizer(self.llm_config)
-            if not self.turn_based_conversation and task_id == 0:
+            if not self.turn_based_conversation and task_id == 0 and "synthesizer" in self.tools:
                 self.synthesizer_monitor_task = asyncio.create_task(self.tools["synthesizer"].monitor_connection())
 
         # Language switching, gated per call by the LANGUAGE_SWITCH feature flag
@@ -1214,6 +1233,60 @@ class TaskManager(BaseManager):
     def __is_s2s(self):
         return bool(self.s2s_config) and self._is_conversation_task()
 
+    def _is_browser_leg(self) -> bool:
+        """Playground/test socket leg: default IO handlers over the browser
+        websocket, as opposed to a telephony carrier leg or dashboard
+        turn-based session. s2s tasks are excluded — they consume the same
+        llm queue in _s2s_text_loop, and two consumers would split-brain
+        typed turns between them."""
+        if self.turn_based_conversation or self.is_web_based_call:
+            return False
+        tools_config = (self.task_config or {}).get("tools_config", {}) or {}
+        return (tools_config.get("input") or {}).get("provider") == "default"
+
+    async def _forward_browser_text(self, text, role, asr_turn_id=None):
+        """Forward one transcript line to the Live Talk / chat panel.
+
+        Browser legs only; telephony has no transcript panel and the dashboard
+        flow ignores these frames. Never raises — a transcript must not kill a call.
+        asr_turn_id lets the panel update one bubble per caller turn instead of
+        appending every cumulative re-emission.
+        """
+        if not text or not str(text).strip():
+            return
+        if not self._is_browser_leg():
+            return
+        # Bounded recent-set: eager speculative turns and the confirming real turn
+        # stage identical text (also survives __new__-built managers in tests).
+        sent = getattr(self, "_forwarded_chat_texts", None)
+        if sent is None:
+            sent = self._forwarded_chat_texts = []
+        if str(text).strip() in sent:
+            return
+        output = (self.tools or {}).get("output")
+        if output is None or getattr(output, "handle", None) is None:
+            return
+        packet = create_ws_data_packet(
+            str(text), {"type": "text", "role": role, "sequence_id": -1, "asr_turn_id": asr_turn_id}
+        )
+        try:
+            await output.handle(packet)
+        except Exception as e:
+            logger.debug(f"Browser transcript forward failed: {e}")
+            return
+        logger.info(f"Browser-leg chat reply forwarded | role={role} chars={len(str(text))}")
+        sent.append(str(text).strip())
+        del sent[:-50]
+
+    async def _drain_pending_chat_forward(self):
+        """Flush staged agent replies to the browser transcript panel."""
+        if not self._is_browser_leg():
+            return
+        pending = getattr(self, "_pending_chat_forward", None) or []
+        self._pending_chat_forward = []
+        for text in pending:
+            await self._forward_browser_text(text, "agent")
+
     # def __is_knowledge_agent(self):
     #     if self.task_config["task_type"] == "webhook":
     #         return False
@@ -1469,6 +1542,10 @@ class TaskManager(BaseManager):
             meta_info["synthesizer_start_time"] = time.time()
 
             audio_chunk = self.preloaded_welcome_audio if self.preloaded_welcome_audio else None
+            if audio_chunk is None and text:
+                # Browser legs carry no preloaded greeting; speak it through the agent's
+                # own TTS voice instead of staying silent until the caller speaks first.
+                audio_chunk = await self.__synthesize_welcome_audio(text)
             if meta_info["text"] == "":
                 audio_chunk = None
 
@@ -1529,6 +1606,57 @@ class TaskManager(BaseManager):
             logger.error(f"Exception in __forced_first_message {str(e)}")
 
         return
+
+    async def __synthesize_welcome_audio(self, text):
+        """Speak the welcome message through the agent's TTS when no preloaded audio exists.
+
+        Browser legs never carry preloaded greeting audio, so without this the call opens
+        in silence. Returns PCM bytes at self.sampling_rate, or None (caller keeps the old
+        mark-played fallback). Never raises.
+        """
+        synth = self.tools.get("synthesizer")
+        if synth is None or not hasattr(synth, "synthesize") or not (text or "").strip():
+            return None
+        try:
+            raw = await asyncio.wait_for(synth.synthesize(text), timeout=20)
+        except Exception as e:
+            logger.error(f"Welcome TTS failed, skipping greeting audio: {e}")
+            return None
+        if not raw:
+            return None
+        if isinstance(raw, str):
+            try:
+                raw = base64.b64decode(raw)
+            except Exception:
+                logger.error("Welcome TTS returned an undecodable text payload")
+                return None
+        pcm = None
+        try:
+            processor = getattr(synth, "_process_audio_data", None) or getattr(
+                synth, "_process_audio_chunk", None
+            )
+            pcm = processor(raw) if callable(processor) else None
+        except Exception as e:
+            logger.error(f"Welcome TTS post-processing failed: {e}")
+            pcm = None
+        if pcm is None and isinstance(raw, (bytes, bytearray)):
+            try:
+                pcm = wav_bytes_to_pcm(bytes(raw)) if get_synth_audio_format(bytes(raw)) == "wav" else bytes(raw)
+            except Exception:
+                return None
+        if not pcm:
+            return None
+        try:
+            synth_rate = int(getattr(synth, "sampling_rate", self.sampling_rate) or self.sampling_rate)
+        except (TypeError, ValueError):
+            synth_rate = self.sampling_rate
+        if synth_rate != self.sampling_rate:
+            try:
+                pcm = resample(pcm, self.sampling_rate, format="pcm", original_sample_rate=synth_rate)
+            except Exception as e:
+                logger.error(f"Welcome TTS resample failed: {e}")
+                return None
+        return pcm
 
     def __inject_switch_language_tool(self):
         """Auto-inject the switch_language tool when multilingual pools are active.
@@ -1710,9 +1838,10 @@ class TaskManager(BaseManager):
 
     def __setup_synthesizer(self, llm_config=None):
         if self._is_conversation_task():
-            self.kwargs["use_turbo"] = (
-                self.task_config["tools_config"]["transcriber"]["language"] == DEFAULT_LANGUAGE_CODE
-            )
+            # Text agents carry no transcriber block; default the flag instead
+            # of crashing on ["language"] (this bug killed every live text run).
+            transcriber_cfg = (self.task_config.get("tools_config", {}) or {}).get("transcriber") or {}
+            self.kwargs["use_turbo"] = transcriber_cfg.get("language") == DEFAULT_LANGUAGE_CODE
         if self.task_config["tools_config"]["synthesizer"] is not None:
             synth_config = self.task_config["tools_config"]["synthesizer"]
 
@@ -1814,6 +1943,15 @@ class TaskManager(BaseManager):
             elif self.is_web_based_call or output_provider == TelephonyProvider.FREESWITCH.value:
                 # web/freeswitch play raw PCM @24k — synths must not emit telephony mulaw@8k
                 synthesizer_kwargs["use_mulaw"] = False
+
+            if self.synthesizer_provider == "sarvam" and isinstance(provider_config, dict):
+                # SarvamConfig drops sampling_rate, so the synth always ran at its 8000
+                # default: right for telephony, but browser audio played 8k content at
+                # 24k (chipmunk/beeps). Mirror the multilingual-pool stamping above.
+                provider_config.setdefault(
+                    "sampling_rate",
+                    8000 if output_provider in SUPPORTED_OUTPUT_TELEPHONY_HANDLERS else WEBCALL_TTS_SAMPLE_RATE,
+                )
 
             self.tools["synthesizer"] = synthesizer_class(
                 **synth_config, **provider_config, **synthesizer_kwargs, caching=caching
@@ -3941,6 +4079,25 @@ class TaskManager(BaseManager):
             reason = next((e.get("error") for e in reversed(errors) if e.get("error")), None)
             empty_turn_detail = f"LLM returned no output ({reason})" if reason else "LLM returned no output"
 
+        # Browser/chat legs have no other transcript source: stage the reply
+        # for forwarding as one text frame. Drained (never sent here: this
+        # path can run outside any chat turn) by _listen_llm_input_queue
+        # after the turn. s2s excluded — its event loop forwards transcripts.
+        # Synthesizer-less (text) agents excluded too — the pipeline forwards
+        # their reply text chunks itself; staging here would duplicate them.
+        if (
+            self._is_browser_leg()
+            and not self.__is_s2s()
+            and "synthesizer" in self.tools
+            and llm_response
+            and llm_response.strip()
+            and llm_response != filler_message
+            and not should_trigger_function_call
+        ):
+            text = llm_response.strip()
+            if not self._pending_chat_forward or self._pending_chat_forward[-1] != text:
+                self._pending_chat_forward.append(text)
+
         if self.stream and llm_response != filler_message:
             self.__store_into_history(
                 meta_info,
@@ -4055,6 +4212,12 @@ class TaskManager(BaseManager):
                     latency_entry["cancelled_at_ms"] = round(time.time() * 1000 - self.conversation_start_init_ts, 2)
                     break
             raise
+
+        # Voice-only browser calls never visit the typed-chat llm queue whose drain
+        # used to be the only forwarder — flush staged replies here so Live Talk
+        # transcripts appear live instead of bursting on the next typed message.
+        # Internally guarded (browser leg + output present); no-ops elsewhere.
+        await self._drain_pending_chat_forward()
 
         for _err in meta_info.get("_non_fatal_errors", []):
             self.non_fatal_llm_error_events.append(_err)
@@ -4403,14 +4566,25 @@ class TaskManager(BaseManager):
                 ws_data_packet = await self.queues["llm"].get()
                 logger.info(f"ws_data_packet {ws_data_packet}")
                 meta_info = self.__get_updated_meta_info(ws_data_packet["meta_info"])
-                bos_packet = create_ws_data_packet("<beginning_of_stream>", meta_info)
-                await self.tools["output"].handle(bos_packet)
+                # bos/eos are internal control markers: Live Talk and chat render every
+                # text frame as a bubble, so emitting them there shows literal
+                # "<beginning_of_stream>" lines. Dashboard turn-based flow ignores them.
+                show_stream_markers = not self._is_browser_leg()
+                if show_stream_markers:
+                    bos_packet = create_ws_data_packet("<beginning_of_stream>", meta_info)
+                    await self.tools["output"].handle(bos_packet)
                 # self.interim_history = self.history.copy()
                 # self.history.append({'role': 'user', 'content': ws_data_packet['data']})
                 self.user_spoke = True
                 await self._run_llm_task(create_ws_data_packet(ws_data_packet["data"], meta_info))
-                eos_packet = create_ws_data_packet("<end_of_stream>", meta_info)
-                await self.tools["output"].handle(eos_packet)
+                # Drain replies staged by __store_into_history as transcript
+                # frames (dashboard turn-based flow is untouched — it never
+                # reads these frames). Shared helper: voice turns drain through
+                # it too, with duplicate suppression across both paths.
+                await self._drain_pending_chat_forward()
+                if show_stream_markers:
+                    eos_packet = create_ws_data_packet("<end_of_stream>", meta_info)
+                    await self.tools["output"].handle(eos_packet)
 
             except Exception as e:
                 traceback.print_exc()
@@ -4612,6 +4786,10 @@ class TaskManager(BaseManager):
         self.kickoff_llm_generation(transcriber_message, meta_info)
 
     async def _handle_transcriber_output(self, next_task, transcriber_message, meta_info):
+        if isinstance(transcriber_message, dict):
+            # Belt-and-braces: callers should unwrap transcript dicts, but a control signal
+            # slipping through must never kill the call on dict.strip().
+            transcriber_message = transcriber_message.get("content", "")
         logger.info(
             "VOICEAI_TRACE_TM handle_transcript next=%s seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s text_len=%s text=%r",
             next_task,
@@ -4655,6 +4833,10 @@ class TaskManager(BaseManager):
 
         current_sequence_id = meta_info.get("sequence_id")
         activity = self._inflight_response_activity(exclude_sequence_id=current_sequence_id)
+        # Display text is this turn's own words. The overlap branch below merges
+        # prior turns into transcriber_message for LLM continuity — forwarding the
+        # merged text repaints the whole call in every bubble.
+        segment_text = transcriber_message
         # A live settle timer counts as overlap — this final merges into the pending regen.
         overlapped = next_task == "llm" and (any(activity.values()) or self.regen_settle_armed())
         if overlapped:
@@ -4686,9 +4868,16 @@ class TaskManager(BaseManager):
 
         self.user_spoke = True
         # asr_turn_id (int-coerced), not meta_info["turn_id"] — that one counts responses, not ASR turns.
-        self.conversation_history.append_user(
-            transcriber_message, asr_turn_id=asr_id_to_int(meta_info.get("asr_turn_id"))
-        )
+        asr_turn_id = asr_id_to_int(meta_info.get("asr_turn_id"))
+        # Cumulative ASR re-emissions ("A" -> "A B") replace the turn's row instead
+        # of burying history in A, AB, ABC. `is True` (not truthiness) keeps
+        # MagicMock-based harnesses on the append path.
+        if self.conversation_history.replace_last_user_if_prefix(transcriber_message, asr_turn_id) is not True:
+            self.conversation_history.append_user(transcriber_message, asr_turn_id=asr_turn_id)
+        # Live Talk has no other caller-text source on pipeline legs (S2S forwards
+        # its own InputTranscripts). Forwards the turn's own words, not the merged
+        # history text. Internally guarded to browser legs only.
+        await self._forward_browser_text(segment_text, "user", asr_turn_id=asr_turn_id)
         logger.info(
             "VOICEAI_TRACE_TM append_user seq=%s turn=%s response_uid=%s history_len=%s text=%r",
             meta_info.get("sequence_id"),
@@ -5264,6 +5453,26 @@ class TaskManager(BaseManager):
             raise TranscriberError(str(e), provider=provider, model=model) from e
 
     async def __process_http_transcription(self, message):
+        data = message.get("data")
+        if isinstance(data, dict):
+            # Streaming-protocol transcribers (e.g. Sarvam saaras) emit dicts even when the
+            # synthesis leg is non-streaming (self.stream follows the synthesizer flag). The HTTP
+            # path only understands plain transcript strings: unwrap transcript content, drop
+            # VAD/control signals instead of crashing the call on dict.strip().
+            dtype = data.get("type", "")
+            if dtype in ("transcript", "interim_transcript_received"):
+                content = data.get("content", "")
+                if not content or not str(content).strip():
+                    return
+                message = {"data": content, "meta_info": message.get("meta_info")}
+            else:
+                logger.debug(f"Ignoring {dtype or 'unknown'} control message on HTTP transcription path")
+                return
+        elif data in ("speech_started", "speech_ended"):
+            # Sarvam VAD signals arriving as plain strings on the HTTP path (synthesizer
+            # stream:false). They are turn-tracking control, not user text — feeding them to
+            # the LLM pollutes history ("speech_started speech_ended ...") and burns a turn.
+            return
         meta_info = self.__get_updated_meta_info(message["meta_info"])
 
         sequence = message["meta_info"].get("sequence", 0)
@@ -7637,9 +7846,18 @@ class TaskManager(BaseManager):
         if isinstance(tools, str):
             tools = json.loads(tools)
 
-        api_key = self.kwargs.get("s2s_key") or os.getenv(
-            "GOOGLE_API_KEY" if self.s2s_provider_name == S2SProvider.GEMINI_LIVE.value else "OPENAI_API_KEY"
-        )
+        if self.s2s_provider_name == S2SProvider.GEMINI_LIVE.value:
+            # GeminiTranscriber and most docs use GEMINI_API_KEY; GeminiLLM reads
+            # GOOGLE_API_KEY. Accept either so a key set for one path works for S2S.
+            api_key = (
+                self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            )
+            if not api_key:
+                raise ValueError("No Gemini API key: set GEMINI_API_KEY or GOOGLE_API_KEY, or pass s2s_key.")
+        else:
+            api_key = self.kwargs.get("s2s_key") or os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("No OpenAI API key: set OPENAI_API_KEY or pass s2s_key.")
         # mode="json" so enum fields (reasoning_effort) reach the provider as plain strings.
         options = self.s2s.provider_config.model_dump(exclude_none=True, mode="json")
         options.pop("model")
@@ -8278,7 +8496,9 @@ class TaskManager(BaseManager):
                         tasks.append(asyncio.create_task(self._listen_transcriber()))
                         self.transcriber_task = asyncio.create_task(self.tools["transcriber"].run())
 
-                    if self.turn_based_conversation and self._is_conversation_task():
+                    if (
+                        self.turn_based_conversation or (self._is_browser_leg() and not self.__is_s2s())
+                    ) and self._is_conversation_task():
                         logger.info(
                             "Since it's connected through dashboard, I'll run listen_llm_tas too in case user wants to simply text"
                         )
@@ -8298,6 +8518,17 @@ class TaskManager(BaseManager):
                     self.output_task = asyncio.create_task(self.__process_output_loop())
                     if not self.turn_based_conversation or self.enforce_streaming:
                         self.hangup_task = asyncio.create_task(self.__check_for_completion())
+                        if (
+                            self._is_browser_leg()
+                            and "transcriber" not in self.tools
+                            and "synthesizer" not in self.tools
+                            and "s2s" not in self.tools
+                        ):
+                            # Text-only browser tasks have no media loops, so
+                            # gather() below would return instantly and run()
+                            # would yield None, crashing the socket handler.
+                            # The hangup task ends this wait on hangup/timeout.
+                            tasks.append(self.hangup_task)
 
                         if self.should_backchannel:
                             self.backchanneling_task = asyncio.create_task(self.__check_for_backchanneling())
@@ -8465,8 +8696,16 @@ class TaskManager(BaseManager):
 
             # An S2S task has neither transcriber nor synthesizer, but still owes the caller
             # a conversation payload: transcript, hangup detail, recording, progression.
+            # Text-only tasks (llm pipeline, no media legs) owe one too — without
+            # this, run() yields None and the socket handler crashes on it.
             _has_asr_tts = "transcriber" in self.tools and "synthesizer" in self.tools
-            if self._is_conversation_task() and (_has_asr_tts or "s2s" in self.tools):
+            _is_text_only = (
+                self._is_conversation_task()
+                and not _has_asr_tts
+                and "s2s" not in self.tools
+                and "output" in self.tools
+            )
+            if self._is_conversation_task() and (_has_asr_tts or "s2s" in self.tools or _is_text_only):
                 if _has_asr_tts:
                     self.transcriber_latencies.connection_latency_ms = self.tools["transcriber"].connection_time
                     self.synthesizer_latencies.connection_latency_ms = self.tools["synthesizer"].connection_time

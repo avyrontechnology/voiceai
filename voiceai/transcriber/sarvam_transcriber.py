@@ -30,12 +30,34 @@ logger = configure_logger(__name__)
 SAARAS_TRANSCRIBE_MODELS = {"saaras:v3", "saaras:v4"}
 
 
+def merge_transcript_segments(accumulated: str, segment: str) -> str:
+    """Join one Sarvam segment onto the turn transcript without duplicating overlap.
+
+    Segments re-emit the tail of the previous one ("8 7 4 2" -> "8 7 4 2", or a
+    longer re-emission of the turn-so-far); naive joining doubles it into
+    "8 7 4 2 8 7 4 2", corrupting turn metrics. Word-level maximal
+    suffix/prefix overlap appends only genuinely new words and never merges
+    mid-word. Pure function — unit-tested.
+    """
+    segment = (segment or "").strip()
+    if not segment:
+        return accumulated or ""
+    if not (accumulated or "").strip():
+        return segment
+    acc_words = accumulated.split()
+    seg_words = segment.split()
+    for size in range(min(len(acc_words), len(seg_words)), 0, -1):
+        if acc_words[-size:] == seg_words[:size]:
+            return " ".join(acc_words + seg_words[size:])
+    return accumulated + " " + segment
+
+
 class SarvamTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider,
         input_queue=None,
-        model="saarika:v2.5",
+        model="saaras:v3",
         stream=True,
         language="en-IN",
         target_language=None,
@@ -50,7 +72,14 @@ class SarvamTranscriber(BaseTranscriber):
         super().__init__(input_queue)
 
         self.telephony_provider = telephony_provider
-        self.model = model
+        
+        # Backward compatibility: map deprecated saarika models to saaras:v3
+        if model and model.startswith("saarika"):
+            logger.info(f"Mapping deprecated model {model} to saaras:v3")
+            self.model = "saaras:v3"
+        else:
+            self.model = model
+            
         self.language = language
         self.target_language = target_language
         self.stream = stream
@@ -376,8 +405,11 @@ class SarvamTranscriber(BaseTranscriber):
 
                             # Accumulate the turn's text so END_SPEECH can record it in
                             # turn_latencies (observability/eval). Each Sarvam "data" message
-                            # is a finalized segment; join the segments within the turn.
-                            self.final_transcript = " ".join(filter(None, [self.final_transcript, transcript.strip()]))
+                            # is a finalized segment; overlap-merge (not join) — segments
+                            # re-emit the previous tail and naive joining doubles digits.
+                            self.final_transcript = merge_transcript_segments(
+                                self.final_transcript, transcript.strip()
+                            )
                             # Segments can arrive AFTER END_SPEECH closed the turn (short
                             # utterances) — backfill the closed entry, else it stores null text.
                             if (
