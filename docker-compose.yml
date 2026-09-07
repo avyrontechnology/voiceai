@@ -49,6 +49,22 @@ services:
     networks:
       - voiceai
 
+  talko-app:
+    container_name: talko-app
+    build: .
+    command: uvicorn talko_api_server:app --host 0.0.0.0 --port 8004 --app-dir local_setup/telephony_server
+    restart: on-failure
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    depends_on:
+      - voiceai-app
+    networks:
+      - voiceai
+    # No ngrok needed: Tata streams to talko-service's static PSTN endpoint,
+    # which relays media to voiceai-app over the internal network.
+
   redis:
     container_name: voiceai-redis
     image: redis:latest
