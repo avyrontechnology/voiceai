@@ -2152,8 +2152,12 @@ class TaskManager(BaseManager):
                 self.prompt_map[agent] = prompt
             logger.info(f"Initialised prompt dict {self.prompt_map}, Set default prompt {self.system_prompt}")
         else:
+            # Missing task prompts (e.g. no conversation_details.json) must
+            # degrade to an empty system prompt, not crash the call with
+            # `argument of type 'NoneType' is not iterable` (observed live:
+            # inbound AI call dropped right after WS accept).
             self.prompts = self.__prefill_prompts(
-                self.task_config, prompt_responses.get(current_task, None), self.task_config["task_type"]
+                self.task_config, prompt_responses.get(current_task, None) or {}, self.task_config["task_type"]
             )
 
         if "system_prompt" in self.prompts:
