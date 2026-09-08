@@ -4,4 +4,5 @@ from .telephony_providers.exotel import ExotelInputHandler
 from .telephony_providers.plivo import PlivoInputHandler
 from .telephony_providers.vobiz import VobizInputHandler
 from .telephony_providers.sip_trunk import SipTrunkInputHandler
+from .telephony_providers.talko import TalkoInputHandler
 from .telephony_providers.freeswitch import FreeSwitchInputHandler

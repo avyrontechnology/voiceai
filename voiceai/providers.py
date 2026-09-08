@@ -34,6 +34,7 @@ from .input_handlers import (
     PlivoInputHandler,
     VobizInputHandler,
     SipTrunkInputHandler,
+    TalkoInputHandler,
     FreeSwitchInputHandler,
 )
 from .output_handlers import (
@@ -43,6 +44,7 @@ from .output_handlers import (
     PlivoOutputHandler,
     VobizOutputHandler,
     SipTrunkOutputHandler,
+    TalkoOutputHandler,
     FreeSwitchOutputHandler,
 )
 from .llms import OpenAiLLM, LiteLLM, AzureLLM, GeminiLLM
@@ -118,6 +120,7 @@ SUPPORTED_INPUT_HANDLERS = {
     TelephonyProvider.PLIVO.value: PlivoInputHandler,
     TelephonyProvider.VOBIZ.value: VobizInputHandler,
     TelephonyProvider.SIP_TRUNK.value: SipTrunkInputHandler,
+    TelephonyProvider.TALKO.value: TalkoInputHandler,
     TelephonyProvider.FREESWITCH.value: FreeSwitchInputHandler,
 }
 SUPPORTED_INPUT_TELEPHONY_HANDLERS = {
@@ -126,6 +129,7 @@ SUPPORTED_INPUT_TELEPHONY_HANDLERS = {
     TelephonyProvider.PLIVO.value: PlivoInputHandler,
     TelephonyProvider.VOBIZ.value: VobizInputHandler,
     TelephonyProvider.SIP_TRUNK.value: SipTrunkInputHandler,
+    TelephonyProvider.TALKO.value: TalkoInputHandler,
 }
 SUPPORTED_OUTPUT_HANDLERS = {
     TelephonyProvider.DEFAULT.value: DefaultOutputHandler,
@@ -134,6 +138,7 @@ SUPPORTED_OUTPUT_HANDLERS = {
     TelephonyProvider.PLIVO.value: PlivoOutputHandler,
     TelephonyProvider.VOBIZ.value: VobizOutputHandler,
     TelephonyProvider.SIP_TRUNK.value: SipTrunkOutputHandler,
+    TelephonyProvider.TALKO.value: TalkoOutputHandler,
     TelephonyProvider.FREESWITCH.value: FreeSwitchOutputHandler,
 }
 SUPPORTED_OUTPUT_TELEPHONY_HANDLERS = {
@@ -142,6 +147,7 @@ SUPPORTED_OUTPUT_TELEPHONY_HANDLERS = {
     TelephonyProvider.PLIVO.value: PlivoOutputHandler,
     TelephonyProvider.VOBIZ.value: VobizOutputHandler,
     TelephonyProvider.SIP_TRUNK.value: SipTrunkOutputHandler,
+    TelephonyProvider.TALKO.value: TalkoOutputHandler,
 }
 SUPPORTED_S2S_PROVIDERS = {
     S2SProvider.OPENAI_REALTIME.value: OpenAIRealtimeS2S,

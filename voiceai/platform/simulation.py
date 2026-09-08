@@ -24,6 +24,7 @@ from voiceai.platform.models import (
     utcnow,
 )
 from voiceai.platform.store import MemoryStore
+from voiceai.platform.talko_dialer import DIAL_CONCURRENCY, dial_via_talko
 
 logger = configure_logger(__name__)
 
@@ -184,7 +185,11 @@ async def progress_simulated_call(
 
 
 async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5) -> Optional[Batch]:
-    """Drive every entry of a batch through the simulator, honouring stop."""
+    """Drive every entry of a batch, honouring stop.
+
+    `provider="talko"` dials each entry for real via the Talko trunk
+    (bounded parallelism); anything else runs the simulator as before.
+    """
     batch = await store.get_batch(batch_id)
     if batch is None or batch.status not in (BatchStatus.DRAFT, BatchStatus.SCHEDULED, BatchStatus.RUNNING):
         return batch
@@ -194,25 +199,57 @@ async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5)
     batch.stats.queued = len(batch.entries)
     await store.save_batch(batch)
 
-    for entry in batch.entries:
+    use_talko = getattr(batch, "provider", "simulated") == "talko"
+    semaphore = asyncio.Semaphore(max(1, DIAL_CONCURRENCY)) if use_talko else None
+
+    async def run_entry(entry) -> None:
         current = await store.get_batch(batch_id)
         if current is None or current.status != BatchStatus.RUNNING:
-            batch = current or batch
-            break
-        execution = await run_simulated_call(
-            store,
-            agent_id=batch.agent_id,
-            to_number=entry.to_number,
-            variables=entry.variables,
-            batch_id=batch_id,
-            delay_scale=delay_scale,
-        )
-        batch.stats.queued -= 1
-        if execution.status == ExecutionStatus.COMPLETED:
-            batch.stats.completed += 1
+            return
+        if use_talko:
+            assert semaphore is not None
+            async with semaphore:
+                execution = await dial_via_talko(
+                    store,
+                    agent_id=batch.agent_id,
+                    to_number=entry.to_number,
+                    from_number=getattr(batch, "from_number", None),
+                    variables=entry.variables,
+                    batch_id=batch_id,
+                )
         else:
-            batch.stats.failed += 1
-        await store.save_batch(batch)
+            execution = await run_simulated_call(
+                store,
+                agent_id=batch.agent_id,
+                to_number=entry.to_number,
+                variables=entry.variables,
+                batch_id=batch_id,
+                delay_scale=delay_scale,
+            )
+        latest = await store.get_batch(batch_id)
+        if latest is None:
+            return
+        latest.stats.queued -= 1
+        # Trunk-dialed entries stay IN_PROGRESS (outcome lives in Talko's
+        # CDR); count them completed once the trunk accepts the dial so the
+        # batch can finish. Trunk refusals come back FAILED.
+        if execution.status in (ExecutionStatus.COMPLETED, ExecutionStatus.IN_PROGRESS):
+            latest.stats.completed += 1
+        else:
+            latest.stats.failed += 1
+        await store.save_batch(latest)
+
+    if use_talko:
+        await asyncio.gather(*(run_entry(entry) for entry in batch.entries))
+        batch = await store.get_batch(batch_id) or batch
+    else:
+        for entry in batch.entries:
+            current = await store.get_batch(batch_id)
+            if current is None or current.status != BatchStatus.RUNNING:
+                batch = current or batch
+                break
+            await run_entry(entry)
+            batch = await store.get_batch(batch_id) or batch
 
     if batch.status == BatchStatus.RUNNING:
         batch.status = BatchStatus.COMPLETED

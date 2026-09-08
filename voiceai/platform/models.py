@@ -42,7 +42,7 @@ class BatchStatus(str, Enum):
     STOPPED = "stopped"
 
 
-PhoneNumberProvider = Literal["twilio", "plivo", "exotel", "vobiz", "simulated"]
+PhoneNumberProvider = Literal["twilio", "plivo", "exotel", "vobiz", "talko", "simulated"]
 ToolKind = Literal["transfer", "calendar", "custom", "datetime"]
 KBSourceType = Literal["pdf", "url", "text"]
 
@@ -129,6 +129,13 @@ class CreateBatchRequest(BaseModel):
     schedule_at: Optional[datetime] = None
     calling_hours: Optional[CallingHours] = None
     delay_scale: float = Field(0.5, ge=0)
+    provider: Literal["simulated", "talko"] = Field(
+        "simulated",
+        description="'talko' dials each entry for real via the Talko trunk (Tata Tele); anything else simulates.",
+    )
+    from_number: Optional[str] = Field(
+        None, description="Caller DID override for talko-dialed batches (defaults to trunk TALKO_AI_DID)."
+    )
 
 
 class Batch(BaseModel):
@@ -140,6 +147,8 @@ class Batch(BaseModel):
     stats: BatchStats = Field(default_factory=BatchStats)
     schedule_at: Optional[datetime] = None
     calling_hours: Optional[CallingHours] = None
+    provider: Literal["simulated", "talko"] = "simulated"
+    from_number: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -563,7 +572,7 @@ class SubAccountListResponse(BaseModel):
 
 class Integration(BaseModel):
     integration_id: str
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
     name: str
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -578,7 +587,7 @@ class Integration(BaseModel):
 
 
 class CreateIntegrationRequest(BaseModel):
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
     name: str = Field(..., min_length=1)
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True

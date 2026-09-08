@@ -278,6 +278,8 @@ async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends
         entries=list(payload.entries),
         schedule_at=payload.schedule_at,
         calling_hours=payload.calling_hours,
+        provider=payload.provider,
+        from_number=payload.from_number,
     )
     batch.stats.total = len(batch.entries)
     batch.stats.queued = len(batch.entries)
