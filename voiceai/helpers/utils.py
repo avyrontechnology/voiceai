@@ -475,14 +475,17 @@ def update_prompt_with_context(prompt, context_data):
 
 async def get_prompt_responses(assistant_id, local=False):
     filepath = f"{PREPROCESS_DIR}/{assistant_id}/conversation_details.json"
-    data = ""
+    data = {}
     if local:
         logger.info("Loading up the conversation details from the local file")
         try:
             with open(filepath, "r") as json_file:
                 data = json.load(json_file)
         except Exception as e:
-            logger.error(f"Could not load up the dataset {e}")
+            # Missing/unreadable prompts must degrade to empty prompts, not a
+            # str/None that crashes callers doing `prompt_responses.get(...)`
+            # mid-call (observed: inbound AI call dropped after WS accept).
+            logger.error(f"Could not load up the dataset {e}; using empty prompts")
     else:
         key = f"{assistant_id}/conversation_details.json"
         logger.info(f"Loading up the conversation details from the s3 file BUCKET_NAME {BUCKET_NAME} {key}")
