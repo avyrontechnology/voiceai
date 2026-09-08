@@ -66,6 +66,22 @@ async def test_dial_posts_agent_and_number(monkeypatch):
     assert saved is not None and saved.status == ExecutionStatus.IN_PROGRESS
 
 
+async def test_dial_forwards_per_request_api_key(monkeypatch):
+    _patch(monkeypatch)
+    store = MemoryStore()
+    await dial_via_talko(
+        store, agent_id="a", to_number="+9191", talko_api_key="tkp_live_ui",
+    )
+    assert FakeAsyncClient.posted[0]["json"]["talko_api_key"] == "tkp_live_ui"
+
+
+async def test_dial_omits_api_key_when_absent(monkeypatch):
+    _patch(monkeypatch)
+    store = MemoryStore()
+    await dial_via_talko(store, agent_id="a", to_number="+9191")
+    assert "talko_api_key" not in FakeAsyncClient.posted[0]["json"]
+
+
 async def test_dial_trunk_refusal_marks_failed(monkeypatch):
     _patch(monkeypatch)
     FakeAsyncClient.next_post = FakeResponse(500, text="down")

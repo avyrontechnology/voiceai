@@ -136,6 +136,10 @@ class CreateBatchRequest(BaseModel):
     from_number: Optional[str] = Field(
         None, description="Caller DID override for talko-dialed batches (defaults to trunk TALKO_AI_DID)."
     )
+    talko_api_key: Optional[str] = Field(
+        None,
+        description="Talko partner API key for this batch's dials (defaults to trunk TALKO_API_KEY). Lets each user dial with their own key.",
+    )
 
 
 class Batch(BaseModel):
@@ -149,6 +153,7 @@ class Batch(BaseModel):
     calling_hours: Optional[CallingHours] = None
     provider: Literal["simulated", "talko"] = "simulated"
     from_number: Optional[str] = None
+    talko_api_key: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None

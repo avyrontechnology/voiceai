@@ -43,18 +43,34 @@ class TalkoCallDetails(BaseModel):
     recipient_phone_number: str = Field(..., description="Customer number to dial (e.g. 919812345678).")
     caller_did: str = Field(default="", description="Override for the dedicated DID (defaults to TALKO_AI_DID).")
     partner_id: str = Field(default="", description="Override for TALKO_PARTNER_ID.")
+    talko_api_key: str = Field(
+        default="",
+        description="Talko partner API key for this call (defaults to TALKO_API_KEY env). Lets each UI user dial with their own key.",
+    )
 
 
 class TalkoHangupDetails(BaseModel):
     call_id: str = Field(..., description="Vendor call_id to hang up (from /talko/call response when present).")
+    talko_api_key: str = Field(default="", description="Talko partner API key (defaults to TALKO_API_KEY env).")
 
 
 class ErrorResponse(BaseModel):
     detail: str = Field(..., description="Error description message.")
 
 
-def _headers() -> dict:
-    return {"API-KEY": talko_api_key, "Content-Type": "application/json"}
+def _headers(api_key: str = "") -> dict:
+    key = api_key.strip() or talko_api_key
+    return {"API-KEY": key, "Content-Type": "application/json"}
+
+
+def _require_key(api_key: str = "") -> str:
+    key = api_key.strip() or talko_api_key
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail="No Talko API key: pass talko_api_key or configure TALKO_API_KEY.",
+        )
+    return key
 
 
 @app.post(
@@ -71,12 +87,11 @@ def _headers() -> dict:
 async def make_call(call_details: TalkoCallDetails):
     did = call_details.caller_did or talko_ai_did
     partner_id = call_details.partner_id or talko_partner_id
+    api_key = _require_key(call_details.talko_api_key)
     if not call_details.agent_id or not call_details.recipient_phone_number:
         raise HTTPException(status_code=400, detail="agent_id and recipient_phone_number are required.")
     if not did:
         raise HTTPException(status_code=400, detail="No dedicated DID: set caller_did or TALKO_AI_DID.")
-    if not talko_api_key:
-        raise HTTPException(status_code=400, detail="TALKO_API_KEY is not configured.")
 
     body: dict = {
         "entity_type": "Lead",
@@ -93,7 +108,7 @@ async def make_call(call_details: TalkoCallDetails):
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post("{}/call".format(talko_api_base_url), headers=_headers(), json=body)
+            resp = await client.post("{}/call".format(talko_api_base_url), headers=_headers(api_key), json=body)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail="talko-service unreachable: {}".format(e))
     if resp.status_code >= 400:
@@ -108,13 +123,12 @@ async def make_call(call_details: TalkoCallDetails):
     tags=["Talko Telephony"],
 )
 async def hangup_call(details: TalkoHangupDetails):
-    if not talko_api_key:
-        raise HTTPException(status_code=400, detail="TALKO_API_KEY is not configured.")
+    api_key = _require_key(details.talko_api_key)
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
                 "{}/call/hangup".format(talko_api_base_url),
-                headers=_headers(),
+                headers=_headers(api_key),
                 json={"call_id": details.call_id, "enable_ai_bridge": True},
             )
     except httpx.HTTPError as e:

@@ -214,6 +214,7 @@ async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5)
                     agent_id=batch.agent_id,
                     to_number=entry.to_number,
                     from_number=getattr(batch, "from_number", None),
+                    talko_api_key=getattr(batch, "talko_api_key", None),
                     variables=entry.variables,
                     batch_id=batch_id,
                 )

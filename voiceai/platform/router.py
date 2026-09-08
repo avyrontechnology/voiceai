@@ -280,6 +280,7 @@ async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends
         calling_hours=payload.calling_hours,
         provider=payload.provider,
         from_number=payload.from_number,
+        talko_api_key=payload.talko_api_key,
     )
     batch.stats.total = len(batch.entries)
     batch.stats.queued = len(batch.entries)
