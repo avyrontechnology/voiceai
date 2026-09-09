@@ -4,6 +4,7 @@ import asyncio
 import re
 
 from pydub import AudioSegment
+from voiceai.constants import AUDIO_STREAM_END_SENTINELS
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.utils import create_ws_data_packet
 
@@ -134,6 +135,19 @@ class BaseSynthesizer:
         """Output format string for HTTP mode (e.g. 'wav', 'mulaw')."""
         return "wav"
 
+    @staticmethod
+    def _has_audio(audio):
+        """False for every way a provider reports 'no audio here'.
+
+        None (Polly on a BotoCoreError, Sarvam on a non-200), empty bytes, and the
+        end-of-stream sentinel (Deepgram and Rime return b"\x00" for a failed request) all
+        mean the same thing: this phrase was not rendered.
+        """
+        return bool(audio) and audio not in AUDIO_STREAM_END_SENTINELS
+
+    def _http_provider_label(self):
+        return getattr(self, "provider_name", None) or type(self).__name__
+
     async def _generate_http_loop(self):
         """Standard HTTP (non-streaming) generate loop with caching support."""
         while True:
@@ -146,7 +160,24 @@ class BaseSynthesizer:
                 return
 
             audio = await self._fetch_http_audio(text, meta_info)
-            audio = self._process_http_audio(audio)
+            if self._has_audio(audio):
+                # Only transform real audio: _process_http_audio decodes/resamples, so it
+                # raises on None (convert_audio_to_wav) and can legitimately drop the chunk
+                # itself (e.g. Sarvam returning a header-only wav).
+                audio = self._process_http_audio(audio)
+
+            if not self._has_audio(audio):
+                # Yielding this used to crash the output handler in base64.b64encode(None),
+                # and dropping it outright left the turn open forever: the task manager only
+                # completes a turn on an end_of_synthesizer_stream packet. So skip the audio
+                # but still close the turn when this was its last chunk.
+                logger.warning(
+                    f"{self._http_provider_label()}: no audio for {len(text or '')} chars "
+                    f"(got {type(audio).__name__}), skipping this chunk"
+                )
+                if meta_info.get("end_of_llm_stream"):
+                    yield self._http_end_of_stream_packet(meta_info, text)
+                continue
 
             self._stamp_first_chunk(meta_info)
             self._stamp_end_of_stream(meta_info)
@@ -156,6 +187,21 @@ class BaseSynthesizer:
             meta_info["text_synthesized"] = f"{text} "
             self._stamp_mark_id(meta_info)
             yield create_ws_data_packet(audio, meta_info)
+
+    def _http_end_of_stream_packet(self, meta_info, text):
+        """Turn-closing packet for a last chunk whose audio never arrived.
+
+        Same shape as the sentinel packet the WS loop yields, so downstream sees the usual
+        is_final_chunk (end_of_llm_stream AND end_of_synthesizer_stream) and releases the turn.
+        is_first_chunk is deliberately NOT stamped: this packet carries no audible audio, so
+        it must not open the turn's TTFB/health bookkeeping for silence.
+        """
+        self._stamp_end_of_stream(meta_info)
+        meta_info["format"] = self._get_http_audio_format()
+        meta_info["text"] = text
+        meta_info["text_synthesized"] = f"{text} "
+        self._stamp_mark_id(meta_info)
+        return create_ws_data_packet(AUDIO_STREAM_END_SENTINELS[0], meta_info)
 
     async def _fetch_http_audio(self, text, meta_info=None):
         """Fetch audio via HTTP, with optional caching. Tracks synthesized_characters."""
@@ -171,7 +217,13 @@ class BaseSynthesizer:
                 meta_info["is_cached"] = False
             self.synthesized_characters += len(text)
             audio = await self._generate_http(text)
-            self.cache.set(text, audio)
+            # Never cache a failure. Providers report upstream errors here as None or as the
+            # end sentinel, and caching one pinned that phrase to silence for the lifetime of
+            # the process — every later call that said it got the cached non-audio back.
+            if self._has_audio(audio):
+                self.cache.set(text, audio)
+            else:
+                logger.warning(f"{self._http_provider_label()}: not caching non-audio for {len(text or '')} chars")
             return audio
         else:
             if meta_info is not None:

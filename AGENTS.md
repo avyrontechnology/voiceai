@@ -68,7 +68,18 @@ Before declaring a task complete, verify:
 
 ---
 
-## 4. Specific Codebase Constraints
+## 4. Error Handling & Resilience Contract (mandatory)
+
+Every failure that crosses a module boundary is a `voiceai.errors.VoiceAIError`; every transport renders that one object. Follow these rules in all new or touched code:
+
+*   **Raise typed errors, never format them.** `ConfigurationError(message, path=...)` for bad agent/deployment config, `ProviderError` subclasses (`LLMError`, `SynthesizerError`, `TranscriberError`, `TelephonyError`, `S2SError`, `ToolCallError`) for component failures, `AgentNotFoundError` / `AuthenticationError` / `AuthorizationError` / `InvalidRequestError` / `DependencyUnavailableError` / `StorageError` for API paths. Wrap unknown exceptions with `classify_exception(exc, component=..., provider=..., model=...)`. `voiceai.exceptions` keeps the historical names for compatibility.
+*   **One response shape.** HTTP error bodies are `voiceai.responses.ErrorEnvelope` (`ok`, `detail`, `error{code,message,error_id,retryable,component,details}`), installed once per app with `register_exception_handlers(app)`. Routes never build error JSON or pick status codes by hand; `HTTPException` still works but prefer the typed errors. Websocket failures use `ws_error_frame` / `close_with_error` (4xxx close codes mirror the HTTP status).
+*   **Validate at the boundary.** `voiceai.agent_config.validate_agent_config(config)` runs before an agent is stored and before a call is built; it reports every issue with a path such as `tasks[0].tools_config.synthesizer.provider`. Provider lookups inside the engine raise `ConfigurationError` instead of calling `None`.
+*   **Loops survive exceptions.** Long-lived coroutines wrap each iteration in `voiceai.helpers.resilience.iteration_guard` (or `supervise`) so one bad packet is logged with an `error_id` and skipped; only cancellation and an explicit `propagate` list escape. Background tasks go through a `TaskRegistry` (never a bare `asyncio.create_task` whose result is dropped) and are cancelled at teardown. `with_timeout` bounds every await on a provider; `call_soft` is for side paths (telemetry, cleanup) whose failure must never end a call.
+*   **Never leak.** Secrets are not logged (redact `api_key`, `api_token`, `authorization`, headers); exception text is never spoken to a caller (use `constants.LLM_FAILURE_SPOKEN_MESSAGE`); unexpected exceptions reach clients only as `Internal error (ref <error_id>)`.
+*   **Carrier trust.** Real phone legs authenticate the voice socket with a signed stream token (`voiceai.platform.stream_token`, `VOICE_STREAM_SECRET`); the dial endpoints require `TELEPHONY_API_KEY` once it is set (`voiceai.platform.carrier_auth`).
+
+## 5. Specific Codebase Constraints
 
 *   **Providers:** When adding a new provider (LLM, TTS, STT), it must be registered in `bolna/providers.py` and `bolna/enums.py`.
 *   **Audio Handling:** Always be mindful of sample rates and encodings (e.g., linear16 vs. mulaw). Use the helper functions in `bolna/helpers/utils.py` for conversion.

@@ -6,6 +6,8 @@ from typing import List, Tuple, AsyncGenerator, Optional, Dict
 
 from voiceai.models import *
 from voiceai.agent_types.base_agent import BaseAgent
+from voiceai.constants import llm_failure_spoken_message
+from voiceai.errors import ConfigurationError, classify_exception, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
 from voiceai.helpers.function_calling_helpers import guard_llm_base_url
@@ -50,46 +52,46 @@ class KnowledgeBaseAgent(BaseAgent):
 
     def _initialize_llm(self):
         """Initialize the LLM instance with all necessary config (including api_tools for function calling)."""
+        provider = self.config.get("provider") or self.config.get("llm_provider", "openai")
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            # This used to fall back to a raw openai.OpenAI client, which has no generate_stream: the
+            # agent then failed on its first turn and spoke the AttributeError. Fail at construction.
+            raise ConfigurationError(
+                f"Unsupported LLM provider '{provider}' for knowledgebase agent",
+                path="tools_config.llm_agent.llm_config.provider",
+            )
+
+        llm_kwargs = {
+            "model": self.llm_model,
+            "temperature": self.config.get("temperature", 0.7),
+            "max_tokens": self.config.get("max_tokens", 150),
+            "provider": provider,
+        }
+
+        for key in [
+            "llm_key",
+            "base_url",
+            "api_version",
+            "language",
+            "api_tools",
+            "buffer_size",
+            "reasoning_effort",
+            "verbosity",
+            "reasoning_summary",
+            "service_tier",
+            "use_responses_api",
+            "compact_threshold",
+            "overflow_llm",
+        ]:
+            if self.config.get(key, None):
+                llm_kwargs[key] = self.config[key]
+
+        llm_class = SUPPORTED_LLM_PROVIDERS[provider]
         try:
-            provider = self.config.get("provider") or self.config.get("llm_provider", "openai")
-
-            if provider not in SUPPORTED_LLM_PROVIDERS:
-                logger.warning(f"Unknown provider: {provider}, using openai")
-                provider = "openai"
-
-            llm_kwargs = {
-                "model": self.llm_model,
-                "temperature": self.config.get("temperature", 0.7),
-                "max_tokens": self.config.get("max_tokens", 150),
-                "provider": provider,
-            }
-
-            for key in [
-                "llm_key",
-                "base_url",
-                "api_version",
-                "language",
-                "api_tools",
-                "buffer_size",
-                "reasoning_effort",
-                "verbosity",
-                "reasoning_summary",
-                "service_tier",
-                "use_responses_api",
-                "compact_threshold",
-                "overflow_llm",
-            ]:
-                if self.config.get(key, None):
-                    llm_kwargs[key] = self.config[key]
-
-            llm_class = SUPPORTED_LLM_PROVIDERS[provider]
             return llm_class(**llm_kwargs)
-
         except Exception as e:
-            logger.error(f"Failed to create LLM: {e}, falling back to basic OpenAI")
-            from openai import OpenAI
-
-            return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            logger.error(f"Failed to create {provider} LLM for knowledgebase agent: {summarize_exception(e)}")
+            raise classify_exception(e, component="llm", provider=provider, model=self.llm_model)
 
     def _initialize_rag_config(self) -> Dict:
         """Initialize RAG configuration from the provided config."""
@@ -338,10 +340,25 @@ Use this information naturally when it helps answer the user's questions. Don't 
                 yield chunk
 
         except Exception as e:
-            logger.error(f"generate() error: {e}")
+            err = classify_exception(e, component="llm", provider=provider or "openai", model=self.llm_model)
+            logger.error(
+                f"generate() error (error_id={err.error_id} code={err.code.value}): {summarize_exception(e)}",
+                exc_info=True,
+            )
+            if isinstance(meta_info, dict):
+                meta_info.setdefault("_non_fatal_errors", []).append(
+                    {
+                        "error_type": err.code.value,
+                        "error": err.message,
+                        "error_id": err.error_id,
+                        "model": self.llm_model,
+                    }
+                )
             latency_data = LatencyData(
                 sequence_id=meta_info.get("sequence_id") if meta_info else None,
                 first_token_latency_ms=0,
                 total_stream_duration_ms=now_ms() - start_time,
             )
-            yield LLMStreamChunk(data=f"An error occurred: {str(e)}", end_of_stream=True, latency=latency_data)
+            # Never speak the exception: provider errors carry request ids and key fragments.
+            language = (meta_info.get("detected_language") if meta_info else None) or self.config.get("language")
+            yield LLMStreamChunk(data=llm_failure_spoken_message(language), end_of_stream=True, latency=latency_data)

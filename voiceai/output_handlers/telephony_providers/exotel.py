@@ -28,8 +28,8 @@ class ExotelOutputHandler(TelephonyOutputHandler):
             await self._send_text(json.dumps(message_clear))
             self.mark_event_meta_data.clear_data()
         except Exception as e:
-            logger.info(f"WebSocket closed during interruption: {e}")
-            self._closed = True
+            # Transient stall or bad frame keeps the handler open; only a dead socket latches it.
+            self._on_send_error(e, "interruption clear")
 
     async def form_media_message(self, audio_data, audio_format):
         # Exotel expects PCM format (16-bit linear)

@@ -1,34 +1,74 @@
-import os
+"""VoiceAI engine server: agent CRUD over HTTP and the live voice websocket.
+
+Error contract
+--------------
+Route code raises ``voiceai.errors.VoiceAIError`` subclasses (or lets unexpected exceptions
+bubble). ``voiceai.responses.register_exception_handlers`` renders every failure as the shared
+envelope, so no handler formats error JSON or status codes by hand.
+
+Voice websocket lifecycle (``/chat/v1/{agent_id}``)
+    accept -> authorise -> load config -> validate config -> run AssistantManager
+    Any failure sends ``{"type": "error", ...}`` and closes with the 4xxx code mapped from the
+    error code (4401 unauthenticated, 4404 agent not found, 4400 invalid config, 4502 provider,
+    4500 internal). The socket is always removed from ``active_websockets`` and the execution
+    is always recorded for the platform layer.
+
+Authentication for the socket
+    * browser legs: single-use ``?token=`` ws ticket or the ``otoba_session`` cookie (``calls:write``);
+    * carrier legs (Twilio, Plivo, Talko relay): ``?token=`` signed stream token minted by the
+      telephony servers with ``VOICE_STREAM_SECRET`` (see ``voiceai.platform.stream_token``).
+"""
+
 import asyncio
 import copy
+import json
+import logging
+import os
 import uuid
-import traceback
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from typing import Any, Dict, List, Optional
+
 import redis.asyncio as redis
 from dotenv import load_dotenv
-from voiceai.helpers.utils import store_file, get_prompt_responses
-from voiceai.prompts import *
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.models import *
-from voiceai.llms import LiteLLM
+from fastapi import Body, Depends, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from voiceai.agent_config import validate_agent_config
 from voiceai.agent_manager.assistant_manager import AssistantManager
-from voiceai.platform.auth import (
-    Principal,
-    get_store as auth_store,
-    redeem_ws_ticket,
-    require_scope,
-    token_hash,
+from voiceai.errors import (
+    AgentNotFoundError,
+    AuthenticationError,
+    DependencyUnavailableError,
+    StorageError,
+    VoiceAIError,
+    classify_exception,
+    is_cancellation,
+    summarize_exception,
 )
+from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import call_soft
+from voiceai.helpers.utils import get_prompt_responses, store_file
+from voiceai.llms import LiteLLM
+from voiceai.models import AgentModel
+from voiceai.platform.auth import Principal, redeem_ws_ticket, require_scope
+from voiceai.platform.stream_token import stream_secret_configured, verify_stream_token
+from voiceai.prompts import EXTRACTION_PROMPT_GENERATION_PROMPT
+from voiceai.responses import ErrorEnvelope, close_with_error, register_exception_handlers
 
 load_dotenv()
 logger = configure_logger(__name__)
 
-redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_responses=True)
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    REDIS_URL = "redis://localhost:6379/0"
+    logger.warning("REDIS_URL is not set; defaulting to %s", REDIS_URL)
+
+redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
 
-app = FastAPI()
+app = FastAPI(title="VoiceAI engine", version="1.0.0")
+register_exception_handlers(app, logger=logger)
 
 # Credentials (cookies) never work with a "*" origin, so auth requires an
 # explicit allowlist. Same default the UI expects for local dev.
@@ -46,6 +86,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Kept for API docs that referenced the old name; the body shape is the shared envelope.
+ErrorResponse = ErrorEnvelope
+
 
 class CreateAgentPayload(BaseModel):
     agent_config: AgentModel = Field(..., description="The main agent configuration including tools, tasks, and settings.")
@@ -54,20 +97,21 @@ class CreateAgentPayload(BaseModel):
     # reads at runtime for language switching.
     agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(None, description="Optional prompts mapped by intent/context.")
 
-class ErrorResponse(BaseModel):
-    detail: str = Field(..., description="Error description message.")
 
 class AgentCreatedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the created agent.")
     state: str = Field("created", description="State of the agent creation.")
 
+
 class AgentUpdatedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the updated agent.")
     state: str = Field("updated", description="State of the agent update.")
 
+
 class AgentDeletedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the deleted agent.")
     state: str = Field("deleted", description="State of the agent deletion.")
+
 
 class AgentPromptsResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the agent.")
@@ -75,12 +119,137 @@ class AgentPromptsResponse(BaseModel):
         None, description="Stored prompts mapped by task (e.g. task_1), or null when none were saved."
     )
 
+
 class AgentListItem(BaseModel):
     agent_id: str = Field(..., description="The ID of the agent.")
     data: dict = Field(..., description="The agent configuration data.")
 
+
 class AgentListResponse(BaseModel):
     agents: List[AgentListItem] = Field(..., description="List of all available agents.")
+
+
+class HealthResponse(BaseModel):
+    ok: bool
+    redis: bool
+    platform: bool
+    stream_secret_configured: bool
+
+
+_ERROR_RESPONSES = {
+    401: {"model": ErrorEnvelope, "description": "Not authenticated."},
+    403: {"model": ErrorEnvelope, "description": "Missing scope."},
+    404: {"model": ErrorEnvelope, "description": "Agent not found."},
+    422: {"model": ErrorEnvelope, "description": "Validation error."},
+    500: {"model": ErrorEnvelope, "description": "Internal server error (body carries an error_id)."},
+    503: {"model": ErrorEnvelope, "description": "A backing service (Redis, extraction model) is unavailable."},
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# Agent record storage (functions, not bound methods: tests replace `redis_client` at runtime)
+# ---------------------------------------------------------------------------------------------
+
+
+async def load_agent_record(agent_id: str) -> dict:
+    """The stored config for ``agent_id`` or ``AgentNotFoundError`` / ``StorageError``."""
+    try:
+        raw = await redis_client.get(agent_id)
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+    if not raw:
+        raise AgentNotFoundError(agent_id)
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise StorageError(f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc) from exc
+    if not isinstance(record, dict):
+        raise StorageError(f"stored config for agent {agent_id} is not an object", details={"agent_id": agent_id})
+    return record
+
+
+async def store_agent_record(agent_id: str, record: dict) -> None:
+    try:
+        await redis_client.set(agent_id, json.dumps(record))
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+
+
+async def agent_exists(agent_id: str) -> bool:
+    try:
+        return bool(await redis_client.exists(agent_id))
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+
+
+async def delete_agent_record(agent_id: str) -> None:
+    try:
+        await redis_client.delete(agent_id)
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+
+
+async def generate_extraction_prompts(tasks: List[dict]) -> None:
+    """Fill ``extraction_json`` for every extraction task, failing with a clear 503/502."""
+    extraction_tasks = [task for task in tasks if isinstance(task, dict) and task.get("task_type") == "extraction"]
+    if not extraction_tasks:
+        return
+    model = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
+    if not model:
+        raise DependencyUnavailableError(
+            "EXTRACTION_PROMPT_GENERATION_MODEL is not configured; extraction tasks need it to build their schema",
+            details={"env": "EXTRACTION_PROMPT_GENERATION_MODEL"},
+        )
+    llm = LiteLLM(model=model, max_tokens=2000)
+    for task in extraction_tasks:
+        llm_agent = task.get("tools_config", {}).get("llm_agent") or {}
+        details = llm_agent.get("extraction_details", "")
+        try:
+            prompt = await llm.generate(
+                messages=[
+                    {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
+                    {"role": "user", "content": details},
+                ]
+            )
+        except Exception as exc:
+            if is_cancellation(exc):
+                raise
+            raise classify_exception(exc, component="llm", provider="litellm", model=model) from exc
+        llm_agent["extraction_json"] = prompt
+        task.setdefault("tools_config", {})["llm_agent"] = llm_agent
+
+
+async def persist_agent(agent_id: str, record: dict, agent_prompts: Optional[dict]) -> None:
+    await asyncio.gather(
+        store_agent_record(agent_id, record),
+        store_file(file_key=f"{agent_id}/conversation_details.json", file_data=agent_prompts, local=True),
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# HTTP routes
+# ---------------------------------------------------------------------------------------------
+
+
+@app.get("/health", summary="Liveness and dependency status", tags=["Health"], response_model=HealthResponse)
+async def health():
+    redis_ok = False
+    try:
+        redis_ok = bool(await asyncio.wait_for(redis_client.ping(), timeout=2.0))
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        logger.warning("health: redis ping failed: %s", summarize_exception(exc))
+    platform_ok = getattr(app.state, "platform_store", None) is not None
+    return HealthResponse(ok=redis_ok, redis=redis_ok, platform=platform_ok, stream_secret_configured=stream_secret_configured())
 
 
 @app.get(
@@ -88,24 +257,11 @@ class AgentListResponse(BaseModel):
     summary="Get Agent Configuration",
     description="Fetches an agent's complete configuration by its unique ID.",
     tags=["Agents"],
-    responses={
-        200: {"description": "Agent configuration successfully retrieved."},
-        404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses={200: {"description": "Agent configuration successfully retrieved."}, **_ERROR_RESPONSES},
 )
 async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's information by ID."""
-    try:
-        agent_data = await redis_client.get(agent_id)
-        if not agent_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        return json.loads(agent_data)
-
-    except Exception as e:
-        logger.error(f"Error fetching agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    return await load_agent_record(agent_id)
 
 
 @app.get(
@@ -114,29 +270,13 @@ async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("age
     description="Fetches an agent's stored prompts (system prompt, welcome message, multilingual variants) by its unique ID. Returns null prompts when none were saved.",
     tags=["Agents"],
     response_model=AgentPromptsResponse,
-    responses={
-        404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses=_ERROR_RESPONSES,
 )
 async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's stored prompts by ID."""
-    try:
-        agent_data = await redis_client.get(agent_id)
-        if not agent_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        prompts = await get_prompt_responses(assistant_id=agent_id, local=True)
-        if not prompts:
-            prompts = None
-
-        return {"agent_id": agent_id, "agent_prompts": prompts}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching prompts for agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    await load_agent_record(agent_id)
+    prompts = await get_prompt_responses(assistant_id=agent_id, local=True)
+    return AgentPromptsResponse(agent_id=agent_id, agent_prompts=prompts or None)
 
 
 @app.post(
@@ -146,41 +286,19 @@ async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_sc
     tags=["Agents"],
     response_model=AgentCreatedResponse,
     status_code=201,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses=_ERROR_RESPONSES,
 )
 async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depends(require_scope("agents:write"))):
-    agent_uuid = str(uuid.uuid4())
-    data_for_db = agent_data.agent_config.model_dump()
-    data_for_db["assistant_status"] = "seeding"
-    agent_prompts = agent_data.agent_prompts
-    logger.info(f"Data for DB {data_for_db}")
-
-    if len(data_for_db["tasks"]) > 0:
-        logger.info("Setting up follow up tasks")
-        for index, task in enumerate(data_for_db["tasks"]):
-            if task["task_type"] == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_details"],
-                        },
-                    ]
-                )
-                data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
-
-    stored_prompt_file_path = f"{agent_uuid}/conversation_details.json"
-    await asyncio.gather(
-        redis_client.set(agent_uuid, json.dumps(data_for_db)),
-        store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
-    )
-
-    return {"agent_id": agent_uuid, "state": "created"}
+    agent_id = str(uuid.uuid4())
+    record = agent_data.agent_config.model_dump()
+    record["assistant_status"] = "seeding"
+    # The request model already validated the shape; this catches what the engine would crash on
+    # (unknown providers, pipelines that reference unconfigured tools) with a 400 and a path.
+    validate_agent_config(record, structural=False, name=agent_id)
+    await generate_extraction_prompts(record.get("tasks", []))
+    await persist_agent(agent_id, record, agent_data.agent_prompts)
+    logger.info("agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", [])))
+    return AgentCreatedResponse(agent_id=agent_id)
 
 
 @app.put(
@@ -189,10 +307,7 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depend
     description="Overwrites an existing agent's configuration. Recalculates extraction prompts if needed.",
     tags=["Agents"],
     response_model=AgentUpdatedResponse,
-    responses={
-        404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses=_ERROR_RESPONSES,
 )
 async def edit_agent(
     agent_id: str,
@@ -200,48 +315,14 @@ async def edit_agent(
     _auth: Principal = Depends(require_scope("agents:write")),
 ):
     """Edits an existing agent based on the provided agent_id."""
-    try:
-        existing_data = await redis_client.get(agent_id)
-        if not existing_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        existing_data = json.loads(existing_data)
-
-        new_data = agent_data.agent_config.model_dump()
-        new_data["assistant_status"] = "updated"
-        agent_prompts = agent_data.agent_prompts
-
-        logger.info(f"Updating Agent {agent_id}: {new_data}")
-
-        for index, task in enumerate(new_data.get("tasks", [])):
-            if task.get("task_type") == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                if not extraction_prompt_llm:
-                    raise HTTPException(status_code=500, detail="Extraction model not configured")
-
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_details = task["tools_config"]["llm_agent"].get("extraction_details", "")
-
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {"role": "user", "content": extraction_details},
-                    ]
-                )
-
-                new_data["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
-
-        stored_prompt_file_path = f"{agent_id}/conversation_details.json"
-        await asyncio.gather(
-            redis_client.set(agent_id, json.dumps(new_data)),
-            store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
-        )
-
-        return {"agent_id": agent_id, "state": "updated"}
-
-    except Exception as e:
-        logger.error(f"Error updating agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    await load_agent_record(agent_id)
+    record = agent_data.agent_config.model_dump()
+    record["assistant_status"] = "updated"
+    validate_agent_config(record, structural=False, name=agent_id)
+    await generate_extraction_prompts(record.get("tasks", []))
+    await persist_agent(agent_id, record, agent_data.agent_prompts)
+    logger.info("agent updated | agent=%s name=%s", agent_id, record.get("agent_name"))
+    return AgentUpdatedResponse(agent_id=agent_id)
 
 
 @app.delete(
@@ -250,24 +331,15 @@ async def edit_agent(
     description="Removes an agent's configuration from the system by ID.",
     tags=["Agents"],
     response_model=AgentDeletedResponse,
-    responses={
-        404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses=_ERROR_RESPONSES,
 )
 async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:write"))):
     """Deletes an agent by ID."""
-    try:
-        agent_exists = await redis_client.exists(agent_id)
-        if not agent_exists:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        await redis_client.delete(agent_id)
-        return {"agent_id": agent_id, "state": "deleted"}
-
-    except Exception as e:
-        logger.error(f"Error deleting agent {agent_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    if not await agent_exists(agent_id):
+        raise AgentNotFoundError(agent_id)
+    await delete_agent_record(agent_id)
+    logger.info("agent deleted | agent=%s", agent_id)
+    return AgentDeletedResponse(agent_id=agent_id)
 
 
 @app.get(
@@ -276,35 +348,31 @@ async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("
     description="Fetches all agents and their configurations currently stored in Redis.",
     tags=["Agents"],
     response_model=AgentListResponse,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses=_ERROR_RESPONSES,
 )
 async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches all agents stored in Redis."""
+    from voiceai.platform.agent_records import collect_agent_records
+
     try:
-        from voiceai.platform.agent_records import collect_agent_records
-
         agent_keys = await redis_client.keys("*")
-
-        if not agent_keys:
-            return {"agents": []}
-        pairs = []
-        for key in agent_keys:
-            # Bare UUID keys are agent records; namespaced platform keys (data with
-            # colons, index sets) are skipped before GET — reading a set as a
-            # string raises WRONGTYPE and spams the log on every directory load.
-            if ":" in key:
-                continue
-            try:
-                pairs.append((key, await redis_client.get(key)))
-            except Exception as e:
-                logger.debug(f"Skipping unreadable agent key {key}: {e}")
-        return {"agents": collect_agent_records(pairs)}
-
-    except Exception as e:
-        logger.error(f"Error fetching all agents: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+    pairs = []
+    for key in agent_keys or []:
+        # Bare UUID keys are agent records; namespaced platform keys (data with colons,
+        # index sets) are skipped before GET — reading a set as a string raises WRONGTYPE.
+        if ":" in key:
+            continue
+        try:
+            pairs.append((key, await redis_client.get(key)))
+        except Exception as exc:
+            if is_cancellation(exc):
+                raise
+            logger.debug("skipping unreadable agent key %s: %s", key, summarize_exception(exc))
+    return {"agents": collect_agent_records(pairs)}
 
 
 #############################################################################################
@@ -319,39 +387,89 @@ try:
     app.state.platform_store = RedisStore(redis_client)
     logger.info("Platform routers mounted")
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
-    logger.warning(f"Platform routers not mounted: {exc}")
+    logger.warning("Platform routers not mounted: %s", summarize_exception(exc))
+    app.state.platform_store = None
 
 
 #############################################################################################
 # Websocket
 #############################################################################################
-async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str]) -> bool:
-    """Gate live voice on a session cookie or a single-use ?token= ticket.
 
-    Requires calls:write (member+): viewers may watch telemetry but never
-    place live or simulated calls.
+
+async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str], agent_id: str) -> str:
+    """Return how the socket authenticated, or raise ``AuthenticationError``.
+
+    Order: single-use ws ticket, session cookie (both need ``calls:write``: viewers may watch
+    telemetry but never place calls), then a signed carrier stream token bound to ``agent_id``.
     """
-    try:
-        store = getattr(websocket.app.state, "platform_store", None)
-        if store is None:
-            logger.warning("Voice socket denied: platform store unavailable")
-            return False
-        principal = None
-        if token:
-            principal = await redeem_ws_ticket(store, token)
-        if principal is None:
-            session_token = websocket.cookies.get("otoba_session")
-            if session_token:
-                from voiceai.platform.auth import _principal_from_session
+    store = getattr(websocket.app.state, "platform_store", None)
+    principal = None
+    if token and store is not None:
+        principal = await call_soft(redeem_ws_ticket, store, token, name="ws ticket redeem", logger=logger)
+    if principal is None and store is not None:
+        session_token = websocket.cookies.get("otoba_session")
+        if session_token:
+            from voiceai.platform.auth import _principal_from_session
 
-                principal = await _principal_from_session(store, session_token)
-        if principal is None or not principal.has_scope("calls:write"):
-            logger.warning("Voice socket denied: unauthenticated or missing calls:write")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"Voice socket auth error: {e}", exc_info=True)
-        return False
+            principal = await call_soft(_principal_from_session, store, session_token, name="ws session lookup", logger=logger)
+    if principal is not None:
+        if principal.has_scope("calls:write"):
+            return principal.auth_type
+        raise AuthenticationError("This account may not place calls (calls:write scope required)", details={"scope": "calls:write"})
+    if token and verify_stream_token(token, agent_id):
+        return "stream-token"
+
+    details: Dict[str, Any] = {"accepted": ["ws ticket", "otoba_session cookie", "signed stream token"]}
+    if not stream_secret_configured():
+        details["hint"] = "carrier calls need VOICE_STREAM_SECRET on the engine and the telephony servers"
+    if store is None:
+        details["platform"] = "platform store unavailable; only stream tokens can authenticate"
+    raise AuthenticationError("Voice socket requires a ws ticket, a session cookie, or a signed stream token", details=details)
+
+
+def _browser_leg_config(agent_config: dict) -> dict:
+    """Playground legs speak the browser frame protocol: run them on the default IO handlers.
+
+    Session-local only; the stored agent config is untouched. Carrier legs are unaffected.
+    """
+    config = copy.deepcopy(agent_config)
+    for task in config.get("tasks", []) or []:
+        tools_config = task.get("tools_config") or {}
+        for direction in ("input", "output"):
+            io_config = tools_config.get(direction)
+            if isinstance(io_config, dict) and io_config.get("provider") != "default":
+                logger.info("browser leg: overriding %s provider %s -> default", direction, io_config.get("provider"))
+                io_config["provider"] = "default"
+    return config
+
+
+def _forget_socket(websocket: WebSocket) -> None:
+    try:
+        active_websockets.remove(websocket)
+    except ValueError:
+        pass
+
+
+async def _record_execution(agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]) -> None:
+    """Best-effort execution log for the platform layer; never breaks the call path."""
+    from voiceai.platform.engine_hook import record_engine_execution
+
+    platform_store = getattr(app.state, "platform_store", None)
+    # The last conversation payload carries the transcript, true call timings, latency
+    # breakdown and hangup detail — without it every row lands with an empty transcript.
+    last_output = next(
+        (output for output in reversed(task_outputs) if isinstance(output, dict) and output.get("messages")),
+        None,
+    )
+    await record_engine_execution(
+        platform_store,
+        agent_id=agent_id,
+        run_id=getattr(assistant_manager, "run_id", None),
+        history=[],
+        task_outputs=task_outputs,
+        direction="inbound",
+        output=last_output,
+    )
 
 
 @app.websocket("/chat/v1/{agent_id}")
@@ -362,82 +480,54 @@ async def websocket_endpoint(
     token: Optional[str] = Query(None),
     leg: Optional[str] = Query(None),
 ):
-    logger.info("Connected to ws")
     await websocket.accept()
-    if not await _authorize_voice_socket(websocket, token):
-        await websocket.close(code=4401)
-        return
     active_websockets.append(websocket)
-    agent_config, context_data = None, None
-    try:
-        retrieved_agent_config = await redis_client.get(agent_id)
-        logger.info(f"Retrieved agent config: {retrieved_agent_config}")
-        agent_config = json.loads(retrieved_agent_config)
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    # Playground / browser legs (obotaai-ui passes ?leg=browser) speak the
-    # browser {type}-frame protocol, not Twilio-shaped telephony events. An
-    # agent configured with a telephony IO provider (talko/twilio/...) would
-    # otherwise bind telephony handlers that crash on the first {type:init}
-    # frame and stay silent. Run browser legs on the default handlers —
-    # session-local only, the stored agent config is untouched — so Talk
-    # tests the agent's brain over browser audio. Carrier legs (Talko relay,
-    # no leg param) are unaffected.
+    assistant_manager: Optional[AssistantManager] = None
+    task_outputs: List[Any] = []
+    error: Optional[VoiceAIError] = None
     is_web_leg = (leg or "").lower() == "browser"
-    if is_web_leg:
-        agent_config = copy.deepcopy(agent_config)
-        for task in agent_config.get("tasks", []) or []:
-            tools_config = task.get("tools_config") or {}
-            for direction in ("input", "output"):
-                io_config = tools_config.get(direction)
-                if isinstance(io_config, dict) and io_config.get("provider") != "default":
-                    logger.info(
-                        f"Browser leg: overriding {direction} provider "
-                        f"{io_config.get('provider')} -> default for playground test"
-                    )
-                    io_config["provider"] = "default"
-
-    assistant_manager = AssistantManager(
-        agent_config, websocket, agent_id, is_web_based_call=is_web_leg
-    )
-
-    task_outputs = []
     try:
+        auth_kind = await _authorize_voice_socket(websocket, token, agent_id)
+        agent_config = await load_agent_record(agent_id)
+        if is_web_leg:
+            agent_config = _browser_leg_config(agent_config)
+        # Stored configs may predate today's schema, so structural drift only warns here; the
+        # engine-level checks (unknown providers, pipelines naming unconfigured tools) reject
+        # the call with 4400 and a path instead of a traceback mid-call.
+        validate_agent_config(agent_config, structural=False, name=agent_id)
+        logger.info(
+            "voice socket open | agent=%s leg=%s auth=%s tasks=%d",
+            agent_id,
+            "browser" if is_web_leg else "carrier",
+            auth_kind,
+            len(agent_config.get("tasks", []) or []),
+        )
+        assistant_manager = AssistantManager(agent_config, websocket, agent_id, is_web_based_call=is_web_leg)
         async for index, task_output in assistant_manager.run(local=True):
-            logger.info(task_output)
             task_outputs.append(task_output)
+            keys = sorted(task_output.keys()) if isinstance(task_output, dict) else type(task_output).__name__
+            logger.info("task %s finished | agent=%s output_keys=%s", index, agent_id, keys)
     except WebSocketDisconnect:
-        active_websockets.remove(websocket)
-    except Exception as e:
-        traceback.print_exc()
-        logger.error(f"error in executing {e}")
+        logger.info("voice socket closed by client | agent=%s", agent_id)
+    except VoiceAIError as err:
+        error = err
+    except Exception as exc:
+        if is_cancellation(exc):
+            _forget_socket(websocket)
+            raise
+        error = classify_exception(exc, component="engine")
     finally:
-        # Best-effort execution log for the platform layer; never breaks the call path.
-        try:
-            from voiceai.platform.engine_hook import record_engine_execution
-
-            platform_store = getattr(app.state, "platform_store", None)
-            # Last conversation payload carries the transcript, true call timings,
-            # latency breakdown and hangup detail — without it every browser-leg
-            # row lands with an empty transcript and ~0s duration.
-            last_output = next(
-                (
-                    output
-                    for output in reversed(task_outputs)
-                    if isinstance(output, dict) and output.get("messages")
-                ),
-                None,
+        if error is not None:
+            level = logging.ERROR if error.http_status >= 500 else logging.WARNING
+            logger.log(
+                level,
+                "voice socket failed | agent=%s code=%s error_id=%s | %s",
+                agent_id,
+                error.code.value,
+                error.error_id,
+                error.message,
+                exc_info=error.__cause__ if level == logging.ERROR else None,
             )
-            await record_engine_execution(
-                platform_store,
-                agent_id=agent_id,
-                run_id=getattr(assistant_manager, "run_id", None),
-                history=[],
-                task_outputs=task_outputs,
-                direction="inbound",
-                output=last_output,
-            )
-        except Exception as hook_error:
-            logger.warning(f"Execution logging skipped: {hook_error}")
+            await close_with_error(websocket, error)
+        _forget_socket(websocket)
+        await call_soft(_record_execution, agent_id, assistant_manager, task_outputs, name="execution logging", logger=logger)

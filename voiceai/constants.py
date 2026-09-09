@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from typing import Optional
+
 from voiceai.enums import ReasoningEffort as RE
 
 PREPROCESS_DIR = "agent_data"
@@ -378,3 +380,22 @@ def canonical_model(name: str) -> str:
     bare = (name or "").rsplit("/", 1)[-1]
     known = [m for m in MODEL_REASONING_EFFORT_MAP if m in bare]
     return max(known, key=len) if known else bare
+
+
+# Spoken when the conversation LLM fails mid-turn. Exception text must never reach TTS: provider
+# errors carry request ids, key fragments, and stack traces. Keyed by language code; "en" is the
+# fallback for every language without its own line.
+LLM_FAILURE_SPOKEN_MESSAGE = "I'm sorry, I'm having trouble right now. Could you please say that again?"
+LLM_FAILURE_SPOKEN_MESSAGES = {
+    "en": LLM_FAILURE_SPOKEN_MESSAGE,
+    "hi": "क्षमा करें, मुझे अभी कुछ परेशानी हो रही है। क्या आप कृपया वह दोबारा कह सकते हैं?",
+    "es": "Lo siento, estoy teniendo problemas en este momento. ¿Podría repetir eso, por favor?",
+    "fr": "Je suis désolé, je rencontre un problème en ce moment. Pourriez-vous répéter, s'il vous plaît ?",
+    "de": "Es tut mir leid, ich habe gerade ein Problem. Könnten Sie das bitte noch einmal sagen?",
+}
+
+
+def llm_failure_spoken_message(language: Optional[str] = None) -> str:
+    """The safe spoken fallback for ``language`` ("hi", "hi-IN", "en_US"...); English when unknown."""
+    code = (language or "").strip().lower().replace("_", "-").split("-", 1)[0]
+    return LLM_FAILURE_SPOKEN_MESSAGES.get(code) or LLM_FAILURE_SPOKEN_MESSAGE

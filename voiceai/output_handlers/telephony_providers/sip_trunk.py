@@ -27,10 +27,8 @@ import asyncio
 import os
 import time
 import uuid
-import traceback
-import audioop
 from collections import deque
-from voiceai.output_handlers.telephony import TelephonyOutputHandler
+from voiceai.output_handlers.telephony import TelephonyOutputHandler, lin16_to_mulaw
 from voiceai.helpers.logger_config import configure_logger
 from dotenv import load_dotenv
 
@@ -213,7 +211,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
         if audio_format in ("pcm", "wav") or (len(audio_chunk) > 44 and audio_chunk[:4] == b"RIFF"):
             if audio_chunk[:4] == b"RIFF":
                 audio_chunk = audio_chunk[44:]
-            audio_chunk = audioop.lin2ulaw(audio_chunk, 2)
+            audio_chunk = lin16_to_mulaw(audio_chunk)
         return audio_chunk
 
     async def _rate_limit(self, frame_bytes: int) -> None:
@@ -252,7 +250,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
                 end = min(offset + MAX_WS_FRAME_BYTES, len(chunk))
                 if self._response_first_send == 0.0:
                     self._response_first_send = time.monotonic()
-                await self.websocket.send_bytes(chunk[offset:end])
+                await self._send_bytes(chunk[offset:end])
                 await self._rate_limit(end - offset)
                 offset = end
             return "sent"
@@ -367,7 +365,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
                 try:
                     status = await self._send_frames(payload, gen)
                 except Exception as e:
-                    logger.debug(f"sip-trunk drain send_bytes stopped: {e}")
+                    self._on_send_error(e, "drain audio frames")
                     return
                 if status == "stale":
                     self._local_audio_queue.clear()
@@ -392,11 +390,10 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
             if self._closed:
                 return
             msg = command if not params else f"{command} {' '.join(str(v) for v in params.values())}"
-            await self.websocket.send_text(msg)
+            await self._send_text(msg)
             logger.debug(f"sip-trunk sent: {command}")
         except Exception as e:
-            logger.error(f"sip-trunk send_control {command}: {e}")
-            traceback.print_exc()
+            self._on_send_error(e, f"{command} control")
 
     async def flush_media(self):
         await self._send_control("FLUSH_MEDIA")
@@ -500,7 +497,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
                         if await self._send_frames(audio_chunk, gen) == "stale":
                             return
                     except Exception as e:
-                        logger.debug(f"sip-trunk send_bytes stopped: {e}")
+                        self._on_send_error(e, "audio frames")
                         return
 
             # Ask Asterisk to echo the mark back once this chunk reaches the front of
@@ -520,8 +517,9 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
                         self._schedule_finish(gen)
 
         except Exception as e:
-            logger.error(f"sip-trunk output error: {e}")
-            traceback.print_exc()
+            # Only a dead socket closes the handler; anything else drops this packet (logged
+            # once per error type) and later audio keeps flowing.
+            self._on_send_error(e, "packet")
 
     async def send_hangup(self):
         await self._send_control("HANGUP")

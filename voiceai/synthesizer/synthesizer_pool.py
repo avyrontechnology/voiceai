@@ -1,5 +1,8 @@
 import asyncio
+
+from voiceai.errors import classify_exception, is_cancellation, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import call_soft, iteration_guard
 
 logger = configure_logger(__name__)
 
@@ -22,7 +25,21 @@ class SynthesizerPool:
     one started; a SENTINEL is pushed so the pool's generate() returns,
     letting __listen_synthesizer's outer while-loop re-enter and pick up
     the new active synth.
+
+    _run_generate RE-ENTERS generate() when it returns. A provider's generate() ends
+    (returns, not raises) as soon as its socket closes, and the single-pass version left
+    the pool's generate() blocked on an empty _output_queue for the rest of the call — the
+    agent went mute even though monitor_connection() had already redialled the socket.
     """
+
+    # generate() returning is normal mid-call (socket closed, provider ended its stream), so the
+    # re-entry backoff starts short and grows: a provider that returns instantly in a tight loop
+    # must not spin the event loop while monitor_connection() is still dialling.
+    _GENERATE_RETRY_INITIAL_S = 0.1
+    _GENERATE_RETRY_MAX_S = 2.0
+    # Consecutive *raising* passes before the forwarding task gives up. Well past any transient
+    # provider fault, so reaching it means this synth cannot produce audio at all.
+    _GENERATE_MAX_CONSECUTIVE_FAILURES = 25
 
     def __init__(self, synthesizers, active_label, multilingual_config):
         """
@@ -41,6 +58,8 @@ class SynthesizerPool:
         self._monitor_tasks = {}  # label -> monitor task
         self._multilingual_config = multilingual_config
         self._switch_lock = asyncio.Lock()
+        # Set by cleanup(): the only thing that stops _run_generate re-entering generate().
+        self._stopped = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -107,15 +126,79 @@ class SynthesizerPool:
         logger.info(f"SynthesizerPool: generate task started for active='{self.active_label}'")
 
     async def _run_generate(self, label):
-        """Iterate synth.generate() and forward results into the shared _output_queue."""
+        """Forward synth.generate() into the shared _output_queue, re-entering it when it ends.
+
+        generate() RETURNS (it does not raise) once the provider socket closes, so a single pass
+        left generate() below parked on an empty queue forever and the agent mute for the rest of
+        the call. monitor_connection() redials in the background, so re-entering picks the new
+        socket up. Only cleanup() (via _stopped), the provider ending the conversation, or
+        cancellation stops this task; a raising pass is isolated by the guard instead of ending it.
+        """
+        synth = self.synthesizers[label]
+        guard = iteration_guard(
+            f"synthesizer_pool.generate[{label}]",
+            logger=logger,
+            max_consecutive=self._GENERATE_MAX_CONSECUTIVE_FAILURES,
+            backoff_initial=self._GENERATE_RETRY_INITIAL_S,
+            backoff_max=self._GENERATE_RETRY_MAX_S,
+        )
+        backoff = self._GENERATE_RETRY_INITIAL_S
+        passes = 0
         try:
-            synth = self.synthesizers[label]
-            async for message in synth.generate():
-                self._output_queue.put_nowait(message)
+            while not self._should_stop_generating(synth):
+                forwarded = None
+                async with guard:
+                    forwarded = await self._forward_generate(synth, label)
+                passes += 1
+                if self._should_stop_generating(synth):
+                    break
+                if forwarded is None:
+                    # The pass raised: the guard already logged it and served its own backoff,
+                    # so re-enter straight away instead of compounding two waits.
+                    continue
+                if forwarded:
+                    # The pass did produce audio, so this is a fresh drop rather than a
+                    # provider that keeps returning immediately: start the backoff over.
+                    backoff = self._GENERATE_RETRY_INITIAL_S
+                logger.warning(
+                    f"SynthesizerPool: generate() for '{label}' ended after {forwarded} packet(s) "
+                    f"(pass {passes}) — re-entering in {backoff:.2f}s"
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self._GENERATE_RETRY_MAX_S)
         except asyncio.CancelledError:
             logger.info(f"SynthesizerPool: _run_generate cancelled for '{label}'")
         except Exception as e:
-            logger.error(f"SynthesizerPool: error in _run_generate for '{label}': {e}", exc_info=True)
+            # LoopFailure from the guard: every pass raised. Nothing left to retry here — the
+            # turn watchdogs in the task manager are what surface the silence to the caller.
+            logger.error(f"SynthesizerPool: _run_generate for '{label}' gave up: {summarize_exception(e)}")
+        else:
+            logger.info(f"SynthesizerPool: _run_generate finished for '{label}' after {passes} pass(es)")
+
+    def _should_stop_generating(self, synth):
+        """True once cleanup() ran or the synth itself declared the conversation over."""
+        return self._stopped or bool(getattr(synth, "conversation_ended", False))
+
+    async def _forward_generate(self, synth, label):
+        """One pass over synth.generate(); returns how many packets it forwarded."""
+        forwarded = 0
+        try:
+            async for message in synth.generate():
+                self._output_queue.put_nowait(message)
+                forwarded += 1
+        except Exception as e:
+            if is_cancellation(e):
+                raise
+            # Classify and log here rather than leaving the guard to report a bare provider
+            # exception: error_id is what ties this line to the call report, and the code says
+            # whether the failure was a dropped connection or something the retry cannot fix.
+            err = classify_exception(e, component="synthesizer", provider=getattr(synth, "provider_name", label))
+            logger.error(
+                f"SynthesizerPool: generate() for '{label}' failed after {forwarded} packet(s) "
+                f"(error_id={err.error_id} code={err.code.value}): {summarize_exception(e)}"
+            )
+            raise err from e
+        return forwarded
 
     async def generate(self):
         """Async generator that yields audio packets from the active synthesizer.
@@ -165,6 +248,19 @@ class SynthesizerPool:
                     pass
                 logger.info(f"SynthesizerPool: cancelled generate task for '{old}'")
 
+            # Quiesce the outgoing synth before the new one starts producing. Cancelling the
+            # forwarding task stops us READING it, but the provider may still be mid-turn and
+            # would keep buffering audio for a language nobody is speaking any more; the audio
+            # also outlives the switch on a socket that is kept warm as a standby. Best-effort:
+            # a provider that cannot cancel a turn must not block the switch.
+            old_synth = self.synthesizers[old]
+            if hasattr(old_synth, "handle_interruption"):
+                await call_soft(
+                    old_synth.handle_interruption,
+                    name=f"SynthesizerPool: handle_interruption on '{old}'",
+                    logger=logger,
+                )
+
             self.active_label = label
             self._gen_task = asyncio.create_task(self._run_generate(label))
             logger.info(f"SynthesizerPool: started generate task for '{label}'")
@@ -192,6 +288,10 @@ class SynthesizerPool:
 
     async def cleanup(self):
         """Clean up all synthesizers and cancel all tasks."""
+        # Before cancelling: _run_generate re-enters generate() on its own, so without this a
+        # pass that is mid-flight here would simply dial the provider again.
+        self._stopped = True
+
         # Cancel generate task
         if self._gen_task and not self._gen_task.done():
             self._gen_task.cancel()

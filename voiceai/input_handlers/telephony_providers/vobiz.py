@@ -48,7 +48,7 @@ class VobizInputHandler(TelephonyInputHandler):
             if self.stream_sid and self.websocket is not None:
                 try:
                     stop_message = {"event": "stop", "streamId": self.stream_sid}
-                    await self.websocket.send_text(json.dumps(stop_message))
+                    await self.send_control_text(json.dumps(stop_message))
                     logger.info(f"Sent vobiz stop event for stream {self.stream_sid}")
                 except Exception as stop_err:
                     logger.info(f"Could not send vobiz stop event: {stop_err}")

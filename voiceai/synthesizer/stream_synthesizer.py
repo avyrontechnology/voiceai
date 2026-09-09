@@ -23,7 +23,9 @@ from collections import deque
 import websockets
 
 from .base_synthesizer import BaseSynthesizer
+from voiceai.errors import classify_exception, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import call_soft
 from voiceai.helpers.utils import create_ws_data_packet
 
 logger = configure_logger(__name__)
@@ -231,50 +233,66 @@ class StreamSynthesizer(BaseSynthesizer):
 
     async def _generate_ws_loop(self):
         """Core WebSocket streaming loop. Rarely needs overriding."""
-        async for raw_item in self.receiver():
-            if self.connection_error:
-                raise Exception(self.connection_error)
+        try:
+            async for raw_item in self.receiver():
+                if self.connection_error:
+                    raise Exception(self.connection_error)
 
-            audio, extra_meta = self._unpack_receiver_message(raw_item)
+                audio, extra_meta = self._unpack_receiver_message(raw_item)
 
-            # Pop meta_info from the text_queue when available
-            if self.text_queue:
-                self.meta_info = self.text_queue.popleft()
-                self._compute_first_result_latency()
+                # Pop meta_info from the text_queue when available
+                if self.text_queue:
+                    self.meta_info = self.text_queue.popleft()
+                    self._compute_first_result_latency()
 
-            if self.meta_info is None:
-                self.meta_info = {}
+                if self.meta_info is None:
+                    self.meta_info = {}
 
-            self.meta_info["format"] = self._get_audio_format()
-            # Merge any extra metadata from the receiver
-            self.meta_info.update(extra_meta)
+                self.meta_info["format"] = self._get_audio_format()
+                # Merge any extra metadata from the receiver
+                self.meta_info.update(extra_meta)
 
-            # First-chunk bookkeeping
-            self._stamp_first_chunk(self.meta_info)
+                # First-chunk bookkeeping
+                self._stamp_first_chunk(self.meta_info)
 
-            if self.last_text_sent:
-                self.first_chunk_generated = False
-                self.last_text_sent = True
-
-            # End-of-stream sentinel
-            if audio == b"\x00":
-                logger.info(f"{self.provider_name}: end of stream")
-                self.meta_info["end_of_synthesizer_stream"] = True
-                # eos may pop a non-final chunk's meta; carry end_of_llm_stream so is_final_chunk fires
                 if self.last_text_sent:
-                    self.meta_info["end_of_llm_stream"] = True
-                self.first_chunk_generated = False
-                self._record_turn_latency()
-            else:
-                audio = self._process_audio_chunk(audio)
-                if audio is None:
-                    continue
+                    self.first_chunk_generated = False
+                    self.last_text_sent = True
 
-            self._stamp_mark_id(self.meta_info)
-            yield create_ws_data_packet(audio, self.meta_info)
+                # End-of-stream sentinel
+                if audio == b"\x00":
+                    logger.info(f"{self.provider_name}: end of stream")
+                    self.meta_info["end_of_synthesizer_stream"] = True
+                    # eos may pop a non-final chunk's meta; carry end_of_llm_stream so is_final_chunk fires
+                    if self.last_text_sent:
+                        self.meta_info["end_of_llm_stream"] = True
+                    self.first_chunk_generated = False
+                    self._record_turn_latency()
+                else:
+                    audio = self._process_audio_chunk(audio)
+                    if audio is None:
+                        continue
+
+                self._stamp_mark_id(self.meta_info)
+                yield create_ws_data_packet(audio, self.meta_info)
+
+        except Exception as e:
+            # Classify before generate()'s log-and-raise: a bare websockets/provider exception
+            # names neither the component that died nor the provider, and error_id is what ties
+            # this line to the failure the caller is eventually told about.
+            self._log_receiver_failure(e)
+            raise
 
         if self.connection_error:
             raise Exception(self.connection_error)
+
+    def _log_receiver_failure(self, exc):
+        """Attribute a receiver-side failure to this synthesizer with a correlation id."""
+        err = classify_exception(exc, component="synthesizer", provider=self.provider_name)
+        logger.error(
+            f"{self.provider_name}: receiver failed (error_id={err.error_id} code={err.code.value}): "
+            f"{summarize_exception(exc)}"
+        )
 
     # ------------------------------------------------------------------
     # Latency helpers
@@ -323,10 +341,22 @@ class StreamSynthesizer(BaseSynthesizer):
     async def monitor_connection(self):
         consecutive_failures = 0
 
-        while consecutive_failures < MAX_CONNECTION_FAILURES:
+        # `and not self.conversation_ended` mirrors the ElevenLabs v3 monitor: cleanup() sets that
+        # flag, and without it this loop kept redialling the provider between cleanup() and its own
+        # cancellation — a socket (and, per-connection-billed providers, a charge) leaked per call.
+        while consecutive_failures < MAX_CONNECTION_FAILURES and not self.conversation_ended:
             if not self._is_ws_connected():
                 logger.info(f"Re-establishing {self.provider_name} connection...")
                 result = await self.establish_connection()
+                if self.conversation_ended:
+                    # The call ended while we were dialling. cleanup() is already past its own
+                    # ws.close(), so publishing this socket would strand it open.
+                    if result is not None:
+                        await call_soft(
+                            result.close, name=f"{self.provider_name} discard post-cleanup socket", logger=logger
+                        )
+                    logger.info(f"{self.provider_name}: conversation ended while reconnecting, dropping new socket")
+                    break
                 if result is None:
                     consecutive_failures += 1
                     logger.warning(

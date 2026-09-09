@@ -84,7 +84,9 @@ async def test_cleanup_finishes_and_cancels_tasks_despite_dead_output_socket():
 
     await asyncio.wait_for(tm._TaskManager__cleanup_downstream_tasks(), timeout=1.0)
 
-    assert output_tool.is_closed() is True  # the dead socket was actually detected
+    # The stalled clear frame was dropped, but a timeout is transient: the handler stays open so
+    # a later turn can still speak (latching here muted the rest of the call).
+    assert output_tool.is_closed() is False
     output_task.cancel.assert_called_once()
     llm_task.cancel.assert_called_once()
     for t in synth_tasks:

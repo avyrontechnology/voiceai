@@ -1361,8 +1361,13 @@ def build_routers() -> list[APIRouter]:
 
 def create_platform_app(store: Optional[MemoryStore] = None) -> FastAPI:
     """Standalone app for tests/dev. Production mounts routers on the main server."""
+    from voiceai.responses import register_exception_handlers
+
     app = FastAPI(title="VoiceAI Platform", version="0.1.0")
     app.state.platform_store = store or MemoryStore()
     for router in build_routers():
         app.include_router(router)
+    # Every error body (VoiceAIError, HTTPException, validation, unexpected) uses the shared
+    # envelope from voiceai.responses; routes never format error JSON themselves.
+    register_exception_handlers(app)
     return app

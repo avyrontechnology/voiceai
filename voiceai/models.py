@@ -189,6 +189,10 @@ class Synthesizer(BaseModel):
 
     @model_validator(mode="before")
     def preprocess(cls, values):
+        if isinstance(values, dict):
+            # Work on a copy: callers keep the plain-JSON config they passed in (the engine
+            # stores and re-reads that shape), while the model gets typed provider_config.
+            values = dict(values)
         provider = values.get("provider")
         config = values.get("provider_config", {})
 
@@ -670,6 +674,7 @@ class S2SConfig(BaseModel):
     def preprocess(cls, values):
         if not isinstance(values, dict):
             return values
+        values = dict(values)  # never mutate the caller's config
         provider = values.get("provider")
         validate_attribute(provider, S2SProvider.all_values())
         config = values.get("provider_config") or {}

@@ -6,12 +6,12 @@ from litellm import acompletion, ContentPolicyViolationError
 from litellm.exceptions import AuthenticationError, RateLimitError, APIError, APIConnectionError
 from dotenv import load_dotenv
 
-from voiceai.constants import DEFAULT_LANGUAGE_CODE
+from voiceai.constants import DEFAULT_LANGUAGE_CODE, llm_failure_spoken_message
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
 from .llm import BaseLLM
 from .tool_call_accumulator import ToolCallAccumulator
-from .types import LLMStreamChunk, LatencyData
+from .types import LLMStreamChunk, LatencyData, redact_secrets
 from .message_models import strip_internal_keys
 from voiceai.helpers.logger_config import configure_logger
 
@@ -53,12 +53,12 @@ class LiteLLM(BaseLLM):
                 self.model_args["aws_region_name"] = kwargs["aws_region_name"]
 
         self.custom_tools = kwargs.get("api_tools", None)
-        logger.info(f"API Tools {self.custom_tools}")
         if self.custom_tools is not None:
             self.trigger_function_call = True
             self.api_params = self.custom_tools["tools_params"]
-            logger.info(f"Function dict {self.api_params}")
             self.tools = self.custom_tools["tools"]
+            # Names only: tools_params carries api_token / headers, which must never reach the logs.
+            logger.info(f"API tools configured: {list(self.api_params or {})}")
         else:
             self.trigger_function_call = False
         self.run_id = kwargs.get("run_id", None)
@@ -114,6 +114,13 @@ class LiteLLM(BaseLLM):
                 meta_info.setdefault("_non_fatal_errors", []).append(
                     {"error_type": "content_policy_violation", "error": error_message, "model": self.model}
                 )
+            # The turn still needs a terminal chunk, and the provider's text is never speech.
+            detected_lang = meta_info.get("detected_language") if isinstance(meta_info, dict) else None
+            yield LLMStreamChunk(
+                data=llm_failure_spoken_message(detected_lang or self.language),
+                end_of_stream=True,
+                latency=latency_data,
+            )
             return
         except AuthenticationError as e:
             logger.error(f"LiteLLM authentication failed: Invalid or expired API key - {e}")
@@ -181,10 +188,9 @@ class LiteLLM(BaseLLM):
                     data=api_call_payload, end_of_stream=False, latency=latency_data, is_function_call=True
                 )
 
-        if synthesize and buffer.strip():
-            yield LLMStreamChunk(data=buffer, end_of_stream=True, latency=latency_data)
-        elif not synthesize:
-            yield LLMStreamChunk(data=answer, end_of_stream=True, latency=latency_data)
+        # Exactly one terminal chunk, even when the trailing buffer is empty (a reply ending in a
+        # space): the task manager waits for end_of_stream to close the turn.
+        yield LLMStreamChunk(data=buffer if synthesize else answer, end_of_stream=True, latency=latency_data)
 
         self.started_streaming = False
 
@@ -198,7 +204,9 @@ class LiteLLM(BaseLLM):
 
         if request_json:
             model_args["response_format"] = {"type": "json_object"}
-        logger.info(f"Request to litellm {model_args}")
+        # model_args carries api_key; messages are the whole transcript and add nothing to this line.
+        loggable_args = redact_secrets({k: v for k, v in model_args.items() if k != "messages"})
+        logger.info(f"Request to litellm {loggable_args} ({len(model_args['messages'])} messages)")
         try:
             completion = await acompletion(**model_args)
             text = completion.choices[0].message.content
