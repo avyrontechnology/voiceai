@@ -248,6 +248,17 @@ python examples/text_only_assistant.py
 Expected output shape: `assistant.execute()` yields streaming dicts per task step; fields vary by configuration. Handle chunk-by-chunk.
 
 
+## Errors, responses and resilience
+
+The engine, the platform API and the telephony servers share one error contract (`voiceai/errors.py`, `voiceai/responses.py`):
+
+* every non-2xx HTTP body is `{"ok": false, "detail": "...", "error": {"code", "message", "error_id", "retryable", "component", "details"}}`; the `error_id` also appears in the server log line, and unexpected exceptions never leak internals;
+* a voice websocket that cannot start receives `{"type": "error", ...}` and is closed with a 4xxx code that mirrors the HTTP status (`4401` not authenticated, `4404` agent not found, `4400` invalid agent config with the offending path in `error.details.path`, `4502` provider failure, `4500` internal);
+* agent configs are validated before they are stored (`POST/PUT /agent`) and again before a call is built, so an unknown provider or a pipeline naming an unconfigured tool is reported with its path instead of crashing mid-call;
+* long-lived loops (watchdog, output, pools, receivers) isolate each iteration with `voiceai/helpers/resilience.py`, so a single bad packet is logged and skipped rather than muting or deafening the call.
+
+Real phone calls need the engine and the telephony servers to share `VOICE_STREAM_SECRET`: the telephony servers sign the media-stream URL and the engine verifies it (carrier legs cannot carry a login cookie). Set `TELEPHONY_API_KEY` to require `X-API-Key` on the dial endpoints and `CARRIER_VALIDATE_SIGNATURES=1` to verify Twilio/Plivo webhook signatures. See `.env.sample` and `AGENTS.md` (section 4) for the full contract.
+
 ## Using your own providers
 You can populate the `.env` file to use your own keys for providers.
 

@@ -34,6 +34,16 @@ TRUNK_TIMEOUT_S = float(os.getenv("TALKO_TRUNK_TIMEOUT_S", "20"))
 DIAL_CONCURRENCY = int(os.getenv("TALKO_DIAL_CONCURRENCY", "3"))
 
 
+def _trunk_headers() -> Dict[str, str]:
+    """The trunk's dial endpoint requires X-API-Key once TELEPHONY_API_KEY is configured there.
+
+    Read at call time (not import time) so tests and late `load_dotenv()` calls are honoured;
+    the first configured key is the one this engine presents.
+    """
+    keys = [k.strip() for k in os.getenv("TELEPHONY_API_KEY", "").split(",") if k.strip()]
+    return {"X-API-Key": keys[0]} if keys else {}
+
+
 async def dial_via_talko(
     store: MemoryStore,
     *,
@@ -63,8 +73,14 @@ async def dial_via_talko(
         body["talko_api_key"] = talko_api_key
     url = "{}/talko/call".format((trunk_url or TRUNK_URL).rstrip("/"))
     try:
+        # Only pass headers when a key is configured: keeps the call shape stable for callers
+        # (and test doubles) that predate the trunk API key.
+        request_kwargs: Dict[str, Any] = {"json": body}
+        headers = _trunk_headers()
+        if headers:
+            request_kwargs["headers"] = headers
         async with httpx.AsyncClient(timeout=TRUNK_TIMEOUT_S) as client:
-            resp = await client.post(url, json=body)
+            resp = await client.post(url, **request_kwargs)
         if resp.status_code >= 400:
             raise RuntimeError("trunk rejected dial: {}".format(resp.text[:300]))
         execution.status = ExecutionStatus.RINGING

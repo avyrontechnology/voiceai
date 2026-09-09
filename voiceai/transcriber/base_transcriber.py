@@ -24,6 +24,22 @@ class BaseTranscriber:
         self.connection_error = None
         self.is_transcript_sent_for_processing = False
 
+    def reset_connection_state(self):
+        """Re-arm this transcriber for a fresh run() after its connection died.
+
+        ``connection_on`` is set once here and every provider flips it False in toggle_connection() or on
+        error; the receiver loops then close the socket the moment they see it. Nothing restored it, so a
+        transcriber the pool re-launched (reconnect_active / switch-time revival) connected and immediately
+        self-closed, and the task manager burnt its retries ending the call. TranscriberPool calls this right
+        before every re-launch. The speech/turn gates are cleared too: a new connection has no utterance or
+        transcript in flight, and a gate left set by the dead socket would suppress the first one on it.
+        """
+        self.connection_on = True
+        self.connection_error = None
+        self.callee_speaking = False
+        self.caller_speaking = False
+        self.is_transcript_sent_for_processing = False
+
     def _upsert_turn_latency(self, entry: dict) -> None:
         """Replace existing turn_latencies entry with matching turn_id, or append if new."""
         # task_manager overwrites meta_info["turn_id"] with its own counter, so publish the ASR id separately.

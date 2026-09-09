@@ -28,7 +28,15 @@ from voiceai.llms.azure_llm import should_overflow
 from voiceai.llms.http_client_pool import get_shared_sync_http_client
 from voiceai.providers import SUPPORTED_LLM_PROVIDERS
 from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
-from voiceai.constants import GPT5_MODEL_PREFIX, LANGUAGE_NAMES, canonical_model, default_reasoning_effort
+from voiceai.constants import (
+    GPT5_MODEL_PREFIX,
+    LANGUAGE_NAMES,
+    canonical_model,
+    default_reasoning_effort,
+    llm_failure_spoken_message,
+)
+from voiceai.errors import classify_exception, summarize_exception
+from voiceai.helpers.resilience import log_ignored
 
 from typing import List, Tuple, AsyncGenerator, Optional, Dict, Any
 
@@ -534,6 +542,8 @@ class GraphAgent(BaseAgent):
         for edge in event_edges:
             if edge.get("event_name") == event_name:
                 previous_node = self.current_node_id
+                if edge["to_node_id"] != previous_node:
+                    self._invalidate_llm_response_chain()
                 self.current_node_id = edge["to_node_id"]
                 self.current_node_entry_index = 0  # caller should set to len(history)
                 self._silence_repeats = 0
@@ -750,12 +760,29 @@ class GraphAgent(BaseAgent):
         return hops
 
     def _advance_to_node(self, node_id: str, entry_index: int) -> None:
+        if node_id != self.current_node_id:
+            self._invalidate_llm_response_chain()
         self.current_node_id = node_id
         self.current_node_entry_index = entry_index
         self._silence_repeats = 0
         self._active_node_first_response_delivered = False
         if not self.node_history or self.node_history[-1] != self.current_node_id:
             self.node_history.append(self.current_node_id)
+
+    def _invalidate_llm_response_chain(self) -> None:
+        """Drop the LLM's server-side conversation chain (Responses API previous_response_id).
+
+        The node prompt is messages[0], and a chained turn resends only the items after the last
+        assistant message, so once the prompt changes (node transition, language directive) the
+        chain must go or the new prompt never reaches the model. No-op for providers without one.
+        """
+        invalidate = getattr(getattr(self, "llm", None), "invalidate_response_chain", None)
+        if not callable(invalidate):
+            return
+        try:
+            invalidate()
+        except Exception as exc:
+            log_ignored(logger, "invalidate_response_chain", exc)
 
     def mark_first_response_delivered(self) -> None:
         """Unblock routing once the active node's first customer-facing TTS turn is delivered."""
@@ -1323,6 +1350,10 @@ class GraphAgent(BaseAgent):
 
         detected_language = meta_info.get("detected_language")  # None if not yet detected
         if detected_language:
+            if self.context_data.get("detected_language") != detected_language:
+                # The language directive lives in the node prompt (messages[0]); see
+                # _invalidate_llm_response_chain for why a chained turn would otherwise miss it.
+                self._invalidate_llm_response_chain()
             self.context_data["detected_language"] = detected_language
 
         # Ahead of the try so a blocked endpoint ends the call instead of being spoken.
@@ -1492,10 +1523,27 @@ class GraphAgent(BaseAgent):
                 yield chunk
 
         except Exception as e:
-            logger.error(f"Error in generate: {e}")
+            provider = self.config.get("provider") or self.config.get("llm_provider") or "openai"
+            err = classify_exception(e, component="llm", provider=provider, model=self.llm_model)
+            logger.error(
+                f"Error in generate on node '{self.current_node_id}' "
+                f"(error_id={err.error_id} code={err.code.value}): {summarize_exception(e)}",
+                exc_info=True,
+            )
+            if isinstance(meta_info, dict):
+                meta_info.setdefault("_non_fatal_errors", []).append(
+                    {
+                        "error_type": err.code.value,
+                        "error": err.message,
+                        "error_id": err.error_id,
+                        "model": self.llm_model,
+                    }
+                )
             latency_data = LatencyData(
                 sequence_id=meta_info.get("sequence_id") if meta_info else None,
                 first_token_latency_ms=0,
                 total_stream_duration_ms=now_ms() - start_time,
             )
-            yield LLMStreamChunk(data=f"An error occurred: {str(e)}", end_of_stream=True, latency=latency_data)
+            # Never speak the exception: provider errors carry request ids and key fragments.
+            language = self.context_data.get("detected_language") or self.config.get("language")
+            yield LLMStreamChunk(data=llm_failure_spoken_message(language), end_of_stream=True, latency=latency_data)

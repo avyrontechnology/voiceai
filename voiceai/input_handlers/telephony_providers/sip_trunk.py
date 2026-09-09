@@ -157,7 +157,7 @@ class SipTrunkInputHandler(TelephonyInputHandler):
         try:
             if self.websocket and self.channel_id:
                 if hasattr(self.websocket, "client_state") and self.websocket.client_state.value == 1:
-                    await self.websocket.send_text("HANGUP")
+                    await self.send_control_text("HANGUP")
                     logger.info(f"Sent HANGUP for channel {self.channel_id}")
         except Exception as e:
             logger.error(f"Error sending HANGUP: {e}")
@@ -192,7 +192,7 @@ class SipTrunkInputHandler(TelephonyInputHandler):
 
         self._queue_drained.clear()
         try:
-            await self.websocket.send_text("REPORT_QUEUE_DRAINED")
+            await self.send_control_text("REPORT_QUEUE_DRAINED")
         except Exception as e:
             logger.info(f"REPORT_QUEUE_DRAINED not sent for channel {self.channel_id}: {e}")
             return
@@ -317,7 +317,7 @@ class SipTrunkInputHandler(TelephonyInputHandler):
                 break
             except Exception as e:
                 logger.error(f"Error in _listen: {e}")
-                traceback.print_exc()
+                logger.error("unhandled exception", exc_info=True)
                 break
 
         if buffer:

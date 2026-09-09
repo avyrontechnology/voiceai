@@ -14,7 +14,7 @@ from voiceai.helpers.utils import (
     clean_gemini_schema,
 )
 from .llm import BaseLLM
-from .types import LLMStreamChunk, LatencyData, FunctionCallPayload
+from .types import LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments
 
 logger = configure_logger(__name__)
 
@@ -124,7 +124,7 @@ class GeminiLLM(BaseLLM):
 
     def _prepare_history(self, messages):
         """Translate VoiceAI roles (OpenAI-style) to Gemini-style roles and parts."""
-        system_instruction = ""
+        system_parts: list[str] = []
         history = []
 
         for msg in messages:
@@ -133,7 +133,8 @@ class GeminiLLM(BaseLLM):
             tool_calls = msg.get("tool_calls")
 
             if role == "system":
-                system_instruction = content
+                if content:
+                    system_parts.append(content if isinstance(content, str) else str(content))
                 continue
 
             parts = []
@@ -212,6 +213,9 @@ class GeminiLLM(BaseLLM):
                 else:
                     history.append(types.Content(role="user", parts=[types.Part(text=f"Tool result: {content}")]))
 
+        # A graph agent sends several system messages (node prompt, trailing RAG context, event hint);
+        # Gemini takes one system_instruction, so join them rather than keeping only the last.
+        system_instruction = "\n\n".join(system_parts)
         return system_instruction, history
 
     def _get_thinking_config(self) -> "types.ThinkingConfig | None":
@@ -475,8 +479,8 @@ class GeminiLLM(BaseLLM):
                 tool_call_id=call_id,
                 textual_response=answer.strip() if answer else None,
             )
-            for k, v in fn_args.items():
-                setattr(payload, k, v)
+            # Reserved keys (url, api_token, ...) stay as configured; see apply_tool_arguments.
+            apply_tool_arguments(payload, fn_args, logger=logger)
 
             convert_to_request_log(
                 json.dumps(fn_args),
@@ -498,27 +502,20 @@ class GeminiLLM(BaseLLM):
 
         reasoning_content = "\n".join(accumulated_thought_parts) if accumulated_thought_parts else None
 
-        if synthesize and buffer.strip():
-            yield LLMStreamChunk(
-                data=buffer,
-                end_of_stream=True,
-                latency=latency_data,
-                reasoning_content=reasoning_content,
-                **_usage_kwargs(stream_usage),
-            )
-        elif synthesize and not buffer.strip() and not _tool_dispatched:
+        if synthesize and not buffer.strip() and not _tool_dispatched:
             logger.error(
                 "[GeminiLLM] Dead turn detected: synthesize=True, buffer empty, no tool dispatched. "
                 f"accumulated_args_keys={list(_pending_fn_args.keys())} answer={answer!r}"
             )
-        elif not synthesize:
-            yield LLMStreamChunk(
-                data=answer,
-                end_of_stream=True,
-                latency=latency_data,
-                reasoning_content=reasoning_content,
-                **_usage_kwargs(stream_usage),
-            )
+        # Exactly one terminal chunk, even when the trailing buffer is empty (a reply ending in a
+        # space): the task manager waits for end_of_stream to close the turn.
+        yield LLMStreamChunk(
+            data=buffer if synthesize else answer,
+            end_of_stream=True,
+            latency=latency_data,
+            reasoning_content=reasoning_content,
+            **_usage_kwargs(stream_usage),
+        )
 
     async def generate(self, messages, request_json=False, ret_metadata=False):
         """Non-streaming — used for voicemail detection and completion checks."""

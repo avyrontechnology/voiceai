@@ -5,9 +5,15 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+# scripts/ is git-ignored, so the seed script exists only on the machine that wrote it.
+# Skip this module cleanly there instead of aborting collection of the whole suite.
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if not (_SCRIPTS_DIR / "seed_mongo_users.py").is_file():
+    pytest.skip("scripts/seed_mongo_users.py is not present in this checkout", allow_module_level=True)
 
-from seed_mongo_users import ROSTER, build_user_doc, seed_users
+sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from seed_mongo_users import ROSTER, build_user_doc, seed_users  # noqa: E402
 
 
 def test_roster_is_admin_member_viewer_trio():

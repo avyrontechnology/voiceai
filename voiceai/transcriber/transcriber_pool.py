@@ -3,7 +3,10 @@ import os
 import time
 from typing import Awaitable, Callable, Optional
 
+from voiceai.errors import summarize_exception
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import iteration_guard, log_ignored
+from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.lid import LIDProvider
 
 logger = configure_logger(__name__)
@@ -41,6 +44,15 @@ class TranscriberPool:
     # reconnects are not gated by this — they're bounded by the number of switch
     # decisions in the call — and only bump the reconnect_count telemetry total.
     _MAX_RECONNECTS_PER_CALL = 5
+
+    # The audio router and standby keepalive isolate every iteration: one bad packet is logged
+    # and skipped instead of ending the task (which used to leave the call deaf with no
+    # transcriber_connection_closed ever pushed). Only this many CONSECUTIVE failures (~24s at
+    # the backoff below) make the router give up and report the audio path dead; the task
+    # manager then treats it like a dead active socket and reconnect_active() restarts it.
+    _ROUTER_MAX_CONSECUTIVE_FAILURES = 100
+    _ROUTER_BACKOFF_INITIAL_S = 0.01
+    _ROUTER_BACKOFF_MAX_S = 0.25
 
     # ── Legacy LID heuristic defaults (flag-off flow only) ────────────────
     # Require this many consecutive same-language detections before switching.
@@ -89,6 +101,8 @@ class TranscriberPool:
         self.active_label = active_label
         self._router_task = None
         self._keepalive_task = None
+        # Set (to the failure summary) when the audio router gave up; cleared when it is restarted.
+        self._router_failure: Optional[str] = None
         self._multilingual_config = multilingual_config
         # Serializes switch() — it has an await (reconnecting a dropped standby)
         # between reading and writing active_label, so concurrent switches (e.g.
@@ -184,7 +198,11 @@ class TranscriberPool:
         return list(self.transcribers.keys())
 
     def is_active_transcriber_alive(self):
-        """True if the active transcriber's connection task is still running."""
+        """True if the active transcriber's connection task is still running and audio can reach it."""
+        if self._router_failure is not None:
+            # The transcriber itself may be healthy, but nothing feeds it: from the task manager's
+            # point of view the active path is dead, and reconnect_active() is what restarts the router.
+            return False
         active = self.transcribers[self.active_label]
         task = getattr(active, "transcription_task", None)
         return task is not None and not task.done()
@@ -200,6 +218,7 @@ class TranscriberPool:
         """Start all transcribers, the audio router, standby keepalive, and LID tap."""
         for label, transcriber in self.transcribers.items():
             logger.info(f"TranscriberPool: starting transcriber '{label}'")
+            self._arm_for_run(transcriber)
             await transcriber.run()
 
         self._router_task = asyncio.create_task(self._audio_router())
@@ -218,31 +237,91 @@ class TranscriberPool:
         # linear16 and anything else: zeros
         return b"\x00" * 320
 
+    @staticmethod
+    def _arm_for_run(transcriber):
+        """Re-arm a transcriber before (re-)launching run() so it does not connect and self-close.
+
+        Providers flip ``connection_on`` False in toggle_connection()/on error and their receiver
+        loops close the socket the moment they see it; nothing ever set it back, so every
+        reconnect_active()/switch-time revival of a transcriber that had failed once died
+        instantly and the task manager burnt its retries ending the call.
+        """
+        reset = getattr(transcriber, "reset_connection_state", None)
+        if callable(reset):
+            reset()
+
+    def _loop_guard(self, name):
+        return iteration_guard(
+            name,
+            logger=logger,
+            max_consecutive=self._ROUTER_MAX_CONSECUTIVE_FAILURES,
+            backoff_initial=self._ROUTER_BACKOFF_INITIAL_S,
+            backoff_max=self._ROUTER_BACKOFF_MAX_S,
+        )
+
     async def _audio_router(self):
-        """Read from the shared input queue, forward to active transcriber, and feed LID tap."""
+        """Read from the shared input queue, forward to active transcriber, and feed LID tap.
+
+        Each packet is isolated by iteration_guard: a bad one is logged and skipped. If the
+        guard gives up (consecutive failures), the dead audio path is announced the same way a
+        transcriber announces a dead socket so the task manager reacts instead of going deaf.
+        """
+        guard = self._loop_guard("transcriber_pool.audio_router")
         try:
             while True:
-                packet = await self.shared_input_queue.get()
-                meta = packet.get("meta_info") if isinstance(packet, dict) else None
-                if meta and meta.get("eos") is True:
-                    self.call_ended = True
-                    logger.info("TranscriberPool: eos received — call ended, reconnects disabled")
-                active = self.active_label
-                self.transcribers[active].input_queue.put_nowait(packet)
-
-                # Feed raw audio to LID tap (if running)
-                if self._lid is not None:
-                    audio_data = packet.get("data") if isinstance(packet, dict) else None
-                    if audio_data and isinstance(audio_data, bytes):
-                        try:
-                            self._lid.feed(audio_data)
-                        except Exception as e:
-                            # Was debug: a feed raising every chunk silently killed switching.
-                            if not self._lid_feed_error_logged:
-                                self._lid_feed_error_logged = True
-                                logger.warning(f"TranscriberPool: LID feed error: {e}")
+                async with guard:
+                    packet = await self.shared_input_queue.get()
+                    self._route_packet(packet)
         except asyncio.CancelledError:
             logger.info("TranscriberPool: audio router cancelled")
+        except Exception as e:  # LoopFailure: the guard escalated after too many consecutive failures
+            logger.error(f"TranscriberPool: audio router stopped: {summarize_exception(e)}")
+            await self._report_router_failure(e)
+
+    def _route_packet(self, packet):
+        meta = packet.get("meta_info") if isinstance(packet, dict) else None
+        if meta and meta.get("eos") is True:
+            self.call_ended = True
+            logger.info("TranscriberPool: eos received — call ended, reconnects disabled")
+        active = self.active_label
+        self.transcribers[active].input_queue.put_nowait(packet)
+
+        # Feed raw audio to LID tap (if running)
+        if self._lid is not None:
+            audio_data = packet.get("data") if isinstance(packet, dict) else None
+            if audio_data and isinstance(audio_data, bytes):
+                try:
+                    self._lid.feed(audio_data)
+                except Exception as e:
+                    # Was debug: a feed raising every chunk silently killed switching.
+                    if not self._lid_feed_error_logged:
+                        self._lid_feed_error_logged = True
+                        logger.warning(f"TranscriberPool: LID feed error: {e}")
+
+    async def _report_router_failure(self, failure):
+        """Announce the dead audio path with the packet a transcriber pushes when its socket closes.
+
+        The task manager only reacts to transcriber_connection_closed. While the router is down,
+        is_active_transcriber_alive() reports False so that reaction is reconnect_active() (which
+        restarts the router) rather than "standby closed, continuing".
+        """
+        self._router_failure = summarize_exception(failure)
+        active = self.transcribers.get(self.active_label)
+        meta = dict(getattr(active, "meta_info", None) or {})
+        meta["connection_error"] = f"audio router failed: {self._router_failure}"
+        try:
+            await self.output_queue.put(create_ws_data_packet("transcriber_connection_closed", meta))
+        except Exception as e:
+            log_ignored(logger, "TranscriberPool: report router failure", e)
+
+    def _restart_router_if_failed(self):
+        """Relaunch the audio router after it gave up; the transcriber it feeds may be perfectly healthy."""
+        if self._router_failure is None:
+            return False
+        logger.warning(f"TranscriberPool: restarting audio router after: {self._router_failure}")
+        self._router_failure = None
+        self._router_task = asyncio.create_task(self._audio_router())
+        return True
 
     async def _standby_keepalive(self):
         """Periodically send silence frames to standby transcribers.
@@ -253,29 +332,37 @@ class TranscriberPool:
         is instant.  The silence produces empty transcripts that are filtered
         out by each transcriber's receiver (e.g. ``if transcript.strip()``).
         """
+        guard = self._loop_guard("transcriber_pool.standby_keepalive")
         try:
             while True:
-                for label, transcriber in self.transcribers.items():
-                    if label == self.active_label:
-                        continue
-                    # Skip if this transcriber's connection already dropped —
-                    # reconnect-on-demand in switch() handles that case.
-                    task = getattr(transcriber, "transcription_task", None)
-                    if task is not None and task.done():
-                        continue
-                    encoding = getattr(transcriber, "encoding", "linear16")
-                    silence = self._silence_frame(encoding)
-                    transcriber.input_queue.put_nowait(
-                        {
-                            "data": silence,
-                            "meta_info": {},
-                        }
-                    )
+                async with guard:
+                    self._send_standby_keepalives()
                 # Sleep AFTER sending so the first keepalive round goes out
                 # immediately at pool start, not _KEEPALIVE_INTERVAL later.
                 await asyncio.sleep(self._KEEPALIVE_INTERVAL)
         except asyncio.CancelledError:
             logger.info("TranscriberPool: standby keepalive cancelled")
+        except Exception as e:
+            # Standbys are reconnected on demand by switch(), so a dead keepalive only costs a
+            # reconnect at the next switch — no need to end the call over it.
+            logger.error(f"TranscriberPool: standby keepalive stopped: {summarize_exception(e)}")
+
+    def _send_standby_keepalives(self):
+        for label, transcriber in self.transcribers.items():
+            if label == self.active_label:
+                continue
+            # Skip if this transcriber's connection already dropped —
+            # reconnect-on-demand in switch() handles that case.
+            task = getattr(transcriber, "transcription_task", None)
+            if task is not None and task.done():
+                continue
+            encoding = getattr(transcriber, "encoding", "linear16")
+            silence = self._silence_frame(encoding)
+            try:
+                transcriber.input_queue.put_nowait({"data": silence, "meta_info": {}})
+            except Exception as e:
+                # One broken standby must not starve the others of keepalives.
+                log_ignored(logger, f"TranscriberPool: keepalive to '{label}'", e)
 
     async def _start_lid_tap(self) -> None:
         """Instantiate and connect the configured LID provider."""
@@ -519,7 +606,15 @@ class TranscriberPool:
                 return False
             active = self.transcribers[self.active_label]
             try:
-                await active.run()
+                self._restart_router_if_failed()
+                task = getattr(active, "transcription_task", None)
+                if task is not None and not task.done():
+                    # Only the router had died: the socket is still up, and a second run() would put
+                    # two receivers on it.
+                    logger.info(f"TranscriberPool: active '{self.active_label}' still connected, not re-run")
+                else:
+                    self._arm_for_run(active)
+                    await active.run()
             except Exception as e:
                 logger.error(f"TranscriberPool: reconnect of active '{self.active_label}' failed: {e}")
                 return False
@@ -563,6 +658,7 @@ class TranscriberPool:
             transcription_task = getattr(target, "transcription_task", None)
             if transcription_task is not None and transcription_task.done() and not self.call_ended:
                 logger.info(f"TranscriberPool: transcriber '{label}' connection dropped, reconnecting")
+                self._arm_for_run(target)
                 await target.run()
                 self.reconnect_count += 1
 

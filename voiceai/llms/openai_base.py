@@ -5,7 +5,7 @@ from typing import Optional
 
 from openai import BadRequestError, APIError
 
-from voiceai.constants import GPT5_MODEL_PREFIX
+from voiceai.constants import GPT5_MODEL_PREFIX, MODEL_REASONING_EFFORT_MAP, canonical_model
 from voiceai.enums import ChatRole, ResponseStreamEvent, ResponseItemType, LogComponent, LogDirection
 from voiceai.helpers.utils import (
     convert_to_request_log,
@@ -14,11 +14,34 @@ from voiceai.helpers.utils import (
     SERVER_OWNED_CALL_IDENTIFIERS,
 )
 from .llm import BaseLLM
-from .message_models import MessageFormatAdapter
-from .types import APIParams, LLMStreamChunk, LatencyData, FunctionCallPayload
+from .message_models import MessageFormatAdapter, strip_internal_keys
+from .types import APIParams, LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments, redact_secrets
 from voiceai.helpers.logger_config import configure_logger
 
 logger = configure_logger(__name__)
+
+# Chat-completions models that reject response_format={"type": "json_object"}: the pre-1106 snapshots
+# and the first o1 previews. Every other model gets JSON mode when a caller asks for it.
+JSON_MODE_UNSUPPORTED_MODELS = frozenset(
+    {
+        "gpt-4",
+        "gpt-4-0314",
+        "gpt-4-0613",
+        "gpt-4-32k",
+        "gpt-4-32k-0314",
+        "gpt-4-32k-0613",
+        "gpt-3.5-turbo-0301",
+        "gpt-3.5-turbo-0613",
+        "gpt-3.5-turbo-16k",
+        "gpt-3.5-turbo-16k-0613",
+        "o1-preview",
+        "o1-preview-2024-09-12",
+        "o1-mini",
+        "o1-mini-2024-09-12",
+    }
+)
+# o1 / o3 / o4-mini ...: reasoning models outside the gpt-5 naming scheme.
+_O_SERIES_MODEL_PATTERN = re.compile(r"^o\d")
 
 
 def _clean_rescue_answer(answer: str) -> str | None:
@@ -247,6 +270,8 @@ class OpenAICompatibleLLM(BaseLLM):
         # Mirror ToolCallAccumulator.build_api_payload: validate required keys against the tool spec
         try:
             parsed_args = json.loads(args_str)
+            if not isinstance(parsed_args, dict):
+                raise ValueError("tool arguments must be a JSON object")
             if tool_spec and tool_spec["function"].get("parameters") is not None:
                 required_keys = tool_spec["function"]["parameters"].get("required", [])
                 missing = [k for k in required_keys if k not in parsed_args]
@@ -258,8 +283,7 @@ class OpenAICompatibleLLM(BaseLLM):
                     return LLMStreamChunk(
                         data=api_call_payload, end_of_stream=False, latency=latency_data, is_function_call=True
                     )
-            for k, v in parsed_args.items():
-                setattr(api_call_payload, k, v)
+            apply_tool_arguments(api_call_payload, parsed_args, logger=logger)
             logger.info(f"Text tool call rescue succeeded: {func_name}")
         except Exception as e:
             logger.error(f"Text tool call rescue: failed to apply args for {func_name}: {e}")
@@ -365,6 +389,50 @@ class OpenAICompatibleLLM(BaseLLM):
         self._pending_call_ids = set()
         self._interruption_hint = None
 
+    def is_reasoning_model(self) -> bool:
+        """gpt-5 family, o-series, or anything in MODEL_REASONING_EFFORT_MAP.
+
+        Chat completions reject every temperature but the default for these models; they take
+        reasoning_effort instead. Reads the model family, so an Azure deployment name resolves too.
+        """
+        family = canonical_model(self.model_family)
+        return (
+            family.startswith(GPT5_MODEL_PREFIX)
+            or family in MODEL_REASONING_EFFORT_MAP
+            or bool(_O_SERIES_MODEL_PATTERN.match(family))
+        )
+
+    def get_response_format(self, is_json_format: bool) -> dict:
+        """Chat-completions response_format: JSON mode on every model that supports it.
+
+        This used to be an allow-list of four legacy names, so the hangup, voicemail and extraction
+        checks silently ran without JSON mode on every newer model.
+        """
+        if is_json_format and self.model_family not in JSON_MODE_UNSUPPORTED_MODELS:
+            return {"type": "json_object"}
+        return {"type": "text"}
+
+    def _build_aux_chat_kwargs(self, messages, request_json: bool = False) -> dict:
+        """Kwargs for the non-streaming chat call behind the hangup, voicemail and extraction checks.
+
+        Shared by the OpenAI and Azure subclasses so both apply the same rules: temperature is pinned
+        to 0.0 for deterministic checks but omitted for reasoning models, which reject it and get the
+        configured reasoning_effort instead; bookkeeping keys never reach the wire.
+        """
+        kwargs = {
+            "model": self.model,
+            "messages": strip_internal_keys(messages),
+            "stream": False,
+            "response_format": self.get_response_format(request_json),
+        }
+        if self.is_reasoning_model():
+            reasoning_effort = (getattr(self, "model_args", None) or {}).get("reasoning_effort")
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
+        else:
+            kwargs["temperature"] = 0.0
+        return kwargs
+
     def _build_function_call_chunk(
         self,
         func_call_args,
@@ -390,7 +458,7 @@ class OpenAICompatibleLLM(BaseLLM):
             return None
 
         func_conf = APIParams.model_validate(self.api_params[func_name])
-        logger.info(f"Payload to send {arguments_str} func_dict {func_conf}")
+        logger.info(f"Payload to send {arguments_str} func_dict {redact_secrets(func_conf)}")
 
         api_call_payload = FunctionCallPayload(
             url=func_conf.url,
@@ -418,7 +486,11 @@ class OpenAICompatibleLLM(BaseLLM):
             try:
                 parsed_args = json.loads(arguments_str)
                 required_keys = tool_spec.get("parameters", {}).get("required", [])
-                if tool_spec.get("parameters") is not None and all(k in parsed_args for k in required_keys):
+                if (
+                    isinstance(parsed_args, dict)
+                    and tool_spec.get("parameters") is not None
+                    and all(k in parsed_args for k in required_keys)
+                ):
                     convert_to_request_log(
                         arguments_str,
                         meta_info,
@@ -428,8 +500,8 @@ class OpenAICompatibleLLM(BaseLLM):
                         is_cached=False,
                         run_id=self.run_id,
                     )
-                    for k, v in parsed_args.items():
-                        setattr(api_call_payload, k, v)
+                    # Reserved keys (url, api_token, ...) stay as configured; see apply_tool_arguments.
+                    apply_tool_arguments(api_call_payload, parsed_args, logger=logger)
                 else:
                     api_call_payload.resp = None
             except (json.JSONDecodeError, KeyError) as e:

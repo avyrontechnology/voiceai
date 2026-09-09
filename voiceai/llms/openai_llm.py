@@ -153,12 +153,12 @@ class OpenAiLLM(OpenAICompatibleLLM):
 
         self.custom_tools = kwargs.get("api_tools", None)
         self.language = language
-        logger.info(f"API Tools {self.custom_tools}")
         if self.custom_tools is not None:
             self.trigger_function_call = True
             self.api_params = self.custom_tools["tools_params"]
-            logger.info(f"Function dict {self.api_params}")
             self.tools = self.custom_tools["tools"]
+            # Names only: tools_params carries api_token / headers, which must never reach the logs.
+            logger.info(f"API tools configured: {list(self.api_params or {})}")
         else:
             self.trigger_function_call = False
 
@@ -465,16 +465,9 @@ class OpenAiLLM(OpenAICompatibleLLM):
         return await self._generate_chat(messages, request_json, ret_metadata)
 
     async def _generate_chat(self, messages, request_json=False, ret_metadata=False):
-        response_format = self.get_response_format(request_json)
-
         try:
             completion = await self.async_client.chat.completions.create(
-                model=self.model,
-                temperature=0.0,
-                # Same guarantee as the streaming path: bookkeeping keys never reach the wire.
-                messages=strip_internal_keys(messages),
-                stream=False,
-                response_format=response_format,
+                **self._build_aux_chat_kwargs(messages, request_json)
             )
             res = completion.choices[0].message.content
             if ret_metadata:
@@ -515,12 +508,6 @@ class OpenAiLLM(OpenAICompatibleLLM):
         except Exception as e:
             logger.error(f"OpenAI unexpected error: {e}")
             raise
-
-    def get_response_format(self, is_json_format: bool):
-        if is_json_format and self.model in ("gpt-4-1106-preview", "gpt-3.5-turbo-1106", "gpt-4o-mini", "gpt-4.1-mini"):
-            return {"type": "json_object"}
-        else:
-            return {"type": "text"}
 
     async def _retry_full_history(self, messages, synthesize, request_json, meta_info, tool_choice, tools):
         """Drop the chain and re-run the turn on full history (single home for both WS retries)."""

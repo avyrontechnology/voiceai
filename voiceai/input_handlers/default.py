@@ -7,11 +7,21 @@ from starlette.websockets import WebSocketDisconnect
 
 from dotenv import load_dotenv
 from voiceai.constants import IS_USER_ONLINE_MESSAGE
+from voiceai.errors import summarize_exception
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import LoopFailure, iteration_guard
 from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.output_handlers.socket_errors import is_socket_closed_error
 
 logger = configure_logger(__name__)
 load_dotenv()
+
+# A flood of unknown frames is logged in full for the first few and then only every Nth.
+_IGNORED_FRAME_LOG_EVERY = 50
+
+
+class _ReceiverClosed(Exception):
+    """The socket itself is gone; raised inside the guarded loop so only that ends it."""
 
 
 class DefaultInputHandler:
@@ -62,6 +72,7 @@ class DefaultInputHandler:
         # agent_end_ms in user_bot_latencies.
         self.last_final_chunk_sequence_id: Optional[int] = None
         self.last_final_chunk_played_ts: Optional[float] = None
+        self._ignored_frame_count = 0
 
     def get_calculated_plivo_latency(self):
         return self.calculated_plivo_latency
@@ -256,30 +267,72 @@ class DefaultInputHandler:
             ws_data_packet["meta_info"]["bypass_synth"] = True
         self.queues["llm"].put_nowait(ws_data_packet)
 
+    def _note_ignored_frame(self, what, detail=""):
+        """Log an ignored frame: the first few in full, then one line per _IGNORED_FRAME_LOG_EVERY."""
+        self._ignored_frame_count = getattr(self, "_ignored_frame_count", 0) + 1
+        count = self._ignored_frame_count
+        if count <= 3 or count % _IGNORED_FRAME_LOG_EVERY == 1:
+            logger.warning("%s receiver ignoring %s #%d %s", self.io_provider, what, count, detail)
+        else:
+            logger.debug("%s receiver ignoring %s #%d", self.io_provider, what, count)
+
+    async def _receive(self):
+        """One inbound message. Only a dead socket raises out of here as a disconnect."""
+        if self.queue is not None:
+            logger.info(f"self.queue is not None and hence listening to the queue")
+            return await self.queue.get()
+        try:
+            return await self.websocket.receive_json()
+        except WebSocketDisconnect:
+            raise
+        except Exception as e:
+            if is_socket_closed_error(e):
+                raise _ReceiverClosed(summarize_exception(e)) from e
+            # Malformed frame (bad JSON, a binary frame on a text receive): the guard logs it
+            # and the loop moves on to the next frame.
+            raise
+
+    def _push_end_of_stream(self):
+        # Send EOS message to transcriber to shut the connection
+        ws_data_packet = create_ws_data_packet(data=None, meta_info={"io": "default", "eos": True})
+        try:
+            self.queues["transcriber"].put_nowait(ws_data_packet)
+        except Exception as e:
+            logger.warning(f"{self.io_provider} receiver could not push end-of-stream: {e}")
+
     async def _listen(self):
+        # One malformed frame used to end this loop, and with it the call's input. Now a
+        # frame that fails to parse or process is logged (with an error id) and skipped;
+        # only a real disconnect ends the loop, and 50 consecutive failures escalate.
+        guard = iteration_guard(
+            "browser_input", logger=logger, max_consecutive=50, propagate=(WebSocketDisconnect, _ReceiverClosed)
+        )
+        stream_ended = False
         try:
             while self.running:
-                if self.queue is not None:
-                    logger.info(f"self.queue is not None and hence listening to the queue")
-                    request = await self.queue.get()
-                else:
-                    request = await self.websocket.receive_json()
-                await self.process_message(request)
+                async with guard:
+                    request = await self._receive()
+                    await self.process_message(request)
 
         except WebSocketDisconnect as e:
-            ws_data_packet = create_ws_data_packet(data=None, meta_info={"io": "default", "eos": True})
-            await self.queues["transcriber"].put(ws_data_packet)
-            self.running = False
+            logger.info(f"{self.io_provider} websocket disconnected: code={getattr(e, 'code', None)}")
+            stream_ended = True
+
+        except _ReceiverClosed as e:
+            logger.info(f"{self.io_provider} receiver socket closed, ending listen: {e}")
+            stream_ended = True
+
+        except LoopFailure as e:
+            logger.error(f"{self.io_provider} receiver giving up: {e}")
+            stream_ended = True
 
         except Exception as e:
-            # Send EOS message to transcriber to shut the connection
-            ws_data_packet = create_ws_data_packet(data=None, meta_info={"io": "default", "eos": True})
-            import traceback
+            logger.error(f"Error while handling websocket message: {summarize_exception(e)}", exc_info=True)
+            stream_ended = True
 
-            traceback.print_exc()
-            self.queues["transcriber"].put_nowait(ws_data_packet)
-            logger.info(f"Error while handling websocket message: {e}")
-            return
+        if stream_ended:
+            self._push_end_of_stream()
+            self.running = False
 
     async def process_message(self, message):
         # TODO check what condition needs to be added over here
@@ -287,23 +340,38 @@ class DefaultInputHandler:
         #     logger.info(f"straight away returning")
         #     return {"message": "invalid input type"}
 
-        if message["type"] == "audio":
+        if not isinstance(message, dict):
+            self._note_ignored_frame("non-object frame", type(message).__name__)
+            return {"message": "invalid frame"}
+        message_type = message.get("type")
+
+        if message_type == "audio":
+            if not message.get("data"):
+                self._note_ignored_frame("audio frame without data")
+                return
             self.__process_audio(message["data"])
 
-        elif message["type"] == "text":
+        elif message_type == "text":
+            if message.get("data") is None:
+                self._note_ignored_frame("text frame without data")
+                return
             logger.info(f"Received text: {message['data']}")
             self.__process_text(message["data"])
 
-        elif message["type"] == "mark":
+        elif message_type == "mark":
             logger.info(f"Received mark event")
+            if message.get("name") is None:
+                self._note_ignored_frame("mark frame without a name")
+                return
             self.__process_mark_event(message)
 
-        elif message["type"] == "init":
+        elif message_type == "init":
             logger.info(f"Received init event")
             if self.observable_variables.get("init_event_observable") is not None:
                 self.observable_variables.get("init_event_observable").value = message.get("meta_data", None)
 
         else:
+            self._note_ignored_frame("frame with unknown type", f"type={message_type!r} keys={list(message)[:8]}")
             return {"message": "Other modalities not implemented yet"}
 
     async def handle(self):

@@ -9,7 +9,6 @@ import re
 import copy
 import hashlib
 import os
-import traceback
 import io
 import wave
 import numpy as np
@@ -474,36 +473,36 @@ def update_prompt_with_context(prompt, context_data):
 
 
 async def get_prompt_responses(assistant_id, local=False):
-    filepath = f"{PREPROCESS_DIR}/{assistant_id}/conversation_details.json"
-    data = {}
+    """Stored prompts for ``assistant_id`` as a dict, or ``{}`` when there are none.
+
+    Always a dict: callers (``TaskManager.load_prompt``, the prompts endpoint) call ``.get()``
+    on the result mid-call, and a ``None``/``str`` sentinel has dropped an inbound call before.
+    A missing or unreadable prompts file is not exceptional (fresh record, wiped ephemeral
+    disk), so it degrades to empty prompts at warning level rather than error.
+    """
     if local:
-        logger.info("Loading up the conversation details from the local file")
+        source = f"{PREPROCESS_DIR}/{assistant_id}/conversation_details.json"
+        logger.info(f"Loading up the conversation details from the local file {source}")
         try:
-            with open(filepath, "r") as json_file:
+            with open(source, "r") as json_file:
                 data = json.load(json_file)
         except Exception as e:
-            # Missing/unreadable prompts must degrade to empty prompts, not a
-            # str/None that crashes callers doing `prompt_responses.get(...)`
-            # mid-call (observed: inbound AI call dropped after WS accept).
-            # Missing/unreadable file is not exceptional (fresh record, wiped
-            # ephemeral disk): callers treat None as "no stored prompts".
-            # Never return a non-dict sentinel — load_prompt calls .get() on this.
-            logger.error(f"Could not load up the dataset {e}; using empty prompts")
-            data = None
+            logger.warning(f"Could not load prompts from {source} ({e}); using empty prompts")
+            return {}
     else:
         key = f"{assistant_id}/conversation_details.json"
+        source = f"s3://{BUCKET_NAME}/{key}"
         logger.info(f"Loading up the conversation details from the s3 file BUCKET_NAME {BUCKET_NAME} {key}")
         try:
             response = await get_s3_file(BUCKET_NAME, key)
-            file_content = response.decode("utf-8")
-            json_content = json.loads(file_content)
-            return json_content
-
+            data = json.loads(response.decode("utf-8"))
         except Exception as e:
-            traceback.print_exc()
-            print(f"An error occurred: {e}")
-            return None
+            logger.warning(f"Could not load prompts from {source} ({e}); using empty prompts")
+            return {}
 
+    if not isinstance(data, dict):
+        logger.warning(f"Prompts at {source} are a {type(data).__name__}, not an object; using empty prompts")
+        return {}
     return data
 
 

@@ -1,23 +1,38 @@
-class VoiceAIComponentError(Exception):
-    """Base exception that carries component context for error attribution."""
+"""Backwards-compatible facade over :mod:`voiceai.errors`.
 
-    def __init__(self, message, component, provider=None, model=None):
-        self.component = component
-        self.provider = provider
-        self.model = model
-        super().__init__(message)
+New code should import from ``voiceai.errors``. The names below keep their historical
+constructor signatures so existing providers, the task manager, and tests keep working:
 
+    VoiceAIComponentError(message, component, provider=None, model=None)
+    LLMError(message, provider=None, model=None)
+    SynthesizerError(message, provider=None, model=None)
+    TranscriberError(message, provider=None, model=None)
+"""
 
-class LLMError(VoiceAIComponentError):
-    def __init__(self, message, provider=None, model=None):
-        super().__init__(message, component="llm", provider=provider, model=model)
+from voiceai.errors import (  # noqa: F401
+    ErrorCode,
+    LLMError,
+    ProviderError,
+    S2SError,
+    SynthesizerError,
+    TelephonyError,
+    ToolCallError,
+    TranscriberError,
+    VoiceAIError,
+)
 
+# Historical name for "a component failed": every provider error is one.
+VoiceAIComponentError = ProviderError
 
-class SynthesizerError(VoiceAIComponentError):
-    def __init__(self, message, provider=None, model=None):
-        super().__init__(message, component="synthesizer", provider=provider, model=model)
-
-
-class TranscriberError(VoiceAIComponentError):
-    def __init__(self, message, provider=None, model=None):
-        super().__init__(message, component="transcriber", provider=provider, model=model)
+__all__ = [
+    "ErrorCode",
+    "VoiceAIError",
+    "VoiceAIComponentError",
+    "ProviderError",
+    "LLMError",
+    "SynthesizerError",
+    "TranscriberError",
+    "TelephonyError",
+    "S2SError",
+    "ToolCallError",
+]

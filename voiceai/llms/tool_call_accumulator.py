@@ -2,7 +2,7 @@ import json
 from voiceai.constants import END_CALL_FUNCTION_PREFIX
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message
 from voiceai.helpers.logger_config import configure_logger
-from .types import FunctionCallPayload
+from .types import FunctionCallPayload, apply_tool_arguments, redact_secrets
 
 logger = configure_logger(__name__)
 
@@ -75,7 +75,7 @@ class ToolCallAccumulator:
         func_conf = self.api_params[first_func_name]
         arguments_received = self.final_tool_calls[0]["function"]["arguments"]
 
-        logger.info(f"Payload to send {arguments_received} func_dict {func_conf}")
+        logger.info(f"Payload to send {arguments_received} func_dict {redact_secrets(func_conf)}")
         self._gave_pre_call_msg = False
 
         method = func_conf.get("method")
@@ -103,7 +103,11 @@ class ToolCallAccumulator:
         try:
             parsed_args = json.loads(arguments_received)
             required_keys = tool_spec["function"].get("parameters", {}).get("required", [])
-            if tool_spec["function"].get("parameters") is not None and all(k in parsed_args for k in required_keys):
+            if (
+                isinstance(parsed_args, dict)
+                and tool_spec["function"].get("parameters") is not None
+                and all(k in parsed_args for k in required_keys)
+            ):
                 convert_to_request_log(
                     arguments_received,
                     meta_info,
@@ -113,8 +117,8 @@ class ToolCallAccumulator:
                     is_cached=False,
                     run_id=self.run_id,
                 )
-                for k, v in parsed_args.items():
-                    setattr(api_call_payload, k, v)
+                # Reserved keys (url, api_token, ...) stay as configured; see apply_tool_arguments.
+                apply_tool_arguments(api_call_payload, parsed_args, logger=logger)
             else:
                 api_call_payload.resp = None
         except (json.JSONDecodeError, KeyError) as e:

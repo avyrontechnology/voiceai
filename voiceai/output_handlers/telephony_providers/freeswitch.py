@@ -6,6 +6,7 @@ import time
 import uuid
 
 from voiceai.output_handlers.default import DefaultOutputHandler
+from voiceai.output_handlers.socket_errors import is_socket_closed_error
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.utils import wav_bytes_to_pcm
 
@@ -23,6 +24,8 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
       barge-in → {"type":"killAudio"}   (flushes the module's playout buffer)
     mod_audio_stream does NOT echo playback marks (like Asterisk), so playback-completion is
     simulated by audio duration and fed back via input_handler.process_mark_message."""
+
+    error_component = "telephony"
 
     def __init__(self, *args, sampling_rate=24000, input_handler=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -96,8 +99,17 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
     def is_closed_socket_error(e) -> bool:
         # starlette raises a bare RuntimeError('Cannot call "send" once a close message has
         # been sent.') — builtins module, text has "close" not "closed"/"disconnect".
+        if is_socket_closed_error(e):
+            return True
         text = str(e).lower()
         return "websocket" in type(e).__module__ or "close" in text or "disconnect" in text
+
+    def _is_socket_closed_error(self, exc):
+        return self.is_closed_socket_error(exc)
+
+    def _mark_socket_closed(self, exc, what):
+        logger.info(f"freeswitch ws send failed during {what} (client disconnected): {exc}")
+        self.mark_closed()
 
     def mark_closed(self):
         """Latch closed AND release turn-taking state — if the socket dies on the final chunk
@@ -117,10 +129,11 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
         if self._closed:
             return
         try:
-            await self.websocket.send_text(json.dumps({"type": "killAudio"}))
+            await self._send_text(json.dumps({"type": "killAudio"}))
         except Exception as e:
-            logger.info(f"freeswitch: ws closed during interruption: {e}")
-            self._closed = True
+            # a dead socket latches closed (and releases turn-taking state); a send timeout or
+            # any other failure keeps the handler open so the next reply can still play
+            self._on_send_error(e, "interruption killAudio")
         if self._finish_task and not self._finish_task.done():
             self._finish_task.cancel()
         self._pending_marks = []
@@ -185,7 +198,7 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
                 for i in range(0, len(audio), STREAM_CHUNK_BYTES):
                     chunk = audio[i : i + STREAM_CHUNK_BYTES]
                     b64 = base64.b64encode(chunk).decode("utf-8")
-                    await self.websocket.send_text(
+                    await self._send_text(
                         json.dumps(
                             {
                                 "type": "streamAudio",
@@ -223,7 +236,7 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
                 )
             self._pending_marks.append(mark_id)
             # in-band mark after the chunk's frames (ordered WS); an unpatched module ignores the type
-            await self.websocket.send_text(json.dumps({"type": "mark", "name": mark_id}))
+            await self._send_text(json.dumps({"type": "mark", "name": mark_id}))
 
             # on the final chunk, arm completion: final-mark echo wins, estimated timer is the fallback
             if is_final:
@@ -243,10 +256,6 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
                 self._finish_marks = list(marks)
                 self._finish_task = asyncio.create_task(self._complete_after_playout(remaining, marks))
         except Exception as e:
-            # only a dead websocket should silence the handler permanently; anything else
-            # (e.g. a bad chunk) must be loud and must not kill the rest of the call's audio.
-            if self.is_closed_socket_error(e):
-                logger.info(f"freeswitch ws send failed (client disconnected): {e}")
-                self.mark_closed()
-            else:
-                logger.error(f"freeswitch handle error (audio chunk dropped): {e}", exc_info=True)
+            # only a dead websocket should silence the handler permanently; a send timeout or
+            # a bad chunk is dropped (logged once per error type) and later audio keeps flowing
+            self._on_send_error(e, "packet")
