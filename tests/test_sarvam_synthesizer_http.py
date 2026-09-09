@@ -59,12 +59,19 @@ async def test_send_payload_decodes_base64_to_bytes():
     post_ctx.__aenter__ = AsyncMock(return_value=resp)
     session = MagicMock()
     session.post = MagicMock(return_value=post_ctx)
-    sess_ctx = AsyncMock()
-    sess_ctx.__aenter__ = AsyncMock(return_value=session)
-    with patch("voiceai.synthesizer.sarvam_synthesizer.aiohttp.ClientSession", return_value=sess_ctx):
+    with patch(
+        "voiceai.synthesizer.sarvam_synthesizer.get_shared_aiohttp_session", new=AsyncMock(return_value=session)
+    ):
         out = await synth._send_payload({"text": "hi"})
     assert isinstance(out, bytes)
     assert out == wav
+
+
+async def test_send_payload_reuses_the_shared_keepalive_session():
+    """The REST hot path must not open a fresh TCP+TLS session per synthesis."""
+    from voiceai.llms.http_client_pool import get_shared_aiohttp_session
+
+    assert await get_shared_aiohttp_session() is await get_shared_aiohttp_session()
 
 
 async def test_synthesize_end_to_end_without_network():

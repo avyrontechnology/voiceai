@@ -6,7 +6,6 @@ import time
 import traceback
 import uuid
 
-import aiohttp
 import websockets
 from websockets.exceptions import InvalidHandshake
 
@@ -14,6 +13,7 @@ from .stream_synthesizer import StreamSynthesizer
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, get_synth_audio_format, resample, wav_bytes_to_pcm
+from voiceai.llms.http_client_pool import get_shared_aiohttp_session
 from voiceai.constants import SARVAM_MODEL_SAMPLING_RATE_MAPPING, SARVAM_TTS_SUPPORTED_LANGUAGES
 
 logger = configure_logger(__name__)
@@ -278,22 +278,24 @@ class SarvamSynthesizer(StreamSynthesizer):
 
     async def _send_payload(self, payload):
         headers = {"api-subscription-key": self.api_key, "Content-Type": "application/json"}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.api_url, headers=headers, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data and isinstance(data.get("audios", []), list) and data["audios"]:
-                        raw = data["audios"][0]
-                        if isinstance(raw, str):
-                            # REST returns base64-encoded audio; downstream expects bytes.
-                            try:
-                                return base64.b64decode(raw)
-                            except Exception:
-                                logger.error("Sarvam TTS: audios[0] is not valid base64")
-                                return None
-                        return raw
-                else:
-                    logger.error(f"Error: {response.status} - {await response.text()}")
+        # Shared keepalive session (per-loop): the hot REST path must not pay a
+        # TCP+TLS handshake per synthesis. Never closed here.
+        session = await get_shared_aiohttp_session()
+        async with session.post(self.api_url, headers=headers, json=payload) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data and isinstance(data.get("audios", []), list) and data["audios"]:
+                    raw = data["audios"][0]
+                    if isinstance(raw, str):
+                        # REST returns base64-encoded audio; downstream expects bytes.
+                        try:
+                            return base64.b64decode(raw)
+                        except Exception:
+                            logger.error("Sarvam TTS: audios[0] is not valid base64")
+                            return None
+                    return raw
+            else:
+                logger.error(f"Error: {response.status} - {await response.text()}")
 
     async def synthesize(self, text):
         return await self._generate_http(text)

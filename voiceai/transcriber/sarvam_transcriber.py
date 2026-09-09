@@ -516,6 +516,14 @@ class SarvamTranscriber(BaseTranscriber):
             pass
 
     async def sarvam_connect(self, retries: int = 3, timeout: float = 10.0) -> ClientConnection:
+        # Warm-pool path: TaskManager pre-seeded a live standby socket via
+        # checkout_stt (voiceai.platform.warm_pool). Reuse it instead of
+        # dialling — the call's own sender/receiver run unchanged over it.
+        preseeded = getattr(self, "websocket_connection", None)
+        if preseeded is not None and getattr(preseeded, "open", True):
+            logger.info("Reusing warm-pool Sarvam websocket, skipping dial")
+            self.connection_authenticated = True
+            return preseeded
         additional_headers = {
             "api-subscription-key": self.api_key,
         }

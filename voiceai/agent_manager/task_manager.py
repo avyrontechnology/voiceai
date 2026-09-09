@@ -150,6 +150,20 @@ def welcome_pcm_upsampled(welcome_b64: str, target_sample_rate: int, source_samp
     )
 
 
+def _s2s_ack_independent() -> bool:
+    """WB-3c: S2S output progresses ack-independently (default safe = on).
+
+    ``S2S_ACK_INDEPENDENT=0`` restores the pure legacy path (no playout-estimate
+    fallback, no ack-silence logging).
+    """
+    return (os.getenv("S2S_ACK_INDEPENDENT", "1") or "1").strip() == "1"
+
+
+def _s2s_talko_encoding() -> str:
+    """WB-3c: expected Talko leg encoding (default safe = ``mulaw-8k``)."""
+    return (os.getenv("S2S_TALKO_ENCODING", "mulaw-8k") or "mulaw-8k").strip().lower()
+
+
 def _inject_end_call_tool(api_tools, *, scope, nodes, description=None):
     """Add the internal end_call tool (with scope/nodes) to api_tools; no-op if already present."""
     if api_tools is None:
@@ -918,7 +932,12 @@ class TaskManager(BaseManager):
             self.__setup_transcriber()
             self.__setup_synthesizer(self.llm_config)
             if not self.turn_based_conversation and task_id == 0 and "synthesizer" in self.tools:
-                self.synthesizer_monitor_task = asyncio.create_task(self.tools["synthesizer"].monitor_connection())
+                if self._warm_pool_armed():
+                    # WB-1: checkout (and the monitor decision) happens in run()'s
+                    # async preamble; the pool keeper owns keepalive on a hit.
+                    logger.info("warm pool armed: deferring synthesizer monitor spawn to run()")
+                else:
+                    self.synthesizer_monitor_task = asyncio.create_task(self.tools["synthesizer"].monitor_connection())
 
         # Language switching, gated per call by the LANGUAGE_SWITCH feature flag
         # (tools_config["llm_language_switch"], see __language_switch_enabled):
@@ -1640,6 +1659,9 @@ class TaskManager(BaseManager):
 
             audio_chunk = self.preloaded_welcome_audio if self.preloaded_welcome_audio else None
             if audio_chunk is None and text:
+                # WB-2: pre-rendered welcome (lifespan + save/update) sends immediately.
+                audio_chunk = self._welcome_cache_lookup(text)
+            if audio_chunk is None and text:
                 # Browser legs carry no preloaded greeting; speak it through the agent's
                 # own TTS voice instead of staying silent until the caller speaks first.
                 audio_chunk = await self.__synthesize_welcome_audio(text)
@@ -1754,6 +1776,72 @@ class TaskManager(BaseManager):
                 logger.error(f"Welcome TTS resample failed: {e}")
                 return None
         return pcm
+
+    def _welcome_cache_lookup(self, text: str) -> bytes | None:
+        """WB-2: pre-rendered welcome PCM for this exact voice, or None (live fallback).
+
+        Key parity with the producer (voiceai.platform.welcome_cache): the
+        producer defaults an absent model to bulbul:v3, so this lookup does too —
+        otherwise a Sarvam record without an explicit model would never hit.
+        Never raises.
+        """
+        try:
+            from voiceai.platform import welcome_cache as _welcome_cache
+        except Exception:
+            return None
+        try:
+            if not _welcome_cache.is_welcome_preload_enabled() or not (text or "").strip():
+                return None
+            return _welcome_cache.lookup_for_call(
+                agent_id=getattr(self, "assistant_id", "") or "",
+                text=text,
+                voice=str(getattr(self, "synthesizer_voice", "") or ""),
+                model=str(getattr(self, "synthesizer_model", None) or "bulbul:v3"),
+                lang=str(getattr(self, "language", "") or ""),
+                rate=int(getattr(self, "sampling_rate", 8000) or 8000),
+            )
+        except Exception:
+            return None
+
+    def _welcome_audio_packet(self, audio_chunk: bytes, text: str, meta_info: dict) -> dict:
+        """Wrap cached welcome PCM with the first-chunk/end flags the handlers expect."""
+        meta_info = dict(meta_info)
+        meta_info["type"] = "audio"
+        meta_info["synthesizer_start_time"] = time.time()
+        meta_info["format"] = "pcm"
+        meta_info["is_first_chunk"] = True
+        meta_info["end_of_synthesizer_stream"] = True
+        meta_info["chunk_id"] = 1
+        meta_info["is_first_chunk_of_entire_response"] = True
+        meta_info["is_final_chunk_of_entire_response"] = True
+        return create_ws_data_packet(audio_chunk, meta_info)
+
+    async def _send_cached_welcome(self, audio_chunk: bytes, text: str, meta_info: dict) -> None:
+        """Send cached welcome bytes with the full __forced_first_message bookkeeping."""
+        message = self._welcome_audio_packet(audio_chunk, text, meta_info)
+        meta = message["meta_info"]
+        self.tools["input"].update_is_audio_being_played(True)
+        convert_to_request_log(
+            message=text,
+            meta_info=meta,
+            component=LogComponent.SYNTHESIZER,
+            direction=LogDirection.RESPONSE,
+            model=self.synthesizer_provider,
+            is_cached=meta.get("is_cached", False),
+            engine=self.tools["synthesizer"].get_engine(),
+            run_id=self.run_id,
+        )
+        await self.tools["output"].handle(message)
+        try:
+            duration = calculate_audio_duration(len(audio_chunk), self.sampling_rate, format=meta["format"])
+            self.welcome_message_duration_ms = round(duration * 1000, 2)
+            if self.should_record:
+                self.conversation_recording["output"].append(
+                    {"data": audio_chunk, "start_time": time.time(), "duration": duration}
+                )
+        except Exception as e:
+            self.welcome_message_duration_ms = round(0.256 * 1000, 2)
+            logger.error("Exception in cached welcome duration calculation: {}".format(str(e)))
 
     def __inject_switch_language_tool(self):
         """Auto-inject the switch_language tool when multilingual pools are active.
@@ -2107,6 +2195,112 @@ class TaskManager(BaseManager):
             #     self.synthesizer_monitor_task = asyncio.create_task(self.tools['synthesizer'].monitor_connection())
             if self.task_config["tools_config"]["llm_agent"] is not None and llm_config is not None:
                 llm_config["buffer_size"] = synth_config.get("buffer_size")
+
+    def _warm_pool_armed(self) -> bool:
+        """Sync fast-path: pool enabled+installed and this call has a poolable synth.
+
+        True defers the per-call monitor spawn to run()'s async preamble, where
+        _warm_checkout awaits the actual checkout. Any failure below just means
+        direct dial — never a call failure.
+        """
+        try:
+            from voiceai.platform import warm_pool as _warm_pool
+        except Exception:
+            return False
+        try:
+            if _warm_pool.checkout_pool() is None or self.__is_s2s():
+                return False
+            synth = self.tools.get("synthesizer")
+            if synth is None or isinstance(synth, SynthesizerPool):
+                return False
+            return _warm_pool.key_for_synth(synth) is not None
+        except Exception:
+            return False
+
+    async def _warm_checkout(self) -> None:
+        """Checkout warm Sarvam standbys (no-op unless _warm_pool_armed).
+
+        On a TTS hit the pool keeper owns keepalive, so no per-call monitor is
+        spawned; on a miss the monitor spawns exactly as before. STT hits
+        pre-seed the socket that sarvam_connect reuses instead of dialling.
+        """
+        try:
+            from voiceai.platform import warm_pool as _warm_pool
+        except Exception as exc:
+            logger.warning(f"warm pool checkout skipped: {exc}")
+            return
+        try:
+            pool = _warm_pool.checkout_pool()
+            if pool is None or self.__is_s2s():
+                return
+            synth = self.tools.get("synthesizer")
+            if (
+                synth is not None
+                and not isinstance(synth, SynthesizerPool)
+                and getattr(self, "_warm_tts", None) is None
+            ):
+                entry = await _warm_pool.checkout_tts(pool, synth)
+                if entry is not None:
+                    self._warm_tts = (pool, entry)
+                    logger.info("warm pool TTS checkout | key=%s generation=%d", entry.key, entry.generation)
+            transcriber = self.tools.get("transcriber")
+            if (
+                transcriber is not None
+                and not isinstance(transcriber, TranscriberPool)
+                and getattr(self, "_warm_stt", None) is None
+            ):
+                entry = await _warm_pool.checkout_stt(pool, transcriber)
+                if entry is not None:
+                    self._warm_stt = (pool, entry)
+                    logger.info("warm pool STT checkout | key=%s generation=%d", entry.key, entry.generation)
+        except Exception as exc:
+            logger.warning(f"warm pool checkout failed, direct dial continues: {summarize_exception(exc)}")
+        finally:
+            # Miss path: the monitor spawn deferred by _warm_pool_armed happens here.
+            try:
+                if (
+                    getattr(self, "_warm_tts", None) is None
+                    and not self.turn_based_conversation
+                    and getattr(self, "task_id", None) == 0
+                    and "synthesizer" in self.tools
+                    and self.synthesizer_monitor_task is None
+                    and self._warm_pool_armed()
+                ):
+                    self.synthesizer_monitor_task = asyncio.create_task(self.tools["synthesizer"].monitor_connection())
+            except Exception as exc:
+                logger.warning(f"warm pool fallback monitor spawn failed: {summarize_exception(exc)}")
+
+    async def _warm_tts_release(self) -> None:
+        """Detach a checked-out TTS socket, run normal cleanup, return the socket."""
+        from voiceai.platform import warm_pool as _warm_pool
+
+        info = getattr(self, "_warm_tts", None)
+        self._warm_tts = None
+        synth = self.tools.get("synthesizer")
+        if info is not None and synth is not None and not isinstance(synth, SynthesizerPool):
+            pool, entry = info
+            try:
+                await _warm_pool.return_tts(pool, entry, synth)
+            except Exception as exc:
+                logger.warning(f"warm pool TTS return failed: {summarize_exception(exc)}")
+        if synth is not None:
+            await synth.cleanup()
+
+    async def _warm_stt_release(self) -> None:
+        """Detach a checked-out STT socket, run normal cleanup, return the socket."""
+        from voiceai.platform import warm_pool as _warm_pool
+
+        info = getattr(self, "_warm_stt", None)
+        self._warm_stt = None
+        transcriber = self.tools.get("transcriber")
+        if info is not None and transcriber is not None and not isinstance(transcriber, TranscriberPool):
+            pool, entry = info
+            try:
+                await _warm_pool.return_stt(pool, entry, transcriber)
+            except Exception as exc:
+                logger.warning(f"warm pool STT return failed: {summarize_exception(exc)}")
+        if transcriber is not None:
+            await transcriber.cleanup()
 
     def __setup_llm(self, llm_config, task_id=0):
         if self.task_config["tools_config"]["llm_agent"] is not None:
@@ -7371,7 +7565,8 @@ class TaskManager(BaseManager):
             )
             raise SynthesizerError(str(e), provider=self.synthesizer_provider, model=model) from e
         finally:
-            await self.tools["synthesizer"].cleanup()
+            # WB-1: returns a checked-out warm socket instead of closing it.
+            await self._warm_tts_release()
 
     async def __send_preprocessed_audio(self, meta_info, text):
         meta_info = copy.deepcopy(meta_info)
@@ -7455,6 +7650,9 @@ class TaskManager(BaseManager):
                 else:
                     start_time = time.perf_counter()
                     audio_chunk = self.preloaded_welcome_audio if self.preloaded_welcome_audio else None
+                    if audio_chunk is None and meta_info.get("text"):
+                        # WB-2: pre-rendered welcome before the S3-miss live fallback below.
+                        audio_chunk = self._welcome_cache_lookup(meta_info["text"])
                     if meta_info["text"] == "":
                         audio_chunk = None
                     logger.info(f"Time to get response from S3 {time.perf_counter() - start_time}")
@@ -8053,6 +8251,12 @@ class TaskManager(BaseManager):
                 self.stream_sid_ts = time.time() * 1000
                 if text and text.strip():
                     self.conversation_history.append_welcome_message(text)
+                cached = self._welcome_cache_lookup(text) if text else None
+                if cached is not None:
+                    # WB-2: pre-rendered welcome sends immediately (same bookkeeping
+                    # as __forced_first_message); live synthesis stays as fallback.
+                    await self._send_cached_welcome(cached, text, meta_info)
+                    return
                 await self._synthesize(create_ws_data_packet(text, meta_info=meta_info))
                 return
 
@@ -8093,7 +8297,11 @@ class TaskManager(BaseManager):
                             eos_packet = create_ws_data_packet("<end_of_stream>", meta_info)
                             await self.tools["output"].handle(eos_packet)
                         else:
-                            await self._synthesize(create_ws_data_packet(text, meta_info=meta_info))
+                            cached = self._welcome_cache_lookup(text) if text else None
+                            if cached is not None:
+                                await self._send_cached_welcome(cached, text, meta_info)
+                            else:
+                                await self._synthesize(create_ws_data_packet(text, meta_info=meta_info))
                         break
                     else:
                         await asyncio.sleep(0.01)
@@ -8441,11 +8649,8 @@ class TaskManager(BaseManager):
                 discarded += 1
                 continue
 
-            pcm = ulaw_to_pcm(data) if self._s2s_input.encoding is s2s_events.AudioEncoding.MULAW else data
-            if self._s2s_input.sample_rate != s2s.input_sample_rate:
-                pcm = resample(
-                    pcm, s2s.input_sample_rate, format="pcm", original_sample_rate=self._s2s_input.sample_rate
-                )
+            # WB-3c: Talko mulaw-8k decode + provider-rate resample, logged once.
+            pcm = self._s2s_encode_input(data)
 
             try:
                 await s2s.send_audio(pcm)
@@ -8455,6 +8660,85 @@ class TaskManager(BaseManager):
                 break
             sent += 1
         logger.info(f"S2S ingest loop exited | sent={sent} discarded={discarded}")
+
+    def _s2s_encode_input(self, data: bytes) -> bytes:
+        """Caller-leg bytes → provider-rate PCM, verifying the Talko encode contract.
+
+        The Talko mulaw-8k leg must decode via ulaw_to_pcm and then resample to
+        the provider rate; anything else on a Talko leg is logged loudly but
+        still forwarded (the tolerant-input rescue stays intact downstream).
+        Bytes/frame are logged once per call.
+        """
+        encoding = self._s2s_input.encoding
+        in_rate = self._s2s_input.sample_rate
+        try:
+            provider = self._s2s_telephony_provider()
+            if provider == TelephonyProvider.TALKO.value:
+                actual = f"{encoding.value}-{in_rate // 1000}k"
+                if actual != _s2s_talko_encoding():
+                    logger.warning(
+                        "S2S Talko leg encoding mismatch | expected=%s actual=%s (forwarding anyway)",
+                        _s2s_talko_encoding(),
+                        actual,
+                    )
+        except Exception:
+            pass
+        pcm = ulaw_to_pcm(data) if encoding is s2s_events.AudioEncoding.MULAW else data
+        out = pcm
+        model_rate = self.tools["s2s"].input_sample_rate
+        if in_rate != model_rate:
+            out = resample(pcm, model_rate, format="pcm", original_sample_rate=in_rate)
+        if not getattr(self, "_s2s_encode_logged", False):
+            self._s2s_encode_logged = True
+            logger.info(
+                "S2S ingest encode | leg=%s@%d in_bytes=%d pcm_bytes=%d model_rate=%d",
+                encoding.value,
+                in_rate,
+                len(data),
+                len(out),
+                model_rate,
+            )
+        return out
+
+    def _s2s_mark_progress(self) -> dict:
+        """Mark ack counters for the S2S leg; zeros when the marks are silent."""
+        try:
+            summary = self.mark_event_meta_data.get_mark_tracking_summary()
+            sent = int(summary.get("total_sent", 0))
+            acked = int(summary.get("total_acked", 0))
+            missed = summary.get("total_missed", sent - acked)
+            return {"total_sent": sent, "total_acked": acked, "total_missed": int(missed)}
+        except Exception:
+            return {"total_sent": 0, "total_acked": 0, "total_missed": 0}
+
+    def _s2s_note_output_progress(self, *, where: str) -> None:
+        """WB-3c TALK-DESPITE-SILENCE: never let mark silence mute the call.
+
+        When total_acked==0 the turn still closes on EOS/sentinel and audio
+        keeps flowing; the playout estimate (audio_playing_until pattern) is the
+        clock, and total_missed>0 is logged loudly instead of stalling output.
+        No-op unless S2S_ACK_INDEPENDENT=1, and silent while acks are arriving.
+        """
+        if not _s2s_ack_independent():
+            return
+        progress = self._s2s_mark_progress()
+        if progress["total_acked"] != 0:
+            return
+        try:
+            playout_until = self.mark_event_meta_data.get_audio_playing_until()
+        except Exception:
+            playout_until = 0.0
+        try:
+            ahead = max(0.0, (playout_until or 0.0) - time.time())
+        except Exception:
+            ahead = 0.0
+        logger.warning(
+            "S2S output ack-independent | where=%s total_sent=%d total_acked=0 total_missed=%d playout_ahead=%.2fs",
+            where,
+            progress["total_sent"],
+            progress["total_missed"],
+            ahead,
+        )
 
     async def _s2s_event_loop(self):
         s2s = self.tools["s2s"]
@@ -8655,6 +8939,17 @@ class TaskManager(BaseManager):
                 "meta_info": self._s2s_meta(end_of_llm_stream=True, end_of_synthesizer_stream=True),
             }
         )
+        # WB-3c: the turn closes here on EOS/sentinel even when no mark was ever
+        # acked; the playout estimate is the clock and total_missed is logged.
+        self._s2s_note_output_progress(where="finish_turn")
+        progress = self._s2s_mark_progress()
+        logger.info(
+            "S2S turn closed | seq=%d acked=%d missed=%d user_spoke=%s",
+            self._s2s_turn_seq,
+            progress["total_acked"],
+            progress["total_missed"],
+            getattr(self, "user_spoke", False),
+        )
 
         if self._s2s_hangup_after_response:
             self._s2s_hangup_after_response = False
@@ -8673,6 +8968,11 @@ class TaskManager(BaseManager):
             try:
                 self.tools["input"].update_is_audio_being_played(True)
                 await self.tools["output"].handle(message)
+
+                # WB-3c: EOS/sentinel advances ack-independently — audio flows while
+                # total_missed is only logged, never gated on mark acks.
+                if isinstance(message, dict) and message.get("meta_info", {}).get("end_of_synthesizer_stream"):
+                    self._s2s_note_output_progress(where="output_loop")
 
                 if self.should_record and isinstance(message["data"], bytes) and message["data"] != b"\x00":
                     self.conversation_recording["output"].append(
@@ -8869,6 +9169,8 @@ class TaskManager(BaseManager):
         try:
             if self._is_conversation_task():
                 logger.info("started running")
+                # WB-1: warm-pool checkout before any media loop starts (no-op when disabled).
+                await self._warm_checkout()
                 # Create transcriber and synthesizer tasks
                 tasks = []
                 # tasks = [asyncio.create_task(self.tools['input'].handle())]
@@ -9101,9 +9403,9 @@ class TaskManager(BaseManager):
                     tasks_to_cancel.append(process_task_cancellation(task, "synthesizer_task_item"))
                 self.synthesizer_tasks = []
 
-            # Transcriber cleanup
+            # Transcriber cleanup (WB-1: returns a checked-out warm socket instead of closing it)
             if "transcriber" in self.tools:
-                tasks_to_cancel.append(self.tools["transcriber"].cleanup())
+                tasks_to_cancel.append(self._warm_stt_release())
                 if hasattr(self, "transcriber_task") and self.transcriber_task is not None:
                     tasks_to_cancel.append(process_task_cancellation(self.transcriber_task, "transcriber_task"))
 
