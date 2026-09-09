@@ -2135,6 +2135,14 @@ class TaskManager(BaseManager):
         prompt_responses = kwargs.get("prompt_responses", None)
         if not prompt_responses:
             prompt_responses = await get_prompt_responses(assistant_id=self.assistant_id, local=self.is_local)
+        if not isinstance(prompt_responses, dict):
+            # No stored prompts (missing file, fresh record): degrade to an empty
+            # system prompt rather than crashing the call on .get().
+            logger.error(
+                f"No usable prompt responses for {self.assistant_id} "
+                f"(got {type(prompt_responses).__name__}); continuing with an empty system prompt."
+            )
+            prompt_responses = {}
 
         current_task = "task_{}".format(task_id + 1)
         if self.__is_multiagent():
@@ -7768,35 +7776,50 @@ class TaskManager(BaseManager):
         """
         try:
             logger.info(f"handle_init_event has been triggered with metadata = {init_meta_data}")
-            self.context_data["recipient_data"].update(init_meta_data["context_data"])
-            logger.info(f"Context data updated - {self.context_data}")
+            try:
+                if self.context_data is None:
+                    self.context_data = {}
+                if not isinstance(self.context_data.get("recipient_data"), dict):
+                    self.context_data["recipient_data"] = {}
+                incoming = (init_meta_data or {}).get("context_data") if isinstance(init_meta_data, dict) else None
+                if isinstance(incoming, dict):
+                    self.context_data["recipient_data"].update(incoming)
+                logger.info(f"Context data updated - {self.context_data}")
 
-            self.prompts["system_prompt"] = update_prompt_with_context(self.prompts["system_prompt"], self.context_data)
+                self.prompts["system_prompt"] = update_prompt_with_context(
+                    self.prompts["system_prompt"], self.context_data
+                )
 
-            if self.system_prompt["content"]:
-                system_prompt = self.system_prompt["content"]
-                system_prompt = update_prompt_with_context(system_prompt, self.context_data)
-                self.system_prompt["content"] = system_prompt
-                self.conversation_history.update_system_prompt(system_prompt)
+                if self.system_prompt["content"]:
+                    system_prompt = self.system_prompt["content"]
+                    system_prompt = update_prompt_with_context(system_prompt, self.context_data)
+                    self.system_prompt["content"] = system_prompt
+                    self.conversation_history.update_system_prompt(system_prompt)
 
-            if self.call_hangup_message_config and self.context_data:
-                if isinstance(self.call_hangup_message_config, dict):
-                    self.call_hangup_message_config = {
-                        lang: update_prompt_with_context(msg, self.context_data)
-                        for lang, msg in self.call_hangup_message_config.items()
-                    }
-                else:
-                    self.call_hangup_message_config = update_prompt_with_context(
-                        self.call_hangup_message_config, self.context_data
-                    )
+                if self.call_hangup_message_config and self.context_data:
+                    if isinstance(self.call_hangup_message_config, dict):
+                        self.call_hangup_message_config = {
+                            lang: update_prompt_with_context(msg, self.context_data)
+                            for lang, msg in self.call_hangup_message_config.items()
+                        }
+                    else:
+                        self.call_hangup_message_config = update_prompt_with_context(
+                            self.call_hangup_message_config, self.context_data
+                        )
 
-            agent_welcome_message = self.kwargs.get("agent_welcome_message", "")
+                agent_welcome_message = self.kwargs.get("agent_welcome_message", "")
 
-            agent_welcome_message = update_prompt_with_context(agent_welcome_message, self.context_data)
-            logger.info(f"Updated agent welcome message after context data replacement - {agent_welcome_message}")
-            self.kwargs["agent_welcome_message"] = agent_welcome_message
-            if len(self.conversation_history) == 2 and agent_welcome_message:
-                self.conversation_history.update_welcome_message(agent_welcome_message)
+                agent_welcome_message = update_prompt_with_context(agent_welcome_message, self.context_data)
+                logger.info(f"Updated agent welcome message after context data replacement - {agent_welcome_message}")
+                self.kwargs["agent_welcome_message"] = agent_welcome_message
+                if len(self.conversation_history) == 2 and agent_welcome_message:
+                    self.conversation_history.update_welcome_message(agent_welcome_message)
+            except Exception as e:
+                # Context injection is best-effort: a playground init without
+                # context_data (or an agent stored with null context) must never
+                # block the ack + welcome below, or the call stays silent with
+                # every transcript dropped as welcome_still_playing.
+                logger.warning(f"Ignoring init context update ({e}); continuing to welcome")
 
             await self.tools["output"].send_init_acknowledgement()
             self.first_message_task = asyncio.create_task(self.__first_message())
@@ -8160,8 +8183,16 @@ class TaskManager(BaseManager):
                     logger.info("S2S: caller barged in, dropping queued audio")
                     self.interruption_manager.on_interruption_triggered()
                     self._s2s_agent_speaking = False
-                self._s2s_playout_until = 0.0
-                await self._s2s_drop_queued_audio()
+                    self._s2s_playout_until = 0.0
+                    await self._s2s_drop_queued_audio()
+                else:
+                    # Speech start with no agent audio in flight: normal turn-taking,
+                    # backchannels, or pauses inside code-switched speech. There is
+                    # nothing to barge in on — emitting `clear` here chops the
+                    # response that is about to start (audible glitching, worst
+                    # around language switches) and drains transcript packets that
+                    # were never a problem. Just mark the input side idle.
+                    self.tools["input"].update_is_audio_being_played(False)
 
             elif isinstance(event, s2s_events.ResponseDone):
                 await self._s2s_finish_turn(event)

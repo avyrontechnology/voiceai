@@ -191,6 +191,10 @@ class GeminiLLM(BaseLLM):
 
         Sending either one to the other family is a 400, so an explicit budget only
         applies to 2.5.
+
+        Thinking is strictly opt-in: forcing a thinking_level on gemini-3 measured
+        46s time-to-first-token vs 3s without it, which starves every voice turn
+        (each attempt is cancelled by the caller's next utterance first).
         """
         m = self.model
 
@@ -198,7 +202,9 @@ class GeminiLLM(BaseLLM):
             return types.ThinkingConfig(thinking_budget=self.thinking_budget, include_thoughts=True)
 
         if m.startswith("gemini-3"):
-            return types.ThinkingConfig(thinking_level=default_thinking_level(m), include_thoughts=True)
+            if self.thinking_budget and self.thinking_budget > 0:
+                return types.ThinkingConfig(thinking_level=default_thinking_level(m), include_thoughts=True)
+            return None
 
         if "2.5" in m:
             if "pro" in m:

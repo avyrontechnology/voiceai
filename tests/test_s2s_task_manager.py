@@ -354,6 +354,32 @@ class TestBargeInAccounting:
         tm.interruption_manager.on_interruption_triggered.assert_not_called()
         tm.interruption_manager.on_user_speech_started.assert_called_once()
 
+    async def test_speech_while_agent_silent_sends_no_clear_and_keeps_queue(self):
+        # The provider reports every speech start, including normal turn-taking and
+        # pauses inside code-switched speech. With no agent audio in flight there is
+        # nothing to barge in on: emitting `clear` chops the response about to
+        # start (audible glitching), and draining drops transcript packets.
+        tm = make_tm()
+        tm.buffered_output_queue.put_nowait({"data": "partial transcript", "meta_info": {"type": "text"}})
+        await self._run_events(tm, [s2s_events.Interrupted()])
+
+        tm.tools["output"].handle_interruption.assert_not_awaited()
+        assert tm.buffered_output_queue.qsize() == 1
+        tm.tools["input"].update_is_audio_being_played.assert_called_with(False)
+
+    async def test_barge_in_with_floor_sends_clear_and_drains(self):
+        tm = make_tm()
+        await self._run_events(
+            tm,
+            [
+                s2s_events.AudioDelta(data=_silence_pcm(4800)),
+                s2s_events.Interrupted(),
+            ],
+        )
+
+        tm.tools["output"].handle_interruption.assert_awaited_once()
+        assert tm.buffered_output_queue.empty()
+
     async def test_agent_speech_window_opens_once_per_turn_and_closes_on_done(self):
         tm = make_tm()
         await self._run_events(

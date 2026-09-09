@@ -485,7 +485,11 @@ async def get_prompt_responses(assistant_id, local=False):
             # Missing/unreadable prompts must degrade to empty prompts, not a
             # str/None that crashes callers doing `prompt_responses.get(...)`
             # mid-call (observed: inbound AI call dropped after WS accept).
+            # Missing/unreadable file is not exceptional (fresh record, wiped
+            # ephemeral disk): callers treat None as "no stored prompts".
+            # Never return a non-dict sentinel — load_prompt calls .get() on this.
             logger.error(f"Could not load up the dataset {e}; using empty prompts")
+            data = None
     else:
         key = f"{assistant_id}/conversation_details.json"
         logger.info(f"Loading up the conversation details from the s3 file BUCKET_NAME {BUCKET_NAME} {key}")

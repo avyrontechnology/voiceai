@@ -25,7 +25,7 @@ SARVAM_TTS_LANGUAGE = "en-IN"
 SARVAM_STT_MODEL = "saaras:v3"
 SARVAM_STT_LANGUAGE = "en-IN"
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 SYSTEM_PROMPT = (
     "You are a polite clinic receptionist booking appointments. "

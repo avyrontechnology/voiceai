@@ -2,7 +2,10 @@ import traceback
 from .default import DefaultInputHandler
 import asyncio
 import base64
+import binascii
 import json
+import uuid
+from typing import Any
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
 from voiceai.helpers.utils import create_ws_data_packet
@@ -41,6 +44,7 @@ class TelephonyInputHandler(DefaultInputHandler):
         self.last_media_received = 0
         self.io_provider = None
         self.websocket_listen_task = None
+        self._ignored_frame_count = 0
 
     @property
     def stream_sid(self):
@@ -105,28 +109,112 @@ class TelephonyInputHandler(DefaultInputHandler):
         self.dtmf_digits += digit
         return False
 
+    async def _ensure_stream_sid(self, context: str = "") -> str:
+        """Mint a synthetic stream_sid when audio arrives before any start event.
+
+        The output handler drops every packet while stream_sid is None, so a
+        carrier that streams media without a start frame would otherwise stay
+        silent until the 10s stream_sid timeout kills the call. Minting keeps
+        a misrouted or start-less leg flowing; the warning makes the relay gap
+        visible instead of a silent dead call.
+        """
+        if self.stream_sid is None:
+            self.stream_sid = f"{self.io_provider or 'telephony'}-{uuid.uuid4().hex[:12]}"
+            logger.warning(
+                f"{self.io_provider} receiver minted synthetic stream_sid={self.stream_sid} "
+                f"on first audio ({context}); carrier never sent a start event"
+            )
+        return self.stream_sid
+
+    async def _handle_non_telephony_packet(self, packet: Any, raw_message: str) -> bool:
+        """Rescue hook for JSON frames without an ``event`` key. Returns True if consumed.
+
+        Base implementation rescues browser-style ``{type: audio}`` frames so a
+        leg misrouted to a telephony handler still flows instead of starving
+        until the stream_sid timeout, and consumes ``{type: init}`` quietly.
+        Subclasses (e.g. Talko) extend this for relay-specific shapes; truly
+        unknown shapes return False so the caller logs them as ignored.
+        """
+        if not isinstance(packet, dict):
+            return False
+        msg_type = packet.get("type")
+        if msg_type == "audio" and isinstance(packet.get("data"), str):
+            try:
+                audio = base64.b64decode(packet["data"])
+            except (binascii.Error, ValueError) as e:
+                logger.warning(f"{self.io_provider} receiver dropping undecodable audio frame: {e}")
+                return True
+            if not audio:
+                return True
+            await self._ensure_stream_sid("browser-style audio")
+            meta_info = {
+                "io": self.io_provider,
+                "call_sid": self.call_sid,
+                "stream_sid": self.stream_sid,
+                "sequence": (self.input_types or {}).get("audio", 0),
+            }
+            await self.ingest_audio(audio, meta_info)
+            return True
+        if msg_type == "init":
+            logger.info(f"{self.io_provider} receiver got browser init on telephony leg (no event frame)")
+            return True
+        return False
+
+    def _ignored_frame_preview(self, raw_message: str, packet: Any) -> str:
+        keys = list(packet.keys())[:8] if isinstance(packet, dict) else type(packet).__name__
+        preview = raw_message[:300] if isinstance(raw_message, str) else repr(raw_message)[:300]
+        return f"keys={keys} preview={preview!r}"
+
     async def _listen(self):
         buffer = []
+        self._ignored_frame_count = 0
         while True:
             try:
                 message = await self.websocket.receive_text()
 
-                packet = json.loads(message)
+                try:
+                    packet = json.loads(message)
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    self._ignored_frame_count += 1
+                    if self._ignored_frame_count <= 3 or self._ignored_frame_count % 50 == 1:
+                        logger.info(
+                            f"{self.io_provider} receiver ignoring unparseable frame "
+                            f"#{self._ignored_frame_count} ({e}): {message[:200]!r}"
+                        )
+                    continue
                 if not isinstance(packet, dict) or packet.get("event") is None:
                     # Browser/UI legs speak {type}-frames, not telephony events
                     # (the playground routes those to default handlers via
                     # ?leg=browser, but a stray shape must never kill the
                     # receiver loop and the whole call with it).
-                    logger.info(
-                        f"{self.io_provider} receiver ignoring non-telephony frame"
-                    )
+                    try:
+                        if await self._handle_non_telephony_packet(packet, message):
+                            continue
+                    except Exception as e:
+                        logger.warning(f"{self.io_provider} rescue of non-telephony frame failed: {e}")
+                        continue
+                    self._ignored_frame_count += 1
+                    if self._ignored_frame_count <= 3 or self._ignored_frame_count % 50 == 1:
+                        logger.info(
+                            f"{self.io_provider} receiver ignoring non-telephony frame "
+                            f"#{self._ignored_frame_count} "
+                            f"{self._ignored_frame_preview(message, packet)}"
+                        )
+                    else:
+                        logger.debug(
+                            f"{self.io_provider} receiver ignoring non-telephony frame #{self._ignored_frame_count}"
+                        )
                     continue
                 if packet["event"] == "start":
                     await self.call_start(packet)
                 elif packet["event"] == "media":
-                    media_data = packet["media"]
-                    media_audio = base64.b64decode(media_data["payload"])
-                    media_ts = int(media_data["timestamp"])
+                    try:
+                        media_data = packet["media"]
+                        media_audio = base64.b64decode(media_data["payload"])
+                        media_ts = int(media_data.get("timestamp", 0))
+                    except (KeyError, TypeError, ValueError, binascii.Error) as e:
+                        logger.warning(f"{self.io_provider} receiver dropping malformed media frame: {e}")
+                        continue
 
                     if "chunk" in packet["media"] or (
                         "track" in packet["media"] and packet["media"]["track"] == "inbound"
@@ -135,7 +223,7 @@ class TelephonyInputHandler(DefaultInputHandler):
                             "io": self.io_provider,
                             "call_sid": self.call_sid,
                             "stream_sid": self.stream_sid,
-                            "sequence": self.input_types["audio"],
+                            "sequence": (self.input_types or {}).get("audio", 0),
                         }
                         """
                         if self.last_media_received + 20 < media_ts:
@@ -188,6 +276,26 @@ class TelephonyInputHandler(DefaultInputHandler):
                         f"{self.io_provider} websocket disconnected abnormally: code={e.code}, "
                         f"reason={getattr(e, 'reason', None)}, stream_sid={self.stream_sid}, call_sid={self.call_sid}"
                     )
+                try:
+                    ws_data_packet = create_ws_data_packet(data=None, meta_info={"io": "default", "eos": True})
+                    self.queues["transcriber"].put_nowait(ws_data_packet)
+                except Exception:
+                    pass
+                break
+
+            except RuntimeError as e:
+                # Starlette raises this when receive_text() races stop_handler's
+                # websocket.close(): "WebSocket is not connected. Need to call
+                # accept first." It is a normal shutdown, not a crash — no
+                # traceback, no extra EOS (teardown already pushed one).
+                if "not connected" in str(e).lower() or "accept" in str(e).lower():
+                    logger.info(f"{self.io_provider} receiver socket already closed, ending listen")
+                    break
+                traceback.print_exc()
+                ws_data_packet = create_ws_data_packet(data=None, meta_info={"io": "default", "eos": True})
+                self.queues["transcriber"].put_nowait(ws_data_packet)
+                logger.info(f"Exception in {self.io_provider} receiver reading events: {str(e)}")
+                break
 
             except Exception as e:
                 traceback.print_exc()
