@@ -18,6 +18,13 @@ from .types import LLMStreamChunk, LatencyData, FunctionCallPayload
 
 logger = configure_logger(__name__)
 
+GEMINI_THINKING_MIN_OUTPUT_TOKENS: int = 512
+
+
+def _is_thinking_model(model: str) -> bool:
+    """True for families that always carry a thinking config (3.x level, 2.5 budget)."""
+    return model.startswith("gemini-3") or "2.5" in model
+
 
 def _usage_kwargs(usage) -> dict:
     """Map Gemini usage_metadata onto the LLMStreamChunk token fields."""
@@ -34,7 +41,14 @@ def _usage_kwargs(usage) -> dict:
 
 
 class GeminiLLM(BaseLLM):
-    def __init__(self, max_tokens=100, buffer_size=40, model="gemini-2.5-flash", temperature=0.1, **kwargs):
+    def __init__(
+        self,
+        max_tokens: int = 100,
+        buffer_size: int = 40,
+        model: str = "gemini-2.5-flash",
+        temperature: float = 0.1,
+        **kwargs,
+    ) -> None:
         super().__init__(max_tokens, buffer_size)
 
         # New SDK uses plain model names like "gemini-2.0-flash", no "models/" prefix
@@ -43,6 +57,13 @@ class GeminiLLM(BaseLLM):
             self.model = model.split("/")[-1]
         if self.model.startswith("models/"):
             self.model = self.model[len("models/") :]
+
+        if _is_thinking_model(self.model) and self.max_tokens < GEMINI_THINKING_MIN_OUTPUT_TOKENS:
+            logger.warning(
+                f"[GeminiLLM] max_output_tokens={self.max_tokens} too small for thinking model {self.model}; "
+                f"clamping to {GEMINI_THINKING_MIN_OUTPUT_TOKENS} so thinking tokens don't eat the reply cap"
+            )
+            self.max_tokens = GEMINI_THINKING_MIN_OUTPUT_TOKENS
 
         self.temperature = temperature
         # S2S and the transcriber accept GEMINI_API_KEY; accept it here too so one key works everywhere.
@@ -90,8 +111,15 @@ class GeminiLLM(BaseLLM):
         # Gemini 3 thought_signatures cannot survive bytes serialisation — the only
         # reliable way to return them is to reuse the exact Part object the SDK gave us.
         self._native_function_parts: dict[str, types.Part] = {}
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            genai_sdk_version = _pkg_version("google-genai")
+        except Exception:
+            genai_sdk_version = "unknown"
+        self.genai_sdk_version: str = genai_sdk_version
         logger.info(
-            f"[GeminiLLM] Initialized model={self.model} tools={[d.name for d in gemini_declarations] if gemini_declarations else None} thinking_budget={self.thinking_budget}"
+            f"[GeminiLLM] Initialized model={self.model} tools={[d.name for d in gemini_declarations] if gemini_declarations else None} thinking_budget={self.thinking_budget} genai_sdk_version={genai_sdk_version}"
         )
 
     def _prepare_history(self, messages):
@@ -192,9 +220,13 @@ class GeminiLLM(BaseLLM):
         Sending either one to the other family is a 400, so an explicit budget only
         applies to 2.5.
 
-        Thinking is strictly opt-in: forcing a thinking_level on gemini-3 measured
-        46s time-to-first-token vs 3s without it, which starves every voice turn
-        (each attempt is cancelled by the caller's next utterance first).
+        Gemini 3 with thinking unspecified defaults to medium/high server-side
+        (measured 46s TTFT with low+include_thoughts vs ~3s without, which
+        starves every voice turn). The voice default is therefore explicit
+        thinking_level="minimal" ("matches no-thinking") with no
+        include_thoughts. An explicit thinking_budget>0 maps to the model's
+        default level (with thoughts) as before. Level and budget are never
+        co-set.
         """
         m = self.model
 
@@ -204,7 +236,7 @@ class GeminiLLM(BaseLLM):
         if m.startswith("gemini-3"):
             if self.thinking_budget and self.thinking_budget > 0:
                 return types.ThinkingConfig(thinking_level=default_thinking_level(m), include_thoughts=True)
-            return None
+            return types.ThinkingConfig(thinking_level=default_thinking_level(m))
 
         if "2.5" in m:
             if "pro" in m:
@@ -214,10 +246,17 @@ class GeminiLLM(BaseLLM):
 
         return None
 
-    def _build_config(self, system_instruction, request_json=False):
+    def _build_config(self, system_instruction: str | None, request_json: bool = False) -> types.GenerateContentConfig:
+        effective_max_tokens: int = self.max_tokens
+        if _is_thinking_model(self.model) and effective_max_tokens < GEMINI_THINKING_MIN_OUTPUT_TOKENS:
+            logger.warning(
+                f"[GeminiLLM] max_output_tokens={effective_max_tokens} too small for thinking model {self.model}; "
+                f"clamping to {GEMINI_THINKING_MIN_OUTPUT_TOKENS}"
+            )
+            effective_max_tokens = GEMINI_THINKING_MIN_OUTPUT_TOKENS
         config_kwargs = dict(
             system_instruction=system_instruction or None,
-            max_output_tokens=self.max_tokens,
+            max_output_tokens=effective_max_tokens,
             temperature=self.temperature,
             response_mime_type="application/json" if request_json else "text/plain",
         )
@@ -229,7 +268,9 @@ class GeminiLLM(BaseLLM):
         config = types.GenerateContentConfig(**config_kwargs)
         if self.gemini_tools:
             config.tools = self.gemini_tools
-            config.automatic_function_calling = types.AutomaticFunctionCallingConfig(disable=True)
+        # Manual post-stream dispatch is the orchestrator: SDK AFC must stay off
+        # unconditionally (its own retries/noise stall voice turns).
+        config.automatic_function_calling = types.AutomaticFunctionCallingConfig(disable=True)
         return config
 
     async def generate_stream(

@@ -35,6 +35,7 @@ from voiceai.constants import (
     LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S,
     LANGUAGE_SWITCH_SETTLE_MS,
     LLM_DEFAULT_CONFIGS,
+    LLM_FIRST_CHUNK_TIMEOUT_S,
     LLM_REGEN_SETTLE_S,
     REGEN_SETTLE_EXCLUDED_TRANSCRIBERS,
     NON_EVIDENCE_MARK_TYPES,
@@ -496,6 +497,7 @@ class TaskManager(BaseManager):
 
         # Setup IO SERVICE, TRANSCRIBER, LLM, SYNTHESIZER
         self.llm_task = None
+        self._inflight_llm_asr_turn_id = None
         self.eager_llm_task = None
         self.eager_history_snapshot = None
         self.eager_meta_info = None
@@ -3728,6 +3730,43 @@ class TaskManager(BaseManager):
             self._stage_assistant_history(meta_info, llm_response)
             self.conversation_history.sync_interim(messages)
 
+    async def _llm_stream_with_first_chunk_timeout(
+        self, stream: object, meta_info: dict, timeout_s: float | None = None
+    ) -> object:
+        """Yield an LLM stream but bound the wait for its first chunk.
+
+        A hung stream (open but zero chunks) must not wedge response_in_pipeline
+        forever. On timeout: log distinct LLM_FIRST_CHUNK_TIMEOUT, cancel the hung
+        stream, clear pipeline flags, record into meta_info _non_fatal_errors so
+        the empty-turn tail can explain the silence, then end the stream (the
+        caller falls through to its empty-turn handling). No blocking I/O.
+        """
+        limit: float = timeout_s if timeout_s is not None else LLM_FIRST_CHUNK_TIMEOUT_S
+        iterator = stream.__aiter__()  # type: ignore[union-attr]
+        try:
+            first = await asyncio.wait_for(iterator.__anext__(), timeout=limit)
+        except (asyncio.TimeoutError, TimeoutError):
+            seq = (meta_info or {}).get("sequence_id")
+            logger.error(f"LLM_FIRST_CHUNK_TIMEOUT: no LLM chunk in {limit}s seq={seq}; cancelling hung stream")
+            try:
+                (meta_info.setdefault("_non_fatal_errors", [])).append(
+                    {"error": "LLM_FIRST_CHUNK_TIMEOUT", "sequence_id": seq, "timeout_s": limit}
+                )
+            except Exception:
+                pass
+            self.response_in_pipeline = False
+            self._synthesis_awaiting_first_audio = False
+            try:
+                await stream.aclose()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            return
+        except StopAsyncIteration:
+            return
+        yield first
+        async for item in iterator:
+            yield item
+
     async def __do_llm_generation(
         self, messages, meta_info, next_step, should_bypass_synth=False, should_trigger_function_call=False
     ):
@@ -3735,6 +3774,8 @@ class TaskManager(BaseManager):
             logger.info(
                 f"__do_llm_generation: Skipping — hangup_triggered={self.hangup_triggered}, conversation_ended={self.conversation_ended}"
             )
+            self.response_in_pipeline = False
+            self._synthesis_awaiting_first_audio = False
             return
 
         # Clear stale end_of_llm_stream from previous generation so only
@@ -3764,9 +3805,8 @@ class TaskManager(BaseManager):
         meta_info["detected_language"] = self.language
 
         try:
-            async for llm_message in self.tools["llm_agent"].generate(
-                messages, synthesize=synthesize, meta_info=meta_info
-            ):
+            llm_stream = self.tools["llm_agent"].generate(messages, synthesize=synthesize, meta_info=meta_info)
+            async for llm_message in self._llm_stream_with_first_chunk_timeout(llm_stream, meta_info):
                 if (
                     isinstance(llm_message, dict) and "messages" in llm_message
                 ):  # custom list of messages before the llm call
@@ -4735,6 +4775,22 @@ class TaskManager(BaseManager):
     def kickoff_llm_generation(self, transcriber_message, meta_info):
         """Start the LLM turn for a final transcript (immediate path and settle-window path)."""
         logger.info(f"Running llm Tasks")
+        new_asr_turn_id = asr_id_to_int((meta_info or {}).get("asr_turn_id"))
+        inflight_asr = getattr(self, "_inflight_llm_asr_turn_id", None)
+        if (
+            self.llm_task is not None
+            and not self.llm_task.done()
+            and new_asr_turn_id is not None
+            and inflight_asr is not None
+            and new_asr_turn_id == inflight_asr
+        ):
+            # Cumulative ASR re-emission of the turn already in flight ("A" -> "A B"):
+            # killing it per fragment starves every attempt before first token.
+            # Keep the in-flight generation; only a genuinely new turn cancels.
+            logger.info(
+                f"Skipping LLM cancel: same asr_turn_id={new_asr_turn_id} cumulative re-emission; keeping in-flight turn"
+            )
+            return
         transcriber_package = create_ws_data_packet(transcriber_message, meta_info)
 
         # Cancel any existing LLM task to prevent orphaned concurrent responses
@@ -4750,6 +4806,7 @@ class TaskManager(BaseManager):
         # Unconditional: an un-re-added seq_id leaves every chunk of this turn BLOCKed.
         self.interruption_manager.revalidate_sequence_id(meta_info["sequence_id"])
         self.response_in_pipeline = True
+        self._inflight_llm_asr_turn_id = new_asr_turn_id
         # Background once-per-turn switch decision; gates this turn's AUDIO, not its generation.
         self._spawn_language_switch_decision(transcriber_message, meta_info)
         self.llm_task = asyncio.create_task(self._run_llm_task(transcriber_package))
@@ -7219,13 +7276,18 @@ class TaskManager(BaseManager):
                 else:
                     logger.info("other synthesizer models not supported yet")
             else:
-                logger.info(
-                    f"{message['meta_info']['sequence_id']} is not a valid sequence id and hence not synthesizing this"
+                logger.warning(
+                    f"{message['meta_info']['sequence_id']} is not a valid sequence id and hence not synthesizing this; "
+                    f"clearing response_in_pipeline"
                 )
+                self.response_in_pipeline = False
+                self._synthesis_awaiting_first_audio = False
 
         except Exception as e:
             traceback.print_exc()
-            logger.error(f"Error in synthesizer: {e}")
+            logger.error(f"Error in synthesizer: {e}; clearing response_in_pipeline")
+            self.response_in_pipeline = False
+            self._synthesis_awaiting_first_audio = False
             self._turn_audio_flushed.set()
 
     ############################################################

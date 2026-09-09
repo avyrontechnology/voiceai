@@ -50,6 +50,10 @@ LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S = 2.5
 
 # Debounce for overlapped finals: one regenerate after this quiet window instead of per fragment.
 LLM_REGEN_SETTLE_S = 0.7
+# First-chunk watchdog: a hung LLM stream (open but zero chunks) must not wedge
+# response_in_pipeline forever. ~4-5s bounds TTFT so the next utterance can still
+# be answered; the timeout logs LLM_FIRST_CHUNK_TIMEOUT and clears pipeline flags.
+LLM_FIRST_CHUNK_TIMEOUT_S = 4.5
 # Class-name prefixes whose endpointing rules out an in-window final: they skip the debounce.
 REGEN_SETTLE_EXCLUDED_TRANSCRIBERS = ("deepgram",)
 
@@ -210,7 +214,7 @@ LANGUAGE_NAMES = {
 LLM_DEFAULT_CONFIGS = {
     "summarization": {"model": "gpt-4.1-mini", "provider": "openai"},
     "extraction": {"model": "gpt-4.1-mini", "provider": "openai"},
-    "google": {"model": "gemini-2.5-flash", "provider": "google"},
+    "google": {"model": "gemini-3.6-flash", "provider": "google"},
 }
 
 # Legacy language-switch tool, injected into the main LLM on multilingual agents
