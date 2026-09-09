@@ -112,6 +112,15 @@ class TelephonyInputHandler(DefaultInputHandler):
                 message = await self.websocket.receive_text()
 
                 packet = json.loads(message)
+                if not isinstance(packet, dict) or packet.get("event") is None:
+                    # Browser/UI legs speak {type}-frames, not telephony events
+                    # (the playground routes those to default handlers via
+                    # ?leg=browser, but a stray shape must never kill the
+                    # receiver loop and the whole call with it).
+                    logger.info(
+                        f"{self.io_provider} receiver ignoring non-telephony frame"
+                    )
+                    continue
                 if packet["event"] == "start":
                     await self.call_start(packet)
                 elif packet["event"] == "media":

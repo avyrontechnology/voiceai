@@ -1,5 +1,6 @@
 import os
 import asyncio
+import copy
 import uuid
 import traceback
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Depends
@@ -359,6 +360,7 @@ async def websocket_endpoint(
     websocket: WebSocket,
     user_agent: str = Query(None),
     token: Optional[str] = Query(None),
+    leg: Optional[str] = Query(None),
 ):
     logger.info("Connected to ws")
     await websocket.accept()
@@ -375,7 +377,31 @@ async def websocket_endpoint(
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    assistant_manager = AssistantManager(agent_config, websocket, agent_id)
+    # Playground / browser legs (obotaai-ui passes ?leg=browser) speak the
+    # browser {type}-frame protocol, not Twilio-shaped telephony events. An
+    # agent configured with a telephony IO provider (talko/twilio/...) would
+    # otherwise bind telephony handlers that crash on the first {type:init}
+    # frame and stay silent. Run browser legs on the default handlers —
+    # session-local only, the stored agent config is untouched — so Talk
+    # tests the agent's brain over browser audio. Carrier legs (Talko relay,
+    # no leg param) are unaffected.
+    is_web_leg = (leg or "").lower() == "browser"
+    if is_web_leg:
+        agent_config = copy.deepcopy(agent_config)
+        for task in agent_config.get("tasks", []) or []:
+            tools_config = task.get("tools_config") or {}
+            for direction in ("input", "output"):
+                io_config = tools_config.get(direction)
+                if isinstance(io_config, dict) and io_config.get("provider") != "default":
+                    logger.info(
+                        f"Browser leg: overriding {direction} provider "
+                        f"{io_config.get('provider')} -> default for playground test"
+                    )
+                    io_config["provider"] = "default"
+
+    assistant_manager = AssistantManager(
+        agent_config, websocket, agent_id, is_web_based_call=is_web_leg
+    )
 
     task_outputs = []
     try:
