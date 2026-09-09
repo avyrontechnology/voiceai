@@ -1,9 +1,8 @@
 name: Auto Version Bump
 
+# TEMPORARILY DISABLED — re-enable by restoring the pull_request trigger.
 on:
-  pull_request:
-    branches: [master]
-    types: [opened, synchronize]
+  workflow_dispatch: {}
 
 permissions:
   contents: write

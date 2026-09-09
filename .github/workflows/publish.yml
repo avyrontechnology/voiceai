@@ -1,8 +1,8 @@
 name: Publish to PyPI
 
+# TEMPORARILY DISABLED — re-enable by restoring the push trigger.
 on:
-  push:
-    branches: [master]
+  workflow_dispatch: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

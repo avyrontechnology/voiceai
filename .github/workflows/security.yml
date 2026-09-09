@@ -1,10 +1,8 @@
 name: Security
 
+# TEMPORARILY DISABLED — re-enable by restoring push/pull_request triggers.
 on:
-  pull_request:
-    branches: [master, main]
-  push:
-    branches: [master, main]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
