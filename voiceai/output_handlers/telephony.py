@@ -61,7 +61,19 @@ class TelephonyOutputHandler(DefaultOutputHandler):
             return
         try:
             audio_chunk = ws_data_packet.get("data")
-            meta_info = ws_data_packet.get("meta_info")
+            meta_info = ws_data_packet.get("meta_info") or {}
+            # Telephony legs carry audio only — transcript/text packets share
+            # this queue (S2S agent/user transcripts) and must NOT reach the
+            # audio encoder: treating their str payload as PCM raised
+            # TypeError inside lin2ulaw and latched the handler closed,
+            # muting every later reply with no trace. Skip them loudly.
+            if meta_info.get("type") not in ("audio", None):
+                logger.info(
+                    "%s output handler skipping non-audio packet type=%s",
+                    self.io_provider,
+                    meta_info.get("type"),
+                )
+                return
             if self.stream_sid is None:
                 self.stream_sid = meta_info.get("stream_sid", None)
 
