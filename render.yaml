@@ -7,7 +7,8 @@ services:
     name: voiceai-talko-trunk
     runtime: docker
     dockerfilePath: ./Dockerfile
-    dockerCommand: uvicorn talko_api_server:app --host 0.0.0.0 --port 10000 --app-dir local_setup/telephony_server
+    # WB-1: single worker — the in-memory warm socket pool is per-process.
+    dockerCommand: uvicorn talko_api_server:app --host 0.0.0.0 --port 10000 --app-dir local_setup/telephony_server --workers 1
     plan: free
     healthCheckPath: /talko/health
     envVars:

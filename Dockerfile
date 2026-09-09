@@ -37,4 +37,6 @@ COPY . ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps .
 
-CMD ["uvicorn", "quickstart_server:app", "--host", "0.0.0.0", "--port", "5001", "--app-dir", "local_setup"]
+# WB-1: single worker — the in-memory warm socket pool is per-process, so
+# additional workers would each dial their own standbys (and split the cache).
+CMD ["uvicorn", "quickstart_server:app", "--host", "0.0.0.0", "--port", "5001", "--app-dir", "local_setup", "--workers", "1"]

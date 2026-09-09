@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import redis.asyncio as redis
@@ -67,7 +68,92 @@ redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
 
-app = FastAPI(title="VoiceAI engine", version="1.0.0")
+
+async def _load_all_agent_records() -> list:
+    """(agent_id, record) pairs for the welcome prewarm; best-effort, never raises."""
+    records = []
+    try:
+        keys = await redis_client.keys("*")
+    except Exception:
+        return records
+    for key in keys or []:
+        if ":" in key:
+            continue
+        try:
+            raw = await redis_client.get(key)
+            record = json.loads(raw) if raw else None
+            if isinstance(record, dict):
+                records.append((key, record))
+        except Exception:
+            continue
+    return records
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """WB-1: prewarm one warm-pool standby per default voice; WB-2: welcome pre-render.
+
+    The pool is in-memory (per-process), so this server must run with
+    ``uvicorn --workers 1`` (see Dockerfile / render.yaml). Teardown closes
+    every standby socket. Everything here is best-effort: the engine always
+    works as direct-dial without it.
+    """
+    from voiceai.platform import warm_pool as _warm_pool
+    from voiceai.platform import welcome_cache as _welcome_cache
+
+    _welcome_cache.install(app)
+    app.state.warm_pool = None
+    app.state.welcome_prewarm_task = None
+    if _warm_pool.is_warm_pool_enabled():
+        if not os.getenv("SARVAM_API_KEY"):
+            logger.warning("WARM_POOL_ENABLED=1 but SARVAM_API_KEY is not set; warm pool disabled (direct dial)")
+        else:
+            try:
+                _warm_pool.ensure_single_worker(int(os.getenv("UVICORN_WORKERS", "1")))
+            except Exception as exc:
+                logger.warning("warm pool disabled: %s", summarize_exception(exc))
+            else:
+                pool = _warm_pool.build_default_pool()
+                try:
+                    warmed_tts = await pool.prewarm_tts(_warm_pool.default_tts_keys())
+                    warmed_stt = await pool.prewarm_stt(_warm_pool.default_stt_keys())
+                except Exception as exc:
+                    warmed_tts, warmed_stt = 0, 0
+                    logger.warning("warm pool prewarm incomplete: %s", summarize_exception(exc))
+                pool.start_keeper()
+                app.state.warm_pool = pool
+                _warm_pool.set_shared_pool(pool)
+                logger.info("warm pool ready | tts=%d stt=%d", warmed_tts, warmed_stt)
+    else:
+        logger.info("warm pool disabled (WARM_POOL_ENABLED!=1); direct dial")
+    try:
+        app.state.welcome_prewarm_task = asyncio.create_task(
+            _welcome_cache.prewarm_all_welcomes(_load_all_agent_records)
+        )
+    except Exception as exc:
+        logger.warning("welcome prewarm not scheduled: %s", summarize_exception(exc))
+    yield
+    task = getattr(app.state, "welcome_prewarm_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    pool = getattr(app.state, "warm_pool", None)
+    if pool is not None:
+        try:
+            await pool.close_all()
+        except Exception as exc:
+            logger.warning("warm pool teardown: %s", summarize_exception(exc))
+    try:
+        _warm_pool.set_shared_pool(None)
+    except Exception:
+        pass
+    app.state.warm_pool = None
+
+
+app = FastAPI(title="VoiceAI engine", version="1.0.0", lifespan=lifespan)
 register_exception_handlers(app, logger=logger)
 
 # Credentials (cookies) never work with a "*" origin, so auth requires an
@@ -297,6 +383,14 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depend
     validate_agent_config(record, structural=False, name=agent_id)
     await generate_extraction_prompts(record.get("tasks", []))
     await persist_agent(agent_id, record, agent_data.agent_prompts)
+    # WB-2: pre-render the welcome line so calls send it immediately (best-effort).
+    try:
+        from voiceai.platform import welcome_cache as _welcome_cache
+
+        if await _welcome_cache.refresh_agent_welcome(agent_id, record):
+            logger.info("welcome pre-rendered | agent=%s", agent_id)
+    except Exception as exc:
+        logger.warning("welcome pre-render skipped | agent=%s err=%s", agent_id, summarize_exception(exc))
     logger.info("agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", [])))
     return AgentCreatedResponse(agent_id=agent_id)
 
@@ -321,6 +415,14 @@ async def edit_agent(
     validate_agent_config(record, structural=False, name=agent_id)
     await generate_extraction_prompts(record.get("tasks", []))
     await persist_agent(agent_id, record, agent_data.agent_prompts)
+    # WB-2: re-render the welcome line so the next call sends it immediately (best-effort).
+    try:
+        from voiceai.platform import welcome_cache as _welcome_cache
+
+        if await _welcome_cache.refresh_agent_welcome(agent_id, record):
+            logger.info("welcome pre-rendered | agent=%s", agent_id)
+    except Exception as exc:
+        logger.warning("welcome pre-render skipped | agent=%s err=%s", agent_id, summarize_exception(exc))
     logger.info("agent updated | agent=%s name=%s", agent_id, record.get("agent_name"))
     return AgentUpdatedResponse(agent_id=agent_id)
 
