@@ -84,6 +84,19 @@ class DefaultOutputHandler:
     def set_hangup_sent(self):
         self.is_last_hangup_chunk_sent = True
 
+    def reopen(self, reason: str = "") -> None:
+        """Clear a latched-closed output so a fresh turn can speak again.
+
+        The latch exists to fail fast on dead sockets; but a transient
+        failure (throttled CPU, bursty burst) must not mute the agent for
+        the rest of the call. If the socket is truly dead the next send
+        fails immediately and re-latches — bounded and fully logged.
+        """
+        if self._closed:
+            logger.warning(
+                "%s output handler reopening (%s)", self.io_provider, reason or "new turn"
+            )
+            self._closed = False
     def hangup_sent(self):
         return self.is_last_hangup_chunk_sent
 
@@ -109,6 +122,11 @@ class DefaultOutputHandler:
 
     async def handle(self, packet):
         if self._closed:
+            logger.warning(
+                "%s output handler is closed, dropping %s packet",
+                self.io_provider,
+                (packet or {}).get("meta_info", {}).get("type", "?"),
+            )
             return
         try:
             logger.info(f"Packet received:")

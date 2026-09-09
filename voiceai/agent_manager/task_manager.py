@@ -8091,6 +8091,13 @@ class TaskManager(BaseManager):
             if isinstance(event, s2s_events.AudioDelta):
                 if not self._s2s_agent_speaking:
                     self._s2s_agent_speaking = True
+                    # A fresh reply must always be allowed to speak: reopen a
+                    # latched-closed output handler (transient send failure)
+                    # so one bad moment can't mute the rest of the call. A
+                    # truly dead socket just fails fast again, fully logged.
+                    reopen = getattr(self.tools.get("output"), "reopen", None)
+                    if callable(reopen):
+                        reopen("new s2s turn")
                     self.interruption_manager.on_agent_speech_started(self._s2s_turn_seq)
                 chunk = self._s2s_encode_output(event.data)
                 self._s2s_extend_playout(chunk)
