@@ -6,6 +6,7 @@ import audioop
 import time
 import uuid
 import traceback
+from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
 from .default import DefaultOutputHandler
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS
@@ -49,6 +50,14 @@ class TelephonyOutputHandler(DefaultOutputHandler):
 
     async def handle(self, ws_data_packet):
         if self._closed:
+            # Never swallow this silently: a latched-closed handler drops
+            # every subsequent packet with no other trace, which looks
+            # exactly like "the agent stopped talking" mid-call.
+            logger.warning(
+                "%s output handler is closed, dropping %s packet",
+                self.io_provider,
+                (ws_data_packet or {}).get("meta_info", {}).get("type", "?"),
+            )
             return
         try:
             audio_chunk = ws_data_packet.get("data")
@@ -156,9 +165,19 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                     await self._send_text(json.dumps(mark_message))
                 else:
                     logger.info("Not sending")
+            except asyncio.TimeoutError:
+                # Transient stall (event-loop hiccup, throttled CPU) — drop
+                # this packet but STAY OPEN. Latching closed here used to
+                # mute the agent for the rest of the call with no log trace.
+                logger.warning(
+                    f"{self.io_provider} output send timed out, packet dropped, socket kept open"
+                )
+            except (WebSocketDisconnect, RuntimeError) as e:
+                self._closed = True  # Prevent further send attempts
+                logger.info(f"WebSocket send failed (client disconnected): {e}")
             except Exception as e:
                 self._closed = True  # Prevent further send attempts
-                logger.debug(f"WebSocket send failed (client disconnected): {e}")
+                logger.info(f"WebSocket send failed ({type(e).__name__}): {e}")
 
         except Exception as e:
             self._closed = True

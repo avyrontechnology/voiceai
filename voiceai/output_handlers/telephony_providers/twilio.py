@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -19,6 +20,7 @@ class TwilioOutputHandler(TelephonyOutputHandler):
 
     async def handle_interruption(self):
         if self._closed:
+            logger.warning("twilio output handler is closed, skipping interruption clear")
             return
         try:
             logger.info("interrupting because user spoke in between")
@@ -28,6 +30,9 @@ class TwilioOutputHandler(TelephonyOutputHandler):
             }
             await self._send_text(json.dumps(message_clear))
             self.mark_event_meta_data.clear_data()
+        except asyncio.TimeoutError as e:
+            # Transient stall — keep the handler open (see TelephonyOutputHandler.handle).
+            logger.warning(f"Interruption clear send timed out, keeping socket open: {e}")
         except Exception as e:
             logger.info(f"WebSocket closed during interruption: {e}")
             self._closed = True
