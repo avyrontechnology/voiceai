@@ -8516,9 +8516,29 @@ class TaskManager(BaseManager):
             # itself, so timing it from before connect leaves no barge-in protection.
             self._s2s_started_at = time.time()
             self._s2s_welcome_sent = True
-            await s2s.trigger_response(
-                instructions=f"Open the conversation by saying exactly this, and nothing else: {welcome}"
-            )
+            cached_greeting = self._s2s_cached_welcome_pcm(welcome)
+            if cached_greeting is not None:
+                # Instant greeting: queue pre-rendered audio now (plays in
+                # ~ms once the output loop starts below) while Gemini
+                # connects in parallel. The model must NOT speak it again —
+                # history carries the text; skip trigger_response entirely.
+                # Miss -> model-spoken greeting, today's behavior, unchanged.
+                self.conversation_history.append_welcome_message(welcome)
+                await self.buffered_output_queue.put(
+                    {
+                        "data": self._s2s_encode_output(cached_greeting),
+                        "meta_info": self._s2s_meta(
+                            message_category="agent_welcome_message",
+                            is_first_chunk=True,
+                            end_of_llm_stream=True,
+                            end_of_synthesizer_stream=True,
+                        ),
+                    }
+                )
+            else:
+                await s2s.trigger_response(
+                    instructions=f"Open the conversation by saying exactly this, and nothing else: {welcome}"
+                )
 
         self.output_task = asyncio.create_task(self._s2s_output_loop())
         self.hangup_task = asyncio.create_task(self.__check_for_completion())
@@ -8862,6 +8882,49 @@ class TaskManager(BaseManager):
                     )
                     self.hangup_detail = HangupReason.S2S_ERROR
                     raise LLMError(event.message, provider=self.s2s_provider_name, model=self.s2s_model)
+
+    def _s2s_cached_welcome_pcm(self, text: str):
+        """Pre-rendered greeting PCM at the model's output rate, or None.
+
+        Consults the welcome cache populated at agent save/lifespan
+        (voiceai.platform.welcome_cache). Cache key parity: tries the S2S
+        provider voice first, then a bare lookup. Misses (including agents
+        with no cached voice, like non-Sarvam voices today) return None so
+        the caller falls back to the model-spoken greeting — never raises.
+        """
+        try:
+            from voiceai.platform import welcome_cache as _welcome_cache
+
+            if not _welcome_cache.is_welcome_preload_enabled():
+                return None
+            s2s = self.tools.get("s2s")
+            rate = getattr(s2s, "output_sample_rate", 24000) or 24000
+            provider_config = getattr(getattr(self, "s2s", None), "provider_config", None)
+            voice = (getattr(provider_config, "voice", "") or "") if provider_config else ""
+            attempts = []
+            if voice:
+                attempts.append({"voice": voice})
+            attempts.append({})
+            for extra in attempts:
+                pcm = _welcome_cache.lookup_for_call(
+                    agent_id=str(getattr(self, "assistant_id", "")),
+                    text=text,
+                    rate=int(rate),
+                    **extra,
+                )
+                if pcm:
+                    logger.info(
+                        "S2S cached greeting hit | bytes=%d rate=%s voice=%s",
+                        len(pcm),
+                        rate,
+                        extra.get("voice", ""),
+                    )
+                    return pcm
+            logger.info("S2S cached greeting miss | falling back to model-spoken greeting")
+            return None
+        except Exception as e:
+            logger.warning(f"S2S cached greeting lookup failed, using model greeting: {e}")
+            return None
 
     def _s2s_encode_output(self, pcm):
         s2s = self.tools["s2s"]
