@@ -7,7 +7,9 @@ bubble). ``voiceai.responses.register_exception_handlers`` renders every failure
 envelope, so no handler formats error JSON or status codes by hand.
 
 Voice websocket lifecycle (``/chat/v1/{agent_id}``)
-    accept -> authorise -> load config -> validate config -> run AssistantManager
+    accept -> authorise -> sniff first frame (browser vs carrier; frame evidence
+    beats a stale/missing ``?leg=`` param, peeked frame replayed) -> load config
+    -> validate config -> run AssistantManager
     Any failure sends ``{"type": "error", ...}`` and closes with the 4xxx code mapped from the
     error code (4401 unauthenticated, 4404 agent not found, 4400 invalid config, 4502 provider,
     4500 internal). The socket is always removed from ``active_websockets`` and the execution
@@ -64,7 +66,40 @@ if not REDIS_URL:
     REDIS_URL = "redis://localhost:6379/0"
     logger.warning("REDIS_URL is not set; defaulting to %s", REDIS_URL)
 
-redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
+# Redis resilience tunables: without health checks + retries, one Redis
+# restart (or Docker-network blip) poisons pooled connections and every
+# authenticated endpoint 500s until manual restart.
+REDIS_HEALTH_CHECK_INTERVAL_S = 30
+REDIS_SOCKET_CONNECT_TIMEOUT_S = 5
+REDIS_SOCKET_TIMEOUT_S = 10
+REDIS_COMMAND_RETRIES = 3
+
+
+def build_redis_pool(url: str) -> redis.ConnectionPool:
+    """Shared Redis pool that survives transient connection loss.
+
+    Health-checks idle connections before checkout (dead sockets are dropped,
+    not handed out), enables TCP keepalive, bounds every command with timeouts,
+    and retries connection errors with backoff instead of 500ing immediately.
+    """
+    from redis.asyncio.retry import Retry
+    from redis.backoff import ExponentialBackoff
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    return redis.ConnectionPool.from_url(
+        url,
+        decode_responses=True,
+        health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_S,
+        socket_keepalive=True,
+        socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT_S,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_S,
+        retry_on_timeout=True,
+        retry_on_error=[RedisConnectionError],
+        retry=Retry(ExponentialBackoff(base=0.1, cap=2.0), REDIS_COMMAND_RETRIES),
+    )
+
+
+redis_pool = build_redis_pool(REDIS_URL)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
 
@@ -545,6 +580,100 @@ def _browser_leg_config(agent_config: dict) -> dict:
     return config
 
 
+class _ReplayWebSocket:
+    """Starlette websocket wrapper that replays peeked ASGI messages first.
+
+    The endpoint peeks the first frame to detect the leg protocol
+    (browser ``{type:…}`` vs carrier ``{event:…}``) before handlers are bound;
+    the peeked message must still reach the input handler, so it is served back
+    on the next ``receive*`` call. Everything else delegates to the real socket.
+    """
+
+    def __init__(self, websocket: WebSocket, replay):
+        object.__setattr__(self, "_websocket", websocket)
+        object.__setattr__(self, "_replay", list(replay or []))
+
+    def __getattr__(self, name: str):
+        return getattr(object.__getattribute__(self, "_websocket"), name)
+
+    async def receive(self):
+        replay = object.__getattribute__(self, "_replay")
+        if replay:
+            return replay.pop(0)
+        return await object.__getattribute__(self, "_websocket").receive()
+
+    async def receive_text(self) -> str:
+        message = await self.receive()
+        if message.get("type") == "websocket.disconnect":
+            raise WebSocketDisconnect(code=message.get("code", 1000))
+        if "text" not in message:
+            raise RuntimeError(f"Expected text websocket frame, got {message.get('type')}")
+        return message["text"]
+
+    async def receive_json(self):
+        return json.loads(await self.receive_text())
+
+
+def resolve_leg(is_web_param: bool, signal: Optional[str]) -> bool:
+    """Decide browser vs carrier leg; frame evidence beats a stale/missing param.
+
+    A UI build that connects without ``?leg=browser`` used to bind Talko
+    telephony handlers to a browser-protocol leg — welcome went out as Twilio
+    media the browser can't play ("connects but total silence", no errors).
+    """
+    if signal == "browser":
+        if not is_web_param:
+            logger.warning("leg param missing/stale but first frame is browser-protocol; routing as browser leg")
+        return True
+    if signal == "carrier":
+        if is_web_param:
+            logger.warning("leg=browser param set but first frame is a carrier event; routing as carrier leg")
+        return False
+    return is_web_param
+
+
+#: How long the leg sniff waits for the peer's first frame before falling back
+#: to the ``leg`` query param. Both protocols speak first (browser ``init`` on
+#: open, carrier ``start``/media on connect), so a peer that stays silent gets
+#: param routing; its late frames still reach the handlers normally because a
+#: timed-out ``receive()`` leaves the ASGI message queued.
+LEG_SNIFF_TIMEOUT_S = 2.0
+
+
+async def _peek_leg_signal(websocket: WebSocket, timeout: float = LEG_SNIFF_TIMEOUT_S):
+    """Read the first ASGI message and classify the leg protocol.
+
+    Returns ``(message, signal)`` where signal is ``"browser"``, ``"carrier"``
+    or ``None`` (timeout/garbage/binary/disconnect/transport error — caller
+    falls back to the ``leg`` query param). The message is returned (not
+    consumed) so the caller can replay it via :class:`_ReplayWebSocket`.
+    """
+    try:
+        message = await asyncio.wait_for(websocket.receive(), timeout)
+    except (asyncio.TimeoutError, WebSocketDisconnect):
+        return None, None
+    except Exception as exc:
+        logger.debug("leg sniff peek failed: %s", summarize_exception(exc))
+        return None, None
+    if not isinstance(message, dict) or message.get("type") != "websocket.receive":
+        return message, None
+    text = message.get("text")
+    if not isinstance(text, str):
+        return message, None
+    try:
+        packet = json.loads(text)
+    except (ValueError, TypeError):
+        return message, None
+    if not isinstance(packet, dict):
+        return message, None
+    event = packet.get("event")
+    if event is not None:
+        return message, "carrier"
+    if packet.get("type") is not None:
+        return message, "browser"
+    return message, None
+
+
 def _forget_socket(websocket: WebSocket) -> None:
     try:
         active_websockets.remove(websocket)
@@ -552,9 +681,35 @@ def _forget_socket(websocket: WebSocket) -> None:
         pass
 
 
+async def _lookup_inbound_did(agent_id: str) -> Optional[str]:
+    """Dialed DID for an inbound carrier leg via /inbound + /phone-numbers mapping.
+
+    Record enrichment only — never affects routing or audio.
+    """
+    store = getattr(app.state, "platform_store", None)
+    if store is None or not agent_id:
+        return None
+    try:
+        cfg = await store.get_inbound(agent_id)
+        if cfg is not None and getattr(cfg, "assigned_number_id", None):
+            number = await store.get_number(cfg.assigned_number_id)
+            if number is not None and getattr(number, "number", None):
+                return str(number.number)
+    except Exception:
+        pass
+    try:
+        numbers = await store.list_numbers()
+        for entry in numbers or []:
+            if getattr(entry, "assigned_agent_id", None) == agent_id and getattr(entry, "number", None):
+                return str(entry.number)
+    except Exception:
+        pass
+    return None
+
+
 async def _record_execution(agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]) -> None:
     """Best-effort execution log for the platform layer; never breaks the call path."""
-    from voiceai.platform.engine_hook import record_engine_execution
+    from voiceai.platform.engine_hook import _numbers_from_context, record_engine_execution
 
     platform_store = getattr(app.state, "platform_store", None)
     # The last conversation payload carries the transcript, true call timings, latency
@@ -563,13 +718,62 @@ async def _record_execution(agent_id: str, assistant_manager: Optional[Assistant
         (output for output in reversed(task_outputs) if isinstance(output, dict) and output.get("messages")),
         None,
     )
+    is_web_leg: Optional[bool] = None
+    context_data: Optional[Dict[str, Any]] = None
+    if assistant_manager is not None:
+        context_data = getattr(assistant_manager, "context_data", None)
+        is_web_leg = getattr(assistant_manager, "is_web_based_call", None)
+        if is_web_leg is None:
+            try:
+                is_web_leg = bool((getattr(assistant_manager, "kwargs", None) or {}).get("is_web_based_call"))
+            except Exception:
+                is_web_leg = None
+    # Web legs must stay number-free; carrier legs resolve PSTN numbers for history.
+    to_number: Optional[str] = None
+    from_number: Optional[str] = None
+    if is_web_leg is not True:
+        try:
+            derived = _numbers_from_context(context_data)
+            to_number = derived.get("to_number")
+            from_number = derived.get("from_number")
+        except Exception:
+            to_number, from_number = None, None
+        # Fallback 1: recent dial/batch execution for the same agent (outbound rows
+        # already carry to/from; live media legs arrive without them until the relay
+        # forwards context_data). Copies numbers only, never call behavior.
+        if (not to_number or not from_number) and platform_store is not None:
+            try:
+                recent = await platform_store.list_executions(agent_id=agent_id, limit=10)
+                for entry in recent or []:
+                    entry_to = getattr(entry, "to_number", None)
+                    entry_from = getattr(entry, "from_number", None)
+                    if entry_to and entry_to != "unknown" and not to_number:
+                        to_number = entry_to
+                    if entry_from and not from_number:
+                        from_number = entry_from
+                    if to_number and from_number:
+                        break
+            except Exception:
+                pass
+        # Fallback 2: inbound DID mapping for still-missing dialed number.
+        if not to_number:
+            try:
+                did = await _lookup_inbound_did(agent_id)
+                if did:
+                    to_number = did
+            except Exception:
+                pass
     await record_engine_execution(
         platform_store,
         agent_id=agent_id,
         run_id=getattr(assistant_manager, "run_id", None),
         history=[],
         task_outputs=task_outputs,
+        to_number=to_number,
+        from_number=from_number,
         direction="inbound",
+        is_web_based_call=bool(is_web_leg) if is_web_leg is not None else False,
+        context_data=context_data if is_web_leg is not True else None,
         output=last_output,
     )
 
@@ -581,30 +785,57 @@ async def websocket_endpoint(
     user_agent: str = Query(None),
     token: Optional[str] = Query(None),
     leg: Optional[str] = Query(None),
+    from_number: Optional[str] = Query(None, description="PSTN caller ID for carrier legs (ignored on web legs)."),
+    to_number: Optional[str] = Query(None, description="Dialed number for carrier legs (ignored on web legs)."),
 ):
     await websocket.accept()
     active_websockets.append(websocket)
     assistant_manager: Optional[AssistantManager] = None
     task_outputs: List[Any] = []
     error: Optional[VoiceAIError] = None
-    is_web_leg = (leg or "").lower() == "browser"
+    is_web_param = (leg or "").lower() == "browser"
     try:
         auth_kind = await _authorize_voice_socket(websocket, token, agent_id)
         agent_config = await load_agent_record(agent_id)
-        if is_web_leg:
-            agent_config = _browser_leg_config(agent_config)
         # Stored configs may predate today's schema, so structural drift only warns here; the
         # engine-level checks (unknown providers, pipelines naming unconfigured tools) reject
         # the call with 4400 and a path instead of a traceback mid-call.
         validate_agent_config(agent_config, structural=False, name=agent_id)
+        # Sniff the first frame so a stale client without ?leg=browser still
+        # routes correctly; the peeked frame is replayed to the input handler.
+        # Load/validate stay first so unknown agents and bad configs still
+        # close fast without waiting for a frame that never comes.
+        peeked, leg_signal = await _peek_leg_signal(websocket)
+        is_web_leg = resolve_leg(is_web_param, leg_signal)
+        call_socket = _ReplayWebSocket(websocket, [peeked] if peeked is not None else [])
+        if is_web_leg:
+            agent_config = _browser_leg_config(agent_config)
         logger.info(
-            "voice socket open | agent=%s leg=%s auth=%s tasks=%d",
+            "voice socket open | agent=%s leg=%s auth=%s tasks=%d leg_signal=%s",
             agent_id,
             "browser" if is_web_leg else "carrier",
             auth_kind,
             len(agent_config.get("tasks", []) or []),
+            leg_signal,
         )
-        assistant_manager = AssistantManager(agent_config, websocket, agent_id, is_web_based_call=is_web_leg)
+        # Carrier legs may carry PSTN numbers as query params (future relay forwards
+        # trunk context_data here). Web legs ignore them so browser rows stay number-free.
+        # Record-only: never affects routing, prompts, or audio.
+        call_context: Optional[Dict[str, Any]] = None
+        if not is_web_leg and (from_number or to_number):
+            call_context = {"recipient_data": {}}
+            if from_number:
+                call_context["recipient_data"]["from_number"] = from_number
+            if to_number:
+                call_context["recipient_data"]["to_number"] = to_number
+        if call_context is not None:
+            assistant_manager = AssistantManager(
+                agent_config, call_socket, agent_id, context_data=call_context, is_web_based_call=is_web_leg
+            )
+        else:
+            # No carrier numbers: legacy call shape (keeps test doubles without
+            # context_data working; stored config and audio path untouched).
+            assistant_manager = AssistantManager(agent_config, call_socket, agent_id, is_web_based_call=is_web_leg)
         async for index, task_output in assistant_manager.run(local=True):
             task_outputs.append(task_output)
             keys = sorted(task_output.keys()) if isinstance(task_output, dict) else type(task_output).__name__

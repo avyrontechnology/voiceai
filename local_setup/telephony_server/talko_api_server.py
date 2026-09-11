@@ -125,12 +125,20 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
     if not did:
         raise ConfigurationError("No dedicated DID: set caller_did or TALKO_AI_DID.", path="TALKO_AI_DID")
 
+    # context_data carries PSTN numbers for the engine's execution log (additive:
+    # talko-service relay forwards unknown keys; engine reads recipient_data
+    # from_number/to_number per the pre-call webhook convention). No dial/audio change.
     body: dict = {
         "entity_type": "Lead",
         "to_number": call_details.recipient_phone_number,
         "enable_ai_bridge": True,
         "dedicated_did": did,
-        "context_data": {"voiceai_agent_id": call_details.agent_id},
+        "context_data": {
+            "voiceai_agent_id": call_details.agent_id,
+            "to_number": call_details.recipient_phone_number,
+            "from_number": did,
+            "dedicated_did": did,
+        },
     }
     if partner_id:
         try:
@@ -146,7 +154,7 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
         raise _trunk_error("dial", e) from e
     if resp.status_code >= 400:
         raise _rejected("dial", resp)
-    return {"status": "initiated", "talko_response": resp.json()}
+    return {"status": "initiated", "dedicated_did": did, "talko_response": resp.json()}
 
 
 @app.post(

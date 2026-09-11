@@ -82,6 +82,10 @@ class Execution(BaseModel):
 
 class ExecutionListResponse(BaseModel):
     executions: List[Execution]
+    # Paginated list metadata (additive: old clients ignore extras, new pager uses total).
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
 
 
 class ExecutionStats(BaseModel):

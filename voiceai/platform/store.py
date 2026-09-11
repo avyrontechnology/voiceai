@@ -96,6 +96,67 @@ class MemoryStore:
         raw = self._get("executions", execution_id)
         return Execution(**raw) if raw else None
 
+    def _match_execution_raw(
+        self,
+        raw: Dict[str, Any],
+        agent_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        status: Optional[str] = None,
+        direction: Optional[str] = None,
+        since: Any = None,
+    ) -> bool:
+        """Predicate over the stored JSON dict — no pydantic cost for non-matching rows."""
+        if agent_id and raw.get("agent_id") != agent_id:
+            return False
+        if batch_id and raw.get("batch_id") != batch_id:
+            return False
+        if status and raw.get("status") != status:
+            return False
+        if direction and raw.get("direction") != direction:
+            return False
+        if since is not None:
+            try:
+                from datetime import datetime as _dt
+
+                started_raw = raw.get("started_at")
+                if isinstance(started_raw, str):
+                    started = _dt.fromisoformat(started_raw.replace("Z", "+00:00"))
+                else:
+                    started = started_raw
+                since_cmp = since
+                if isinstance(started, _dt) and isinstance(since_cmp, _dt):
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=_dt.now().astimezone().tzinfo)
+                    if since_cmp.tzinfo is None:
+                        since_cmp = since_cmp.replace(tzinfo=started.tzinfo)
+                    if started < since_cmp:
+                        return False
+            except Exception:
+                pass
+        return True
+
+    def _filtered_execution_raws(
+        self,
+        agent_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        status: Optional[str] = None,
+        direction: Optional[str] = None,
+        since: Any = None,
+    ) -> List[Dict[str, Any]]:
+        raws = [r for r in self._all("executions") if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)]
+        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        return raws
+
+    async def count_executions(
+        self,
+        agent_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        status: Optional[str] = None,
+        direction: Optional[str] = None,
+        since: Any = None,
+    ) -> int:
+        return len(self._filtered_execution_raws(agent_id, batch_id, status, direction, since))
+
     async def list_executions(
         self,
         agent_id: Optional[str] = None,
@@ -103,16 +164,69 @@ class MemoryStore:
         status: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        direction: Optional[str] = None,
+        since: Any = None,
+        include_transcript: bool = True,
     ) -> List[Execution]:
-        items = [Execution(**raw) for raw in self._all("executions")]
-        if agent_id:
-            items = [e for e in items if e.agent_id == agent_id]
-        if batch_id:
-            items = [e for e in items if e.batch_id == batch_id]
-        if status:
-            items = [e for e in items if e.status.value == status]
-        items.sort(key=lambda e: e.started_at, reverse=True)
-        return items[offset : offset + limit]
+        raws = self._filtered_execution_raws(agent_id, batch_id, status, direction, since)
+        page = raws[offset : offset + limit]
+        items: List[Execution] = []
+        for raw in page:
+            if not include_transcript and raw.get("transcript"):
+                raw = {**raw, "transcript": []}
+            items.append(Execution(**raw))
+        return items
+
+    async def aggregate_execution_stats(
+        self,
+        agent_id: Optional[str] = None,
+        since: Any = None,
+        max_scan: int = 5000,
+    ) -> Dict[str, Any]:
+        """Bounded stats over raw dicts — never validates transcripts."""
+        raws = self._filtered_execution_raws(agent_id, None, None, None, since)
+        total = len(raws)
+        by_status: Dict[str, int] = {}
+        latencies: List[int] = []
+        total_duration = 0.0
+        completed = 0
+        for raw in raws[:max_scan]:
+            st = raw.get("status")
+            if isinstance(st, str):
+                by_status[st] = by_status.get(st, 0) + 1
+                if st == "completed":
+                    completed += 1
+            lat = raw.get("latency") or {}
+            e2e = lat.get("e2e_ms") if isinstance(lat, dict) else None
+            if isinstance(e2e, (int, float)):
+                latencies.append(int(e2e))
+            dur = raw.get("duration_s") or 0
+            if isinstance(dur, (int, float)):
+                total_duration += float(dur)
+        # Scale completed_rate to the full total when truncated (documented bound).
+        scanned = min(len(raws), max_scan)
+        return {
+            "total": total,
+            "by_status": by_status,
+            "latencies": latencies,
+            "total_duration": total_duration,
+            "scanned": scanned,
+        }
+
+    async def aggregate_latency_stats(
+        self,
+        agent_id: Optional[str] = None,
+        since: Any = None,
+        max_scan: int = 5000,
+    ) -> Dict[str, Any]:
+        """Bounded latency aggregates over raw dicts (no transcript validation)."""
+        raws = self._filtered_execution_raws(agent_id, None, None, None, since)
+        fresh: List[Dict[str, Any]] = []
+        for raw in raws[:max_scan]:
+            lat = raw.get("latency")
+            if isinstance(lat, dict) and lat.get("e2e_ms") is not None:
+                fresh.append(raw)
+        return {"total_matching": len(raws), "fresh": fresh[:max_scan]}
 
     # -- batches -----------------------------------------------------------------
 
@@ -502,14 +616,70 @@ class RedisStore(MemoryStore):
         raw = await self._redis.get(key)
         return json.loads(raw) if raw else None
 
-    async def _list_collection(self, collection: str) -> List[Dict[str, Any]]:
-        keys = await self._redis.keys(f"{_KEY_PREFIX}:{collection}:*")
-        raws = []
+    async def _scan_keys(self, pattern: str) -> List[str]:
+        """Non-blocking key scan (SCAN preferred, KEYS fallback for fakes)."""
+        import asyncio
+        import inspect
+
+        try:
+            scan_iter = getattr(self._redis, "scan_iter", None)
+            if callable(scan_iter):
+                result = scan_iter(match=pattern)
+                if inspect.isawaitable(result):
+                    result = await result
+                if hasattr(result, "__aiter__"):
+                    keys: List[str] = []
+                    async for key in result:  # type: ignore[union-attr]
+                        keys.append(key.decode() if isinstance(key, bytes) else str(key))
+                    return keys
+                if result is not None:
+                    try:
+                        keys = list(result)
+                    except TypeError:
+                        keys = []
+                    return [k.decode() if isinstance(k, bytes) else str(k) for k in keys]
+        except Exception:
+            pass
+        keys = await self._redis.keys(pattern)
+        return [k.decode() if isinstance(k, bytes) else str(k) for k in (keys or [])]
+
+    async def _mget_dicts(self, keys: List[str]) -> List[Dict[str, Any]]:
+        """One round-trip bulk fetch (MGET preferred, sequential fallback)."""
+        import json
+
+        if not keys:
+            return []
+        try:
+            mget = getattr(self._redis, "mget", None)
+            if callable(mget):
+                vals = await mget(keys)
+                out: List[Dict[str, Any]] = []
+                for val in vals or []:
+                    if not val:
+                        continue
+                    if isinstance(val, bytes):
+                        val = val.decode()
+                    try:
+                        parsed = json.loads(val)
+                    except Exception:
+                        continue
+                    if isinstance(parsed, dict):
+                        out.append(parsed)
+                return out
+        except Exception:
+            pass
+        out = []
         for key in keys:
             raw = await self._read_raw_key(key)
             if raw:
-                raws.append(raw)
-        return raws
+                out.append(raw)
+        return out
+
+    async def _list_collection(self, collection: str) -> List[Dict[str, Any]]:
+        keys = await self._scan_keys(f"{_KEY_PREFIX}:{collection}:*")
+        # Exclude secondary index keys (same prefix family for executions handled separately).
+        keys = [k for k in keys if ":idx:" not in k]
+        return await self._mget_dicts(keys)
 
     async def save_execution(self, execution: Execution) -> None:
         payload = execution.model_dump(mode="json")
@@ -591,27 +761,104 @@ class RedisStore(MemoryStore):
             entries = [entry for entry in entries if entry.type == entry_type]
         return entries[:limit]
 
-    async def list_executions(self, agent_id=None, batch_id=None, status=None, limit=50, offset=0):
-        import json
+    def _decode_ids(self, members: Any) -> set:
+        out = set()
+        for m in members or []:
+            out.add(m.decode() if isinstance(m, bytes) else str(m))
+        return out
 
+    async def _fetch_execution_raws(
+        self,
+        agent_id: Any = None,
+        batch_id: Any = None,
+    ) -> List[Dict[str, Any]]:
         ids: Optional[set] = None
         if agent_id:
-            ids = set(await self._redis.smembers(self._index_key("executions", "agent", agent_id)))
+            ids = self._decode_ids(await self._redis.smembers(self._index_key("executions", "agent", agent_id)))
         if batch_id:
-            batch_ids = set(await self._redis.smembers(self._index_key("executions", "batch", batch_id)))
+            batch_ids = self._decode_ids(await self._redis.smembers(self._index_key("executions", "batch", batch_id)))
             ids = batch_ids if ids is None else ids & batch_ids
         if ids is None:
-            keys = await self._redis.keys(f"{_KEY_PREFIX}:executions:*")
-            ids = {k.split(":")[-1] for k in keys}
-        items = []
-        for execution_id in ids:
-            raw = await self._read("executions", execution_id)
-            if raw:
-                items.append(Execution(**raw))
-        if status:
-            items = [e for e in items if e.status.value == status]
-        items.sort(key=lambda e: e.started_at, reverse=True)
-        return items[offset : offset + limit]
+            keys = await self._scan_keys(f"{_KEY_PREFIX}:executions:*")
+            keys = [k for k in keys if ":idx:" not in k]
+            return await self._mget_dicts(keys)
+        keys = [self._key("executions", eid) for eid in ids]
+        return await self._mget_dicts(keys)
+
+    async def count_executions(
+        self,
+        agent_id: Any = None,
+        batch_id: Any = None,
+        status: Any = None,
+        direction: Any = None,
+        since: Any = None,
+    ) -> int:
+        raws = await self._fetch_execution_raws(agent_id, batch_id)
+        return sum(1 for r in raws if self._match_execution_raw(r, agent_id, batch_id, status, direction, since))
+
+    async def list_executions(
+        self,
+        agent_id: Any = None,
+        batch_id: Any = None,
+        status: Any = None,
+        limit: int = 50,
+        offset: int = 0,
+        direction: Any = None,
+        since: Any = None,
+        include_transcript: bool = True,
+    ) -> List[Execution]:
+        raws = await self._fetch_execution_raws(agent_id, batch_id)
+        raws = [r for r in raws if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)]
+        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        page = raws[offset : offset + limit]
+        items: List[Execution] = []
+        for raw in page:
+            if not include_transcript and raw.get("transcript"):
+                raw = {**raw, "transcript": []}
+            items.append(Execution(**raw))
+        return items
+
+    async def aggregate_execution_stats(
+        self,
+        agent_id: Any = None,
+        since: Any = None,
+        max_scan: int = 5000,
+    ) -> Dict[str, Any]:
+        raws = await self._fetch_execution_raws(agent_id, None)
+        raws = [r for r in raws if self._match_execution_raw(r, agent_id, None, None, None, since)]
+        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        total = len(raws)
+        by_status: Dict[str, int] = {}
+        latencies: List[int] = []
+        total_duration = 0.0
+        for raw in raws[:max_scan]:
+            st = raw.get("status")
+            if isinstance(st, str):
+                by_status[st] = by_status.get(st, 0) + 1
+            lat = raw.get("latency") or {}
+            e2e = lat.get("e2e_ms") if isinstance(lat, dict) else None
+            if isinstance(e2e, (int, float)):
+                latencies.append(int(e2e))
+            dur = raw.get("duration_s") or 0
+            if isinstance(dur, (int, float)):
+                total_duration += float(dur)
+        return {"total": total, "by_status": by_status, "latencies": latencies, "total_duration": total_duration, "scanned": min(total, max_scan)}
+
+    async def aggregate_latency_stats(
+        self,
+        agent_id: Any = None,
+        since: Any = None,
+        max_scan: int = 5000,
+    ) -> Dict[str, Any]:
+        raws = await self._fetch_execution_raws(agent_id, None)
+        raws = [r for r in raws if self._match_execution_raw(r, agent_id, None, None, None, since)]
+        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        fresh: List[Dict[str, Any]] = []
+        for raw in raws[:max_scan]:
+            lat = raw.get("latency")
+            if isinstance(lat, dict) and lat.get("e2e_ms") is not None:
+                fresh.append(raw)
+        return {"total_matching": len(raws), "fresh": fresh[:max_scan]}
 
     async def list_batches(self, agent_id=None):
         items = [Batch(**raw) for raw in await self._list_collection("batches")]
@@ -790,7 +1037,7 @@ class RedisStore(MemoryStore):
         return [User(**raw) for raw in await self._list_collection("users")]
 
     async def count_users(self) -> int:
-        return len(await self._redis.keys(f"{_KEY_PREFIX}:users:*"))
+        return len(await self._scan_keys(f"{_KEY_PREFIX}:users:*"))
 
     async def delete_user(self, user_id: str) -> bool:
         return (await self._redis.delete(self._key("users", user_id))) > 0
@@ -866,7 +1113,7 @@ class RedisStore(MemoryStore):
             "workflow_campaigns",
             "api_keys",
         ):
-            keys = await self._redis.keys(f"{_KEY_PREFIX}:{collection}:*")
+            keys = await self._scan_keys(f"{_KEY_PREFIX}:{collection}:*")
             cleared[collection] = len(keys)
             if keys:
                 await self._redis.delete(*keys)
@@ -874,7 +1121,7 @@ class RedisStore(MemoryStore):
         await self._redis.delete(f"{_KEY_PREFIX}:ledger")
         cleared["ledger"] = ledger_count
         await self._redis.delete(self._key("wallet", "singleton"))
-        index_keys = await self._redis.keys(f"{_KEY_PREFIX}:idx:*")
+        index_keys = await self._scan_keys(f"{_KEY_PREFIX}:idx:*")
         if index_keys:
             await self._redis.delete(*index_keys)
         return cleared

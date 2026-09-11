@@ -6,9 +6,11 @@ local_setup/quickstart_server.py wiring).
 """
 
 import asyncio
-from typing import Optional
+import os
+import time
+from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
@@ -141,13 +143,18 @@ calls_router = APIRouter(prefix="/calls", tags=["Calls"])
 executions_router = APIRouter(prefix="/executions", tags=["Executions"])
 
 
+# Bounded analytics cache (stats/latency are expensive aggregates; short TTL keeps
+# dashboards fast without stale-forever risk). Env ANALYTICS_CACHE_TTL_S, default 30.
+_ANALYTICS_CACHE: Dict[Tuple[Any, ...], Tuple[float, Any]] = {}
+
+
 @calls_router.post("/simulate", response_model=Execution, status_code=202)
 async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("calls:write")),
 ) -> Execution:
     """Start a simulated outbound call. delay_scale=0 completes inline."""
     if payload.delay_scale == 0:
-        return await run_simulated_call(
+        result = await run_simulated_call(
             store,
             agent_id=payload.agent_id,
             to_number=payload.to_number,
@@ -156,6 +163,8 @@ async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depen
             batch_id=payload.batch_id,
             delay_scale=0,
         )
+        _ANALYTICS_CACHE.clear()
+        return result
     execution = Execution(
         execution_id=new_id("exec"),
         agent_id=payload.agent_id,
@@ -165,8 +174,44 @@ async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depen
         variables=payload.variables,
     )
     await store.save_execution(execution)
+    _ANALYTICS_CACHE.clear()
     asyncio.create_task(progress_simulated_call(store, execution.execution_id, payload.delay_scale))
     return execution
+
+
+def _analytics_ttl() -> float:
+    try:
+        return max(0.0, float(os.getenv("ANALYTICS_CACHE_TTL_S", "30")))
+    except ValueError:
+        return 30.0
+
+
+def _cache_get(key: Tuple[Any, ...]) -> Optional[Any]:
+    entry = _ANALYTICS_CACHE.get(key)
+    if not entry:
+        return None
+    ts, value = entry
+    if _analytics_ttl() <= 0 or (time.monotonic() - ts) < _analytics_ttl():
+        return value
+    _ANALYTICS_CACHE.pop(key, None)
+    return None
+
+
+def _cache_set(key: Tuple[Any, ...], value: Any) -> None:
+    if _analytics_ttl() > 0:
+        _ANALYTICS_CACHE[key] = (time.monotonic(), value)
+
+
+def _invalidate_analytics_cache() -> None:
+    _ANALYTICS_CACHE.clear()
+
+
+def _cutoff_for_days(days: Optional[int]) -> Optional[Any]:
+    if days is None:
+        return None
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)
 
 
 @executions_router.get("", response_model=ExecutionListResponse)
@@ -174,39 +219,62 @@ async def list_executions(
     agent_id: Optional[str] = None,
     batch_id: Optional[str] = None,
     status: Optional[ExecutionStatus] = None,
-    limit: int = 50,
-    offset: int = 0,
+    direction: Optional[str] = Query(None, description="Filter by call direction (outbound/inbound)."),
+    limit: int = Query(50, ge=1, le=1000, description="Page size (capped to keep list views fast)."),
+    offset: int = Query(0, ge=0, description="Rows to skip for pagination."),
+    include_transcript: bool = Query(
+        True, description="Set false for list views to skip heavy transcript payloads."
+    ),
     store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("calls:read")),
 ) -> ExecutionListResponse:
+    if direction is not None and direction not in ("outbound", "inbound"):
+        raise HTTPException(status_code=422, detail="direction must be outbound or inbound")
     executions = await store.list_executions(
-        agent_id=agent_id, batch_id=batch_id, status=status.value if status else None, limit=limit, offset=offset
+        agent_id=agent_id,
+        batch_id=batch_id,
+        status=status.value if status else None,
+        limit=limit,
+        offset=offset,
+        direction=direction,
+        include_transcript=include_transcript,
     )
-    return ExecutionListResponse(executions=executions)
+    total = await store.count_executions(
+        agent_id=agent_id, batch_id=batch_id, status=status.value if status else None, direction=direction
+    )
+    return ExecutionListResponse(executions=executions, total=total, limit=limit, offset=offset)
 
 
 @executions_router.get("/stats", response_model=ExecutionStats)
 async def get_execution_stats(
-    agent_id: Optional[str] = None, store: MemoryStore = Depends(get_store),
+    agent_id: Optional[str] = None,
+    days: Optional[int] = Query(
+        None, ge=1, le=90, description="Bounded window in days (None = all time, capped at 90 when set)."
+    ),
+    max_scan: int = Query(5000, ge=1, le=10000, description="Max recent rows aggregated (bounded scan)."),
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("calls:read")),
 ) -> ExecutionStats:
-    executions = await store.list_executions(agent_id=agent_id, limit=10000)
-    by_status: dict[str, int] = {}
-    latencies: list[int] = []
-    total_duration = 0.0
-    for execution in executions:
-        by_status[execution.status.value] = by_status.get(execution.status.value, 0) + 1
-        if execution.latency is not None:
-            latencies.append(execution.latency.e2e_ms)
-        total_duration += execution.duration_s
+    cache_key = (id(store), "stats", agent_id, days, max_scan)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    since = _cutoff_for_days(days)
+    agg = await store.aggregate_execution_stats(agent_id=agent_id, since=since, max_scan=max_scan)
+    by_status: dict[str, int] = dict(agg.get("by_status") or {})
+    latencies: list[int] = list(agg.get("latencies") or [])
+    total_duration: float = float(agg.get("total_duration") or 0.0)
+    total: int = int(agg.get("total") or 0)
     completed = by_status.get(ExecutionStatus.COMPLETED.value, 0)
-    return ExecutionStats(
-        total=len(executions),
+    result = ExecutionStats(
+        total=total,
         by_status=by_status,
         avg_e2e_ms=round(sum(latencies) / len(latencies)) if latencies else None,
         total_duration_s=round(total_duration, 2),
-        completed_rate=round(completed / len(executions), 3) if executions else 0,
+        completed_rate=round(completed / total, 3) if total else 0,
     )
+    _cache_set(cache_key, result)
+    return result
 
 
 @executions_router.get("/{execution_id}", response_model=Execution)
@@ -221,28 +289,54 @@ async def get_execution(execution_id: str, store: MemoryStore = Depends(get_stor
 
 @executions_router.get("/latency/summary", response_model=LatencyStats)
 async def get_latency_stats(
-    agent_id: Optional[str] = None, days: int = 30, store: MemoryStore = Depends(get_store),
+    agent_id: Optional[str] = None,
+    days: int = Query(30, ge=1, le=90, description="Bounded window in days (1..90)."),
+    max_scan: int = Query(5000, ge=1, le=10000, description="Max recent rows aggregated (bounded scan)."),
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("calls:read")),
 ) -> LatencyStats:
     from datetime import datetime, timezone
 
-    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-    executions = await store.list_executions(agent_id=agent_id, limit=10000)
-    fresh = [e for e in executions if e.started_at.timestamp() >= cutoff and e.latency is not None]
+    cache_key = (id(store), "latency", agent_id, days, max_scan)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    since = _cutoff_for_days(days)
+    agg = await store.aggregate_latency_stats(agent_id=agent_id, since=since, max_scan=max_scan)
+    fresh_raw = agg.get("fresh") or []
 
-    e2e = sorted(e.latency.e2e_ms for e in fresh if e.latency)
+    def _e2e(raw: dict) -> Optional[int]:
+        lat = raw.get("latency") or {}
+        val = lat.get("e2e_ms") if isinstance(lat, dict) else None
+        return int(val) if isinstance(val, (int, float)) else None
+
+    e2e = sorted(v for v in (_e2e(r) for r in fresh_raw) if v is not None)
     stages: dict = {}
     for stage in ("transcriber_ms", "llm_ms", "synthesizer_ms"):
-        values = [getattr(e.latency, stage) for e in fresh if e.latency]
+        values = []
+        for raw in fresh_raw:
+            lat = raw.get("latency") or {}
+            val = lat.get(stage) if isinstance(lat, dict) else None
+            if isinstance(val, (int, float)):
+                values.append(int(val))
         if values:
             stages[stage] = round(sum(values) / len(values))
 
     buckets: dict = {}
-    for execution in fresh:
-        day = execution.started_at.date().isoformat()
+    for raw in fresh_raw:
+        try:
+            started_raw = raw.get("started_at")
+            if isinstance(started_raw, str):
+                started = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            else:
+                continue
+            day = started.date().isoformat()
+        except Exception:
+            continue
         bucket = buckets.setdefault(day, [])
-        if execution.latency:
-            bucket.append(execution.latency.e2e_ms)
+        val = _e2e(raw)
+        if val is not None:
+            bucket.append(val)
     ordered = [
         LatencyBucket(
             date=day,
@@ -251,14 +345,16 @@ async def get_latency_stats(
         )
         for day, values in sorted(buckets.items())
     ]
-    return LatencyStats(
-        count=len(fresh),
+    result = LatencyStats(
+        count=len(fresh_raw),
         avg_e2e_ms=round(sum(e2e) / len(e2e)) if e2e else None,
         p50_e2e_ms=_percentile(e2e, 50),
         p95_e2e_ms=_percentile(e2e, 95),
         by_stage=stages,
         buckets=ordered,
     )
+    _cache_set(cache_key, result)
+    return result
 
 
 # --- batches --------------------------------------------------------------------
@@ -320,6 +416,7 @@ async def start_batch(batch_id: str, store: MemoryStore = Depends(get_store),
     # inline so the response reflects the terminal state deterministically.
     updated = await run_batch(store, batch_id, delay_scale=0)
     assert updated is not None
+    _ANALYTICS_CACHE.clear()
     return updated
 
 
@@ -338,14 +435,22 @@ async def stop_batch(batch_id: str, store: MemoryStore = Depends(get_store),
 
 
 @batches_router.get("/{batch_id}/executions", response_model=ExecutionListResponse)
-async def get_batch_executions(batch_id: str, store: MemoryStore = Depends(get_store),
+async def get_batch_executions(
+    batch_id: str,
+    limit: int = Query(100, ge=1, le=500, description="Page size (capped)."),
+    offset: int = Query(0, ge=0, description="Rows to skip for pagination."),
+    include_transcript: bool = Query(True, description="Set false for list views to skip heavy transcripts."),
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("batches:read")),
 ) -> ExecutionListResponse:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    executions = await store.list_executions(batch_id=batch_id, limit=1000)
-    return ExecutionListResponse(executions=executions)
+    executions = await store.list_executions(
+        batch_id=batch_id, limit=limit, offset=offset, include_transcript=include_transcript
+    )
+    total = await store.count_executions(batch_id=batch_id)
+    return ExecutionListResponse(executions=executions, total=total, limit=limit, offset=offset)
 
 
 @batches_router.post("/{batch_id}/retry-failed", response_model=Batch, status_code=201)
@@ -355,7 +460,8 @@ async def retry_failed(batch_id: str, store: MemoryStore = Depends(get_store),
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    executions = await store.list_executions(batch_id=batch_id, limit=10000)
+    # Bounded: batches cap at 1000 entries, so 2000 covers retries without a 10k full-scan.
+    executions = await store.list_executions(batch_id=batch_id, limit=2000)
     failed = [e for e in executions if e.status != ExecutionStatus.COMPLETED]
     if not failed:
         raise HTTPException(status_code=409, detail=f"Batch {batch_id} has no failed executions to retry")
@@ -1139,6 +1245,7 @@ async def test_run_workflow(
         {"to_number": payload.to_number, "variables": dict(payload.variables)},
         payload.delay_scale,
     )
+    _ANALYTICS_CACHE.clear()
     return JSONResponse(content=run.model_dump(mode="json"))
 
 
@@ -1203,6 +1310,7 @@ async def start_campaign(campaign_id: str, store: MemoryStore = Depends(get_stor
         raise HTTPException(status_code=409, detail=f"Campaign {campaign_id} is {campaign.status.value}")
     updated = await run_campaign(store, campaign_id, delay_scale=0)
     assert updated is not None
+    _ANALYTICS_CACHE.clear()
     return JSONResponse(content=updated.model_dump(mode="json"))
 
 

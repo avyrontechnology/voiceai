@@ -82,6 +82,26 @@ def _summarize_latency(latency_dict: Any) -> Optional[LatencyBreakdown]:
     )
 
 
+def _numbers_from_context(context_data: Any) -> Dict[str, Optional[str]]:
+    """Extract PSTN numbers from context_data recipient_data (pre-call webhook convention).
+
+    Supports from_number/to_number plus legacy user_number/agent_number aliases.
+    Server-owned ids (call_sid/stream_sid) are never returned here.
+    """
+    recipient = {}
+    if isinstance(context_data, dict):
+        recipient = context_data.get("recipient_data") or {}
+        if not isinstance(recipient, dict):
+            recipient = {}
+    from_number = recipient.get("from_number") or recipient.get("user_number") or recipient.get("caller_number")
+    to_number = recipient.get("to_number") or recipient.get("agent_number") or recipient.get("dialed_number")
+    if not isinstance(from_number, str) or not from_number.strip():
+        from_number = None
+    if not isinstance(to_number, str) or not to_number.strip():
+        to_number = None
+    return {"from_number": from_number, "to_number": to_number}
+
+
 async def record_engine_execution(
     store: Optional[MemoryStore],
     *,
@@ -90,7 +110,10 @@ async def record_engine_execution(
     history: Optional[List[Dict[str, Any]]] = None,
     task_outputs: Optional[List[Dict[str, Any]]] = None,
     to_number: Optional[str] = None,
+    from_number: Optional[str] = None,
     direction: str = "inbound",
+    is_web_based_call: Optional[bool] = None,
+    context_data: Optional[Dict[str, Any]] = None,
     output: Optional[Dict[str, Any]] = None,
 ) -> Optional[Execution]:
     """Persist one Execution for a finished engine run. Never raises.
@@ -99,10 +122,25 @@ async def record_engine_execution(
     latency_dict, hangup_detail, progression_data): when present it supplies the
     transcript, true call timings and hangup code. Without it the record falls
     back to the legacy behavior (empty transcript, record-time timestamps).
+
+    Caller ID: explicit from_number/to_number win; otherwise recipient_data
+    (from_number/to_number, legacy user_number/agent_number) is used for
+    carrier legs. Web (browser) legs never persist PSTN numbers — when
+    is_web_based_call is True both are forced to None/"unknown".
     """
     if store is None:
         return None
     try:
+        if context_data is not None:
+            derived = _numbers_from_context(context_data)
+            if from_number is None:
+                from_number = derived["from_number"]
+            if to_number is None:
+                to_number = derived["to_number"]
+        if is_web_based_call is True:
+            # Web legs correctly show no caller ID — never persist PSTN numbers there.
+            from_number = None
+            to_number = None
         output = output if isinstance(output, dict) else {}
         messages = output.get("messages") or history
         progression = output.get("progression_data") or {}
@@ -126,6 +164,7 @@ async def record_engine_execution(
             agent_id=agent_id,
             direction=direction,  # type: ignore[arg-type]
             to_number=to_number or "unknown",
+            from_number=from_number,
             status=ExecutionStatus.COMPLETED,
             transcript=history_to_transcript(messages),
             extracted_data=merge_extracted_data(task_outputs),
