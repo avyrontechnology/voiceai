@@ -60,6 +60,7 @@ async def dial_via_talko(
         execution_id=new_id("exec"),
         agent_id=agent_id,
         batch_id=batch_id,
+        direction="outbound",
         to_number=to_number,
         from_number=from_number,
         variables=variables or {},
@@ -86,9 +87,22 @@ async def dial_via_talko(
         execution.status = ExecutionStatus.RINGING
         await store.save_execution(execution)
         # Trunk accepted (async dial): media/answer tracking lives in Talko.
+        trunk_payload: Dict[str, Any] = {}
+        try:
+            trunk_payload = resp.json() if hasattr(resp, "json") else {}
+        except Exception:
+            trunk_payload = {}
+        if not isinstance(trunk_payload, dict):
+            trunk_payload = {}
+        # Record enrichment only (no dial change): when the caller did not override
+        # caller_did, the trunk resolved TALKO_AI_DID — persist it so history shows the DID.
+        if not execution.from_number:
+            did = trunk_payload.get("dedicated_did")
+            if isinstance(did, str) and did.strip():
+                execution.from_number = did.strip()
         execution.status = ExecutionStatus.IN_PROGRESS
         execution.summary = "Dialed via Talko trunk; live on agent {}.".format(agent_id)
-        execution.extracted_data = {"trunk": "talko", "trunk_response": resp.json()}
+        execution.extracted_data = {"trunk": "talko", "trunk_response": trunk_payload}
     except Exception as e:
         logger.error("Talko dial failed to_number={}: {}".format(to_number, e))
         execution.status = ExecutionStatus.FAILED

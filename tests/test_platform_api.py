@@ -37,7 +37,8 @@ async def _simulate_call(client, **overrides):
 async def test_list_executions_empty(client):
     resp = await client.get("/executions")
     assert resp.status_code == 200
-    assert resp.json() == {"executions": []}
+    # Additive pagination metadata (total/limit/offset) is expected; rows must be empty.
+    assert resp.json()["executions"] == []
 
 
 async def test_simulated_call_completes_inline(client):

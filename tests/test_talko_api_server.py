@@ -106,7 +106,10 @@ async def test_call_builds_ai_bridge_body(monkeypatch, std_env):
     assert body["dedicated_did"] == "918045678901"
     assert body["to_number"] == "919812345678"
     assert body["partner_id"] == 2
-    assert body["context_data"] == {"voiceai_agent_id": "agent_1"}
+    # context_data carries PSTN numbers for the engine log (additive: relay forwards extras).
+    assert body["context_data"]["voiceai_agent_id"] == "agent_1"
+    assert body["context_data"]["to_number"] == "919812345678"
+    assert body["context_data"]["from_number"] == "918045678901"
     await api.aclose()
 
 
