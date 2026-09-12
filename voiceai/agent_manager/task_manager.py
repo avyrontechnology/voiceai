@@ -357,6 +357,9 @@ class TaskManager(BaseManager):
         self.language = DEFAULT_LANGUAGE_CODE
         self.synthesizer_voice_id = None
         self.synthesizer_model = None
+        # Set for real in __setup_synthesizer; stays None for synth-less agents
+        # (S2S/text) so _synthesize degrades instead of raising AttributeError.
+        self.synthesizer_provider = None
         self.transfer_call_params = self.kwargs.get("transfer_call_params", None)
 
         if task["tools_config"].get("api_tools", None) is not None:
@@ -1338,8 +1341,10 @@ class TaskManager(BaseManager):
         websocket, as opposed to a telephony carrier leg or dashboard
         turn-based session. s2s tasks are excluded — they consume the same
         llm queue in _s2s_text_loop, and two consumers would split-brain
-        typed turns between them."""
-        if self.turn_based_conversation or self.is_web_based_call:
+        typed turns between them. Web-based calls ARE browser legs (their
+        transcript panel and typed-chat queue live here); only turn-based
+        dashboard sessions are excluded."""
+        if self.turn_based_conversation:
             return False
         tools_config = (self.task_config or {}).get("tools_config", {}) or {}
         return (tools_config.get("input") or {}).get("provider") == "default"
@@ -7703,7 +7708,15 @@ class TaskManager(BaseManager):
             ):
                 if meta_info.get("sequence_id") not in (None, -1):
                     self._synthesis_awaiting_first_audio = True
-                if meta_info["is_md5_hash"]:
+                provider = getattr(self, "synthesizer_provider", None)
+                synth = (self.tools or {}).get("synthesizer")
+                if provider is None or synth is None:
+                    # Synth-less agents (S2S/text): nothing can speak this.
+                    # Log and release the turn instead of AttributeError-ing.
+                    logger.warning("No synthesizer configured; skipping synthesis and clearing response_in_pipeline")
+                    self.response_in_pipeline = False
+                    self._synthesis_awaiting_first_audio = False
+                elif meta_info["is_md5_hash"]:
                     logger.info(
                         "sending preprocessed audio response to {}".format(
                             self.task_config["tools_config"]["output"]["provider"]
@@ -7711,7 +7724,7 @@ class TaskManager(BaseManager):
                     )
                     await self.__send_preprocessed_audio(meta_info, text)
 
-                elif self.synthesizer_provider in SUPPORTED_SYNTHESIZER_MODELS.keys():
+                elif provider in SUPPORTED_SYNTHESIZER_MODELS.keys():
                     convert_to_request_log(
                         message=text,
                         meta_info=meta_info,
@@ -8235,6 +8248,11 @@ class TaskManager(BaseManager):
         logger.info(f"Executing the first message task")
         try:
             if self.is_web_based_call:
+                if self.__is_s2s():
+                    # S2S owns its greeting (model-spoken via trigger_response in
+                    # _run_s2s_conversation); there is no synthesizer to render one.
+                    logger.info("Skipping pre-rendered welcome for S2S web leg; the model speaks its own greeting")
+                    return
                 logger.info("Sending agent welcome message for web based call")
                 text = self.kwargs.get("agent_welcome_message", None)
                 meta_info = {
@@ -8447,7 +8465,14 @@ class TaskManager(BaseManager):
         # mode="json" so enum fields (reasoning_effort) reach the provider as plain strings.
         options = self.s2s.provider_config.model_dump(exclude_none=True, mode="json")
         options.pop("model")
-        voice = options.pop("voice")
+        voice = options.pop("voice", None)
+        if not voice:
+            raise ConfigurationError(
+                "Missing s2s voice: set tools_config.s2s.provider_config.voice "
+                "(e.g. 'Kore' for gemini_live) — without it the provider closes "
+                "the session (1007 no matching speaker voice).",
+                path="tools_config.s2s.provider_config.voice",
+            )
         return s2s_class(
             system_prompt=system_prompt or "",
             voice=voice,

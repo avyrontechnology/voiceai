@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceAI — Complete Resilient-Core Audit — 12 Sept 2026</title>
+<style>
+:root{--bg:#f8fafc;--card:#fff;--ink:#101828;--muted:#475467;--line:#e4e7ec;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--crit:#b42318;--high:#b54708;--med:#b7791f;--low:#667085;--fixed:#027a48;--open:#b42318;--partial:#b54708;}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55}
+a{color:#175cd3;text-decoration:none}a:hover{text-decoration:underline}
+header.hero{background:#0b1220;color:#fff;padding:28px 24px;border-bottom:4px solid #175cd3}
+header.hero h1{margin:0 0 6px;font-size:26px;letter-spacing:.2px}
+header.hero p{margin:4px 0;color:#d0d5dd}
+header.hero code{background:#1d2939;color:#fff;padding:2px 6px;border-radius:6px;font-family:var(--mono);font-size:12.5px}
+.layout{display:grid;grid-template-columns:250px 1fr;gap:0;max-width:1360px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;background:#fff;border-right:1px solid var(--line);padding:18px 14px}
+nav.toc h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+nav.toc a{display:block;padding:6px 8px;border-radius:8px;font-size:13.5px;color:#344054}
+nav.toc a:hover{background:#f2f4f7}
+main{padding:24px;min-width:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px;margin:0 0 18px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.card h2{margin:0 0 10px;font-size:20px;border-bottom:2px solid #f2f4f7;padding-bottom:8px}
+.card h3{margin:18px 0 8px;font-size:16px}
+.muted{color:var(--muted)}.small{font-size:13px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:1000px){.layout{grid-template-columns:1fr}nav.toc{position:static;height:auto}.grid2{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th,td{text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:#f9fafb;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#344054;position:sticky;top:0}
+code.loc{font-family:var(--mono);font-size:12px;background:#f2f4f7;border:1px solid var(--line);padding:1px 6px;border-radius:6px;white-space:nowrap}
+pre{background:#0b1220;color:#e6edf3;padding:12px;border-radius:10px;overflow:auto;font-size:12.5px;line-height:1.5}
+.badge{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+.b-crit{background:#fee4e2;color:var(--crit);border-color:#fecdca}.b-high{background:#fef0c7;color:var(--high);border-color:#fedf89}
+.b-med{background:#fef0c7;color:var(--med);border-color:#fedf89}.b-low{background:#f2f4f7;color:var(--low);border-color:#e4e7ec}
+.b-fixed{background:#d1fadf;color:var(--fixed);border-color:#a6f4c5}.b-open{background:#fee4e2;color:var(--open);border-color:#fecdca}
+.b-partial{background:#fef0c7;color:var(--partial);border-color:#fedf89}.b-info{background:#eff8ff;color:#175cd3;border-color:#b2ddff}
+.sbadge{display:inline-block;min-width:26px;text-align:center;font-weight:800;font-size:12px;background:#0b1220;color:#fff;border-radius:8px;padding:2px 7px;margin:1px}
+details{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fcfcfd;margin:6px 0}
+details summary{cursor:pointer;font-weight:600;font-size:13px}
+.filters{position:sticky;top:0;z-index:5;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.filters button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.filters button.active{background:#0b1220;color:#fff;border-color:#0b1220}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.fbox{flex:1 1 160px;background:#fff;border:2px solid #101828;border-radius:12px;padding:10px;text-align:center;min-width:160px}
+.fbox b{display:block}.farrow{align-self:center;font-weight:800;font-size:20px;color:#101828}
+.fbox small{color:var(--muted)}
+.kv{display:grid;grid-template-columns:200px 1fr;gap:6px 12px;font-size:14px}
+.kv dt{color:var(--muted)}.kv dd{margin:0}
+.verdict{border-left:6px solid var(--high);background:#fffaeb}
+footer{color:var(--muted);font-size:13px;padding:18px;text-align:center}
+@media print{nav.toc,.filters{display:none}.layout{grid-template-columns:1fr}main{padding:0}.card{box-shadow:none;break-inside:avoid}header.hero{background:#fff;color:#000;border-bottom:2px solid #000}header.hero p,header.hero code{color:#000}}
+</style>
+</head>
+<body>
+<header class="hero">
+<h1>VoiceAI — Complete Detailed Audit: Resilient-Core</h1>
+<p>Date: <b>12 Sept 2026</b> &nbsp;|&nbsp; Branch: <code>revamp/resilient-core</code> &nbsp;|&nbsp; Commit: <code>@83e60ce</code> &nbsp;|&nbsp; Graph: <code>Users-avyron-Desktop-avyron-workspace-voiceai</code> — 6705 nodes / 33134 edges — ready, index clean</p>
+<p>Prior audit: <b>9 Sept 2026</b> on <code>master @11164d8</code> — 1 Critical (#1) + 13 High (#2–#14) + 2 Medium (#15–#16) &nbsp;|&nbsp; This page: triage + 8-stream re-audit rendered verbatim (no re-audit).</p>
+<p class="small">Read-only audit. No live dials. No provider calls. Secrets shown as <code>***</code> only. Best-effort graph coverage. Full verification post-approval per user prefs (exhaustive depth).</p>
+</header>
+<div class="layout">
+<nav class="toc" aria-label="Table of contents">
+<h3>Contents</h3>
+<a href="#verdict">0 · Verdict</a>
+<a href="#verification">1 · Verification Run</a>
+<a href="#fixfirst">2 · Fix-First #1–#16 Recheck</a>
+<a href="#where">3 · Where It Hits (diagram)</a>
+<a href="#s1">S1 · Orchestration (Backend Arch)</a>
+<a href="#s2">S2 · Telephony (Backend Arch)</a>
+<a href="#s3">S3 · LLMs (AI Engineer)</a>
+<a href="#s4">S4 · Transcribers (AI Engineer)</a>
+<a href="#s5">S5 · Synthesizers (AI Engineer)</a>
+<a href="#s6">S6 · Helpers (General)</a>
+<a href="#s7">S7 · Platform (Backend Arch)</a>
+<a href="#s8">S8 · Hygiene (General)</a>
+<a href="#cross">4 · Cross-Cutting Patterns</a>
+<a href="#plan">5 · 4-Pass Plan</a>
+<a href="#method">6 · Method &amp; Limits</a>
+</nav>
+<main>
+<div class="filters" id="filters">
+<strong>Filter:</strong>
+<button data-f="all" class="active">All</button>
+<button data-f="Critical">Critical</button>
+<button data-f="High">High</button>
+<button data-f="Medium">Medium</button>
+<button data-f="Low">Low</button>
+<button data-f="Fixed">Fixed</button>
+<button data-f="Open">Open</button>
+<button data-f="Partial">Partial</button>
+<span class="muted small" id="count"></span>
+</div>
+
+<section class="card verdict" id="verdict">
+<h2>0 · Verdict — Ship only after P1 bleed is closed</h2>
+<p><span class="badge b-high">High risk</span> <span class="badge b-open">Not shippable as-is for carrier voice</span></p>
+<ul>
+<li><b>Carrier path is now authenticated</b> (#1 fixed: signed stream token + per-leg verify) but <b>default-open dial + proxy-trust + wildcard <code>*</code> ttl0</b> leave a bypass lane. Close those three before any PSTN exposure.</li>
+<li><b>Orchestrator (9877-line god-object)</b> still carries hangup wedge, synth-break, transcriber no-guard, 47s transfer stall, 54× bare <code>create_task</code>, 0× <code>with_timeout</code>, blocking audio, unbounded sets/queues. This is the call-survival risk, not the model quality risk.</li>
+<li><b>Helpers leak path confirmed</b> (#4) + torch path confirmed (#11) + SSRF TOCTOU partial + CSV <code>None.csv</code> PII: privacy/bleed lane is P1 alongside lifecycle.</li>
+<li><b>LLM tool-injection (#2) is fixed</b> and synthesizer pool re-entry is fixed — real progress. S2S loops, history orphan, WS re-speak, Google/Deepgram transcriber races remain open.</li>
+</ul>
+<dl class="kv"><dt>Target</dt><dd><code>revamp/resilient-core @83e60ce</code></dd><dt>Graph</dt><dd>6705 nodes / 33134 edges, index clean</dd><dt>Tests</dt><dd>1797 collect in 0.28s (149 files)</dd><dt>Lint</dt><dd><code>ruff check</code> pass (E721/F811/ISC weak) · <code>format --check</code> 22 files need format of 303</dd></dl>
+</section>
+
+<section class="card" id="verification">
+<h2>1 · Verification Run (S8, read-only; collect-only — no full suite rerun)</h2>
+<p class="muted small">S8 already collected; this page does not rerun <code>pytest</code>/<code>ruff</code> to avoid dirtying the tree. Values rendered as reported.</p>
+<table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
+<tr><td>pytest collect</td><td><span class="badge b-info">1797 in 0.28s</span></td><td>149 test files collected. No full-suite run from this page.</td></tr>
+<tr><td>ruff check</td><td><span class="badge b-fixed">pass</span></td><td>E721 / F811 / ISC rules weak — pass is thin, not strict.</td></tr>
+<tr><td>ruff format --check</td><td><span class="badge b-partial">22 / 303 need format</span></td><td>Formatting drift only; no semantics.</td></tr>
+<tr><td>Hotspots</td><td><span class="badge b-info">Cache.get 458 · logger 102</span></td><td><code class="loc">InmemoryScalarCache.get 458</code> · <code class="loc">configure_logger 102</code> — fan-in, not bug.</td></tr>
+<tr><td>Task lifecycle</td><td><span class="badge b-high">132 create_task vs 43 Registry</span></td><td><code>create_task</code> 132 sites vs <code>Registry</code> 43 refs (TM/pool only). 54× bare in TM alone (S1).</td></tr>
+<tr><td>Blocking I/O</td><td><span class="badge b-info">requests 1 · sleep 0 · print 10</span></td><td><code class="loc">voiceai/telephony/vobiz.py:65</code> via <code>to_thread</code> OK; <code>sleep</code> 0 in prod; <code>print</code> 10 demo-only.</td></tr>
+<tr><td>Exceptions</td><td><span class="badge b-high">589 except Exception</span></td><td><code>bare except</code> 0 · <code>except Exception</code> 589 (~82 pass/continue) · <code>while True</code> 64 — swallow risk.</td></tr>
+<tr><td>STT/Synth tests</td><td><span class="badge b-high">6/12 STT zero · 8 synth thin</span></td><td>Zero-test transcribers + thin synthesizer coverage.</td></tr>
+<tr><td>Asserts / dunder</td><td><span class="badge b-med">7 files · 183 mangled</span></td><td>Source <code>assert</code> in 7 files + 183 mangled <code>__</code> refs <code class="loc">tests/conftest.py:62-72</code>.</td></tr>
+<tr><td>Secrets</td><td><span class="badge b-open">ngrok token OPEN</span></td><td><code class="loc">ngrok-config.yml:3</code> OPEN — rotate + redact to <code>***</code>. <code>.env.sample</code> 30 keys CLOSED.</td></tr>
+<tr><td>Torch</td><td><span class="badge b-fixed">0 imports CLOSED</span></td><td>No <code>torch</code> import in prod graph; #11 path is helper unpickling, not model load.</td></tr>
+<tr><td>Artefacts</td><td><span class="badge b-med">wavs stray</span></td><td>Root <code>*.wav</code> 618K stray + <code>noise</code> 20.6M intentional (keep + document).</td></tr>
+<tr><td>Deps (pinned)</td><td><span class="badge b-info">versions</span></td><td><code>aiohttp 3.14.1 · uvicorn 0.22.0 · redis 5.0.1 · twilio 8.9.0 · fastapi 0.109.1</code>; <code>audioop</code> 18 sites latent (py3.13 removal).</td></tr>
+<tr><td>CI / OpenAPI / docs</td><td><span class="badge b-partial">OPEN drifts</span></td><td>CI 5× dispatch-only OPEN · openapi 8/40 v0.1.0 vs 0.10.217 OPEN · README <code>bolna</code> ×17 intentional · log history vague.</td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="fixfirst">
+<h2>2 · Fix-First #1–#16 Recheck (prior audit 9 Sept master @11164d8 → now @83e60ce)</h2>
+<table><thead><tr><th>SEV</th><th>#</th><th>Title</th><th>Status</th><th>Location</th></tr></thead><tbody>
+<tr data-sev="Critical" data-status="Fixed"><td><span class="badge b-crit">Critical</span></td><td>#1</td><td>Carrier media WS accepts unauthenticated reject / spoofed stream</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/platform/quickstart_server.py:536-564</code>, <code class="loc">voiceai/platform/stream_token.py:77-103</code>, <code class="loc">voiceai/telephony/twilio.py:171</code>, <code class="loc">voiceai/telephony/plivo.py:177</code></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#2</td><td>Model-emitted tool args overwrite reserved payload (url/api_token/headers)</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/llms/types.py:60-113</code>, <code class="loc">voiceai/llms/types.py:38-113</code> PASS (S6), callers <code class="loc">voiceai/agent_manager/accumulator.py:121</code>, <code class="loc">voiceai/llms/openai_base.py:286,504</code>, <code class="loc">voiceai/llms/gemini.py:483</code></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>#3</td><td>Carrier auth default-open when key unset + signature verify gap</td><td><span class="badge b-partial">Fixed-with-default-open</span></td><td><code class="loc">voiceai/platform/carrier_auth.py:64-75</code>, sig <code class="loc">voiceai/telephony/twilio.py:162-168</code>, <code class="loc">voiceai/telephony/plivo.py:166-174</code></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#4</td><td>Secret / PII leak via function-call helper + CSV log (unredacted)</td><td><span class="badge b-open">Confirmed open</span></td><td><code class="loc">voiceai/helpers/function_calling_helpers.py:190,250,256</code>, CSV <code class="loc">voiceai/helpers/function_calling_helpers.py:236</code></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>#5</td><td>SSRF via outbound tool URL (validate→use TOCTOU)</td><td><span class="badge b-partial">Partial</span></td><td><code class="loc">voiceai/helpers/function_calling_helpers.py:46-97,230,253</code>, doc admits <code class="loc">voiceai/helpers/function_calling_helpers.py:53-56</code></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#6</td><td>Format / prompt injection (%-format + expr vs prompt path)</td><td><span class="badge b-open">Confirmed open</span></td><td><code class="loc">voiceai/helpers/utils.py:166-185,330-350</code>, <code class="loc">voiceai/helpers/evaluator.py:27-35</code> vs <code class="loc">voiceai/helpers/utils.py:84-112</code></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#7</td><td>Transcriber pool exhaustion / rotation missing</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/transcriber/pool.py:241-251,616,661</code>, <code class="loc">voiceai/transcriber/base.py:27-41</code></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#8</td><td>Telephony reconnect / reopen race (stale socket reuse)</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/telephony/default.py:140-151</code>, reopen <code class="loc">voiceai/telephony/default.py:184-196</code>, <code class="loc">voiceai/input_handlers/telephony.py:25-42</code></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#9</td><td>LLM credential fallback (Azure-without-key / KB default)</td><td><span class="badge b-fixed">Fixed + residual</span></td><td><code class="loc">voiceai/llms/openai_base.py:392-434</code>, residual <code class="loc">voiceai/agent_manager/graph_agent.py:134-150</code>, <code class="loc">voiceai/memory/kb.py:45-46</code></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>#10</td><td>Graph/gemini join + RAG fan-in race</td><td><span class="badge b-partial">Partial</span></td><td><code class="loc">voiceai/agent_manager/graph.py:772-785</code>, <code class="loc">voiceai/llms/gemini.py:125-138</code>, residual RAG <code class="loc">voiceai/agent_manager/graph.py:1316-1330</code></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#11</td><td>Unsafe deserialization (torch/pickle path + store mismatch + TypeError)</td><td><span class="badge b-open">Confirmed open</span></td><td><code class="loc">voiceai/helpers/utils.py:834-870,867</code>, mismatch <code class="loc">voiceai/helpers/utils.py:874</code> vs <code class="loc">voiceai/helpers/utils.py:315</code></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#12</td><td>Exception text spoken to caller / error-shape leak</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/constants.py:385-401</code> (<code>LLM_FAILURE_SPOKEN_MESSAGE</code>)</td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#13</td><td>Synthesizer pool re-entry + HTTP None + v1 ignore + switch race</td><td><span class="badge b-fixed">Fixed</span></td><td><code class="loc">voiceai/synthesizer/pool.py:128-180</code> (backoff 0.1–2s), <code class="loc">voiceai/synthesizer/base.py:139-204</code>, <code class="loc">voiceai/synthesizer/elevenlabs.py:153-347</code>, <code class="loc">voiceai/synthesizer/pool.py:220-269</code></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#14</td><td>Orchestrator survival: hangup wedge / S2S loop / transfer stall</td><td><span class="badge b-open">Open</span></td><td><code class="loc">voiceai/agent_manager/task_manager.py:3475-3497,3476,8056-8081,7444-7550,8485-9125,4816-4973</code></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>#15</td><td>Contract drift: OpenAPI 8/40 v0.1.0 vs package 0.10.217 + CI dispatch-only</td><td><span class="badge b-open">Open</span></td><td><code class="loc">openapi.yaml:8/40</code>, <code class="loc">.github/workflows/*</code> (5× dispatch-only)</td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>#16</td><td>Py3.13 removal risk: audioop 18 sites + dep pins stale</td><td><span class="badge b-open">Open</span></td><td><code class="loc">voiceai/agent_manager/task_manager.py:7632,7645,8238</code> + 18 <code>audioop</code> sites; <code>requirements.txt</code> pins</td></tr>
+</tbody></table>
+<p class="muted small">Titles for #5/#6/#13–#16 reconstructed from S-stream evidence where prior-audit prose was not re-supplied; locations are exact as reported. Status words (<span class="badge b-fixed">Fixed</span> / <span class="badge b-partial">Partial</span> / <span class="badge b-open">Open</span>) are the streams’ words.</p>
+</section>
+
+<section class="card" id="where">
+<h2>3 · Where It Hits — call path with stream badges</h2>
+<p class="muted small">Pure-CSS diagram. Numbers are stream badges (1–8), not severities.</p>
+<div class="flow">
+<div class="fbox"><b>Caller (PSTN / Web)</b><small>carrier audio</small><br><span class="sbadge">S2</span> <span class="sbadge">S7</span></div><div class="farrow">→</div>
+<div class="fbox"><b>Telephony leg</b><small>Twilio / Plivo / Vobiz / Exotel / Talko</small><br><span class="sbadge">S2</span></div><div class="farrow">→</div>
+<div class="fbox"><b>TaskManager</b><small>9877 lines · orchestration</small><br><span class="sbadge">S1</span></div><div class="farrow">→</div>
+<div class="fbox"><b>Transcriber pool</b><small>STT fan-in</small><br><span class="sbadge">S4</span></div><div class="farrow">→</div>
+<div class="fbox"><b>LLM / Graph / RAG</b><small>routing · tools · KB</small><br><span class="sbadge">S3</span></div><div class="farrow">→</div>
+<div class="fbox"><b>Synthesizer pool</b><small>TTS fan-out</small><br><span class="sbadge">S5</span></div><div class="farrow">→</div>
+<div class="fbox"><b>Audio out</b><small>mulaw / pcm</small><br><span class="sbadge">S2</span> <span class="sbadge">S5</span></div>
+</div>
+<div class="flow">
+<div class="fbox"><b>Helpers (shared)</b><small>trigger_api · CSV · redact · history</small><br><span class="sbadge">S6</span></div>
+<div class="fbox"><b>Platform (auth/billing/dial)</b><small>Talko · invites · throttles</small><br><span class="sbadge">S7</span></div>
+<div class="fbox"><b>Hygiene (repo)</b><small>tests · lint · deps · CI · docs</small><br><span class="sbadge">S8</span></div>
+</div>
+<details><summary>How to read the arrows</summary><p class="small">Audio flows left→right through one long-lived <code>TaskManager</code> coroutine per call. Every box can wedge that coroutine: S2 drops/double-acks the socket, S4 stalls the transcript, S3 orphans history or re-speaks on WS fallback, S5 overwrites the sender or double-EOS, S6 leaks the tool payload, S7 lets an unauthed dial in, S8 lets it regress. Fix order follows the arrows: authenticate (S2/S7) → survive (S1) → stop the bleed (S6) → harden providers (S3–S5).</p></details>
+</section>
+
+<section class="card" id="s1">
+<h2>S1 · Orchestration — Backend Architect <span class="muted small">god-object 9877 lines · setup fixed, survival open</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Hangup wedge: hangup path can strand call task</td><td>Caller hangs up mid-synth; hangup flag races audio drain; call never tears down, slot leaks.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:3475-3497</code> + guard <code class="loc">voiceai/agent_manager/task_manager.py:3476</code> + teardown <code class="loc">voiceai/agent_manager/task_manager.py:8056-8081</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Guard at 3476 exists but wedge window 3475–3497 + teardown 8056–8081 still race drain vs close. Needs single-owner cancel + Registry.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Synth-break: synthesis interrupt path drops EOS</td><td>Barge-in during streaming TTS; break path skips EOS accounting; next turn speaks stale queue.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:7444-7550</code> / break <code class="loc">voiceai/agent_manager/task_manager.py:7530</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Break at 7530 inside 7444–7550 stream driver; EOS/sequence accounting not settled on interrupt.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Transcriber path has no guard (unguided await)</td><td>STT await hangs; no timeout/guard; whole turn wedges with no fallback transcript.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:5536-5960</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">5536–5960 transcriber section carries no iteration-guard/with_timeout; contrast S2 reopen guard.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Transfer stalls ~47s</td><td>Warm transfer holds audio gate; no progress timeout; caller hears dead air 47s.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:4816-4973</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">4816–4973 transfer block; add progress deadline + spoken hold + abort.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>54× bare asyncio.create_task (unowned)</td><td>Any child raising or never awaited leaks; cancellation never propagates; teardown flaky.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:54× create_task</code> (file-wide)</td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Count 54 bare sites in TM; Registry only 43 refs repo-wide (TM/pool). Route via TaskRegistry + supervise.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>with_timeout 0 uses</td><td>No bound on any provider await; one slow LLM/STT/TTS = wedged call.</td><td><code class="loc">voiceai/helpers/resilience.py:with_timeout (0 uses)</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Helper exists, zero call sites in TM. Wrap every provider await.</p></details></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Blocking audio on event loop</td><td>Audio transcode blocks loop; jitter under load; p95 tail.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:7632,7645,8238</code></td><td>#16</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Sync audioop/pydub on loop; move to to_thread. S8: audioop 18 sites latent (py3.13).</p></details></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Unbounded sets/queues (growth without cap)</td><td>Long calls grow tracking sets; memory creep; no eviction.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:331,350,393</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Module-level/early-init collections at 331/350/393 lack bound/TTL.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>llm_task=None deref</td><td>Cancel path sets task None then derefs; AttributeError kills supervisor.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:5082</code></td><td>#14</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">5082 None-assignment races cancel; guard with owned-handle pattern.</p></details></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>turn_resumed flag race</td><td>Resume fires twice; duplicate synth speaks overlap.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:5727</code></td><td>#14</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Language lock spans decision+stream</td><td>Lock held across I/O; second language switch deadlocks turn.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:6326-6915</code></td><td>#14</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Welcome race (double greeting)</td><td>Two welcome paths fire; caller hears greeting twice.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:8247</code>, <code class="loc">voiceai/agent_manager/task_manager.py:7786</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>S2S event loops unbounded</td><td>Speech-to-speech event fan-in loops without backpressure; CPU spin.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:8485-9125</code></td><td>#14</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Fixed"><td><span class="badge b-low">Low</span></td><td>Setup sequence fixed</td><td>Init order now deterministic; no action.</td><td><code class="loc">voiceai/agent_manager/task_manager.py:1894-2048</code></td><td>—</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s2">
+<h2>S2 · Telephony — Backend Architect <span class="muted small">#1 fixed · #3/#8 fixed · 5 residuals</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="Critical" data-status="Fixed"><td><span class="badge b-crit">Critical</span></td><td>#1 carrier reject enforced</td><td>Spoofed media WS without token is now rejected per-leg.</td><td><code class="loc">voiceai/platform/quickstart_server.py:536-564</code>, <code class="loc">voiceai/platform/stream_token.py:77-103</code>, <code class="loc">voiceai/telephony/twilio.py:171</code>, <code class="loc">voiceai/telephony/plivo.py:177</code></td><td>#1</td><td><span class="badge b-fixed">Fixed</span><details><summary>evidence</summary><p class="small">Verify path <code>stream_token.py:77-103</code> (HMAC-SHA256, agent-bound, expiry; never raises). Leg checks at twilio:171 / plivo:177; quickstart gate 536–564. Grounded by Read of stream_token.py this session.</p></details></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>#3 dial auth default-open</td><td>If <code>TELEPHONY_API_KEY</code> unset, dial endpoints accept; only when set is key enforced.</td><td><code class="loc">voiceai/platform/carrier_auth.py:64-75</code>, sig <code class="loc">voiceai/telephony/twilio.py:162-168</code>, <code class="loc">voiceai/telephony/plivo.py:166-174</code></td><td>#3</td><td><span class="badge b-partial">Fixed-with-default-open</span><details><summary>evidence</summary><p class="small">Signature verify fixed, but gate 64–75 defaults open. Must fail-closed in prod profile.</p></details></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#8 stale-socket reuse fixed</td><td>Reconnect now reopens socket instead of reusing half-closed one.</td><td><code class="loc">voiceai/telephony/default.py:140-151</code>, reopen <code class="loc">voiceai/telephony/default.py:184-196</code>, <code class="loc">voiceai/input_handlers/telephony.py:25-42</code></td><td>#8</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Plivo clear_data try-not-finally</td><td>Exception in clear path skips socket cleanup; fd leak; also vobiz/exotel same shape.</td><td><code class="loc">voiceai/telephony/plivo.py:18-31</code> (+ vobiz/exotel)</td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Checkpoint ack swallowed</td><td>Checkpoint failure logged then dropped; sender never learns; audio gap silent.</td><td><code class="loc">voiceai/input_handlers/telephony.py:316-317</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>PCM labelled as mulaw (Plivo)</td><td>PCM bytes sent with mulaw flag; carrier plays noise.</td><td><code class="loc">voiceai/telephony/plivo.py:33-44</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Proxy trust (XFF) in carrier_auth</td><td>Spoofed X-Forwarded-For bypasses throttle/allowlist when behind untrusted proxy.</td><td><code class="loc">voiceai/platform/carrier_auth.py:82-89</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Talko wildcard * ttl0 (never expires)</td><td>Static relay token <code>*</code> with ttl 0 lives forever; leak = permanent voice lane.</td><td><code class="loc">voiceai/platform/stream_token.py:99-103</code></td><td>—</td><td><span class="badge b-open">Open</span><details><summary>evidence</summary><p class="small">Wildcard branch at 99 accepts <code>*</code>; CLI defaults <code>--ttl 0</code> (no expiry). Rotate + scope to agent id + short TTL.</p></details></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s3">
+<h2>S3 · LLMs — AI Engineer <span class="muted small">#2/#9/#12 fixed · #10 partial · 5 NEW</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#2 reserved tool-arg overwrite</td><td>Model emits <code>{"url":"https://evil.example","api_token":"***"}</code>; without guard the outbound API is redirected + re-authed.</td><td><code class="loc">voiceai/llms/types.py:60-113</code>, callers <code class="loc">voiceai/agent_manager/accumulator.py:121</code>, <code class="loc">voiceai/llms/openai_base.py:286,504</code>, <code class="loc">voiceai/llms/gemini.py:483</code></td><td>#2</td><td><span class="badge b-fixed">Fixed</span><details><summary>evidence</summary><p class="small">Grounded by Read: <code>RESERVED_TOOL_ARGUMENT_KEYS</code> + <code>apply_tool_arguments</code> 72–113 drops reserved/private/shadowing keys with one WARNING. Secret word list redacted (<code>***</code>).</p></details></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#9 credential fallback</td><td>OpenAI base no longer falls back to wrong creds; residual Azure-without-key + KB default remain.</td><td><code class="loc">voiceai/llms/openai_base.py:392-434</code>, residual <code class="loc">voiceai/agent_manager/graph_agent.py:134-150</code>, <code class="loc">voiceai/memory/kb.py:45-46</code></td><td>#9</td><td><span class="badge b-fixed">Fixed + residual</span></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>#10 join + RAG fan-in</td><td>Graph/gemini join fixed; RAG fan-in 1316–1330 still races (double-answer / lost citation).</td><td><code class="loc">voiceai/agent_manager/graph.py:772-785</code>, <code class="loc">voiceai/llms/gemini.py:125-138</code>, residual <code class="loc">voiceai/agent_manager/graph.py:1316-1330</code></td><td>#10</td><td><span class="badge b-partial">Partial</span></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#12 spoken exception leak</td><td>Unexpected exception text is no longer spoken; fixed spoken line used.</td><td><code class="loc">voiceai/constants.py:385-401</code></td><td>#12</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>NEW: WS fallback re-speak</td><td>LLM WS drops mid-sentence; fallback path re-speaks already-spoken prefix; caller hears repeat.</td><td><code class="loc">voiceai/llms/openai_llm.py:699-710</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>NEW: history orphan</td><td>Graph appends assistant turn with no matching user turn after retry; history drifts.</td><td><code class="loc">voiceai/agent_manager/graph.py:1323-1328</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>NEW: routing has no timeout + creds in path</td><td>Model routing await unbounded; creds object threaded through routing decision.</td><td><code class="loc">voiceai/agent_manager/graph.py:928-954</code>, creds <code class="loc">voiceai/agent_manager/graph.py:86-101</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>NEW: KB scoping (cross-agent read)</td><td>KB query not scoped to agent/org; one agent can retrieve another’s docs.</td><td><code class="loc">voiceai/memory/kb.py:337-339</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>NEW: pool base_url (http_pool)</td><td>Shared HTTP pool pins base_url; second tenant’s host leaks into first tenant’s call.</td><td><code class="loc">voiceai/helpers/http_pool.py:8-22</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s4">
+<h2>S4 · Transcribers — AI Engineer <span class="muted small">#7 fixed · 10 NEW (mostly High)</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#7 pool rotation fixed</td><td>Pool now rotates/bounds STT handles.</td><td><code class="loc">voiceai/transcriber/pool.py:241-251,616,661</code>, <code class="loc">voiceai/transcriber/base.py:27-41</code></td><td>#7</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Google toggle asymmetry</td><td>Enable path and disable path diverge; mic stays open or stays shut after toggle.</td><td><code class="loc">voiceai/transcriber/google.py:430-461</code></td><td>NEW HIGH</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Deepgram TOCTOU (check→use)</td><td>State checked then used across await; close races in-flight final; crash or lost final.</td><td><code class="loc">voiceai/transcriber/deepgram.py:347-427,1029</code></td><td>NEW HIGH</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Google has no rotation (vs Gemini)</td><td>Google STT never rotates key/handle; quota/deny wedges all calls; Gemini path does.</td><td><code class="loc">voiceai/transcriber/google.py:292-428</code> vs <code class="loc">voiceai/llms/gemini.py:445-492</code></td><td>NEW HIGH</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Telephony×STT capability matrix drift</td><td>Gladia/OpenAI/Pixa assume telephony sample paths enums no longer promise.</td><td><code class="loc">voiceai/transcriber/gladia.py:133</code>, <code class="loc">voiceai/transcriber/openai.py:109</code>, <code class="loc">voiceai/transcriber/pixa.py:98</code> vs <code class="loc">voiceai/enums.py:13-49</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Switch leak (old STT not closed)</td><td>Mid-call STT switch leaves old stream open; billed + double finals.</td><td><code class="loc">voiceai/transcriber/pool.py:629-676</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>turn_latencies alias (mutated view)</td><td>Latency dict aliased not copied; later mutation rewrites history.</td><td><code class="loc">voiceai/transcriber/pool.py:170-194</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Stateless resample (per-chunk)</td><td>Resampler reset per chunk; drift/click at boundaries.</td><td><code class="loc">voiceai/transcriber/sarvam.py:235</code>, <code class="loc">voiceai/transcriber/openai.py:119</code>, <code class="loc">voiceai/transcriber/gemini.py:183</code> vs <code class="loc">voiceai/lid/sarvam.py:54-78</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Smallest phantom (ghost partial)</td><td>Stale partial re-emitted after final; LLM answers old speech.</td><td><code class="loc">voiceai/transcriber/smallest.py:455-478</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>force-finalize append vs upsert</td><td>Forced final appended not upserted; duplicate finals in history.</td><td><code class="loc">voiceai/transcriber/base.py:43-52</code></td><td>NEW</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>OpenAI commit race</td><td>Commit races buffered audio; truncated final or 400 from provider.</td><td><code class="loc">voiceai/transcriber/openai.py:144-297</code></td><td>NEW HIGH</td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s5">
+<h2>S5 · Synthesizers — AI Engineer <span class="muted small">4 fixed · 12 OPEN residuals</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>Pool re-enter fixed (backoff 0.1–2s)</td><td>Re-entry now bounded with jittered backoff.</td><td><code class="loc">voiceai/synthesizer/pool.py:128-180</code></td><td>#13</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>HTTP None fixed</td><td>None-session deref closed.</td><td><code class="loc">voiceai/synthesizer/base.py:139-204</code></td><td>#13</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>v1 ignore fixed (ElevenLabs)</td><td>v1 payload no longer silently dropped.</td><td><code class="loc">voiceai/synthesizer/elevenlabs.py:153-347</code></td><td>#13</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>Switch fixed</td><td>Voice switch now settles stream before cutover.</td><td><code class="loc">voiceai/synthesizer/pool.py:220-269</code></td><td>#13</td><td><span class="badge b-fixed">Fixed</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Sender overwrite (stream)</td><td>Second synth overwrites first sender; first call’s audio goes to wrong leg.</td><td><code class="loc">voiceai/synthesizer/stream.py:175</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Order misattribution</td><td>Out-of-order chunks attributed to wrong sequence; garbled speak.</td><td><code class="loc">voiceai/synthesizer/stream.py:244-277</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Sarvam/Smallest have no cancel</td><td>Interrupt leaves provider speaking; overlap.</td><td><code class="loc">voiceai/synthesizer/sarvam.py</code>, <code class="loc">voiceai/synthesizer/smallest.py</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Azure blocking + no EOS + cache False</td><td>Sync SDK blocks loop; stream never EOS-settles; cache disabled hides it.</td><td><code class="loc">voiceai/synthesizer/azure.py:99-105,141-277,40</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Pixa Base-not-Stream</td><td>Pixa inherits Base not Stream; streaming contract (sender/EOS/guard) missing.</td><td><code class="loc">voiceai/synthesizer/pixa.py:23-426</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Rime double-EOS + supports_websocket False</td><td>Two EOS frames; WS-capability flag False while code paths assume WS.</td><td><code class="loc">voiceai/synthesizer/rime.py:176-184,64</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Turn-clock: Deepgram/Rime lack</td><td>No per-turn synth clock; latency unattributed.</td><td><code class="loc">voiceai/synthesizer/deepgram.py</code>, <code class="loc">voiceai/synthesizer/rime.py</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Deepgram mulaw@24k</td><td>Mulaw advertised at 24k; carrier expects 8k; pitch/noise.</td><td><code class="loc">voiceai/synthesizer/deepgram.py:51-55</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Sarvam sticky-fatal</td><td>One fatal poisons handle; every later turn fails until restart.</td><td><code class="loc">voiceai/synthesizer/sarvam.py:196-199</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Sequence return-vs-continue</td><td>Early return skips sequence bump; next chunk reuses id.</td><td><code class="loc">voiceai/synthesizer/base.py:158</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Monitor: Pixa lacks guard</td><td>Stream monitor guard present in base but Pixa never installs it.</td><td><code class="loc">voiceai/synthesizer/stream.py:347</code> vs <code class="loc">voiceai/synthesizer/pixa.py:382</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>401 handling inconsistent + ffmpeg inline (0 to_thread)</td><td>Some synths refresh on 401, others fail; ffmpeg runs inline on loop.</td><td><code class="loc">voiceai/synthesizer/*:401</code>, <code class="loc">ffmpeg inline 0× to_thread</code></td><td>OPEN</td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s6">
+<h2>S6 · Helpers — General <span class="muted small">#2 PASS · #4/#11 CONFIRMED · SSRF partial</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Fixed"><td><span class="badge b-high">High</span></td><td>#2 PASS (helper-side recheck)</td><td>Reserved-key guard holds from helper view.</td><td><code class="loc">voiceai/llms/types.py:38-113</code></td><td>#2</td><td><span class="badge b-fixed">Pass</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#4 CONFIRMED: secret/PII leak + CSV unredacted</td><td>Tool payload logs <code>api_token=***</code> value and CSV row; log store keeps cleartext.</td><td><code class="loc">voiceai/helpers/function_calling_helpers.py:190,250,256,236</code></td><td>#4</td><td><span class="badge b-open">Confirmed</span><details><summary>evidence</summary><p class="small">Lines 190/250/256 log without redact; 236 CSV writes unredacted. Fix: route all through redact helper (currently unused) + drop CSV secrets column.</p></details></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>#11 CONFIRMED: torch/pickle + TypeError + store mismatch</td><td>Crafted blob → arbitrary code; TypeError path leaks; stored shape ≠ loaded shape.</td><td><code class="loc">voiceai/helpers/utils.py:834-870,867</code>, <code class="loc">voiceai/helpers/utils.py:874</code> vs <code class="loc">voiceai/helpers/utils.py:315</code></td><td>#11</td><td><span class="badge b-open">Confirmed</span></td></tr>
+<tr data-sev="High" data-status="Partial"><td><span class="badge b-high">High</span></td><td>SSRF partial (TOCTOU; doc admits)</td><td>URL validated then fetched after await; DNS rebind swaps host; doc 53–56 admits gap.</td><td><code class="loc">voiceai/helpers/function_calling_helpers.py:46-97,230,253</code>, <code class="loc">voiceai/helpers/function_calling_helpers.py:53-56</code></td><td>#5</td><td><span class="badge b-partial">Partial</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>% injection (format-string)</td><td>User text with <code>%s</code> breaks %-formatted prompt/log; crash or content control.</td><td><code class="loc">voiceai/helpers/utils.py:166-185,330-350</code></td><td>#6</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>task_config dict (untyped)</td><td>Dict-typed task config accepts unknown keys silently; typo = silent no-op.</td><td><code class="loc">voiceai/models.py:733-738</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Union masks (validation shadow)</td><td>Union member order shadows stricter model; bad config validates.</td><td><code class="loc">voiceai/models.py:687-698</code> vs <code class="loc">voiceai/models.py:171,312</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Fire-forget (unawaited)</td><td>Side-effect coros never awaited; failure silent.</td><td><code class="loc">voiceai/helpers/utils.py:1038</code>, <code class="loc">voiceai/helpers/switcher.py:166</code>, <code class="loc">voiceai/helpers/detector.py:66</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>RAG pins URL (no allowlist refresh)</td><td>RAG source URL pinned; hijacked domain keeps trusted status.</td><td><code class="loc">voiceai/helpers/rag.py:288-303</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Expr vs prompt (evaluator split)</td><td>Evaluator expression path and prompt path diverge; policy bypass via other path.</td><td><code class="loc">voiceai/helpers/evaluator.py:27-35</code> vs <code class="loc">voiceai/helpers/utils.py:84-112</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>CSV None.csv PII</td><td>Missing name writes literal <code>None.csv</code> with PII row; enumerable dump.</td><td><code class="loc">voiceai/helpers/utils.py:42-44,695-808,928-1038</code></td><td>#4</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>redact helper unused</td><td>Redact util exists but call sites log raw.</td><td><code class="loc">voiceai/helpers/*:redact unused</code></td><td>#4</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>History mutates (shared ref)</td><td>ConversationHistory mutates caller list; retry corrupts original.</td><td><code class="loc">voiceai/helpers/conversation_history.py:238-333</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Switcher sound (blocking/no-guard)</td><td>Sound cue blocks turn; no timeout.</td><td><code class="loc">voiceai/helpers/switcher.py:266-323</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Ledger unbounded</td><td>Mark ledger grows per turn; no cap.</td><td><code class="loc">voiceai/helpers/mark.py:64,91-130,216,273</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>validate silent (agent_config swallows)</td><td>Agent validation reports nothing on nested path; bad agent stored.</td><td><code class="loc">voiceai/agent_config.py:176-305</code> via <code class="loc">voiceai/helpers/api_tools.py</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Assistant builds invalid (no validate)</td><td>Assistant constructor skips validation; invalid object enters pipeline.</td><td><code class="loc">voiceai/assistant.py:10-44</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s7">
+<h2>S7 · Platform — Backend Architect <span class="muted small">Talko/auth/dial/billing — densest OPEN cluster</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Prior</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Talko plaintext (secret in clear)</td><td>Relay secret stored/sent without seal; log or dump exposes <code>***</code>-class value.</td><td><code class="loc">voiceai/platform/models.py:143-146,160</code>, <code class="loc">voiceai/platform/router.py:369-380,394</code>, <code class="loc">voiceai/platform/dialer.py:73</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Critical" data-status="Open"><td><span class="badge b-crit">Critical</span></td><td>No tenancy (cross-org read)</td><td>Endpoints lack org scope; one tenant lists/dials another’s agents.</td><td><code class="loc">voiceai/platform/auth.py:91</code>, <code class="loc">voiceai/platform/models.py:64-261</code>, <code class="loc">voiceai/platform/router.py:394-807</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>1000 sync dials (loop blocks)</td><td>Batch dial loops 1000 sync calls; worker stalls; retries pile.</td><td><code class="loc">voiceai/platform/models.py:132</code>, <code class="loc">voiceai/platform/router.py:404</code>, <code class="loc">voiceai/platform/simulation.py:203</code>, <code class="loc">voiceai/platform/dialer.py:33</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Dial open (see #3)</td><td>Dial without key when env unset.</td><td><code class="loc">voiceai/platform/carrier_auth.py:64-75</code>, <code class="loc">voiceai/platform/dialer.py:37-44</code></td><td>#3</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Wildcard * ttl0 (see S2)</td><td>Permanent relay token.</td><td><code class="loc">voiceai/platform/stream_token.py:33-118</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Deleted keys still live</td><td>Key revoked but cached verifier still accepts until restart.</td><td><code class="loc">voiceai/platform/auth_router.py:247</code>, <code class="loc">voiceai/platform/auth.py:139-164</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Vector raw (unscoped query)</td><td>Raw vector query without tenant filter; cross-tenant docs.</td><td><code class="loc">voiceai/platform/models.py:674-694</code>, <code class="loc">voiceai/platform/router.py:815-829</code>, <code class="loc">voiceai/platform/store.py:904</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Retry re-dials live call</td><td>Retry policy redials answered call; double bill + confused callee.</td><td><code class="loc">voiceai/platform/router.py:456</code>, <code class="loc">voiceai/platform/simulation.py:234</code>, <code class="loc">voiceai/platform/dialer.py:103</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>PBKDF2 sync (blocks loop)</td><td>Password hash on loop; login storm stalls voice.</td><td><code class="loc">voiceai/platform/auth.py:58-74</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Email enumeration</td><td>Login error distinguishes unknown vs bad password.</td><td><code class="loc">voiceai/platform/auth_router.py:76-145</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Throttle trusts XFF</td><td>Rate limit keyed on spoofable header.</td><td><code class="loc">voiceai/platform/auth.py:274-291</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>COOKIE_SECURE off</td><td>Session cookie over http; hijack on same net.</td><td><code class="loc">voiceai/platform/auth.py:36-43</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>KEYS scans (full-table)</td><td>Key lookup scans store; slow + timing side-channel.</td><td><code class="loc">voiceai/platform/store.py:619</code>, <code class="loc">voiceai/platform/quickstart_server.py:111-495</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>No TTL on invites</td><td>Invite lives forever; stale join.</td><td><code class="loc">voiceai/platform/store.py:1045-1092</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Batch not idempotent</td><td>Retried batch dials twice.</td><td><code class="loc">voiceai/platform/router.py:404</code>, <code class="loc">voiceai/platform/simulation.py:193</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>DELETE lies (200 on missing)</td><td>Delete returns success when nothing deleted; automation desync.</td><td><code class="loc">voiceai/platform/router.py:482</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Float money (billing rounding)</td><td>Float for money; rounding drift.</td><td><code class="loc">voiceai/platform/models.py:263</code>, <code class="loc">voiceai/platform/router.py:691</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>SHA256 fast hash (password)</td><td>Fast hash, no memory-hard KDF; offline crack cheap.</td><td><code class="loc">voiceai/platform/auth.py:81-152</code>, <code class="loc">voiceai/platform/models.py:338</code>, <code class="loc">voiceai/platform/router.py:1404</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Role confusion</td><td>Role check inconsistent; privilege edge.</td><td><code class="loc">voiceai/platform/auth.py:98-110</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>Owner race</td><td>Two concurrent owner grants both succeed.</td><td><code class="loc">voiceai/platform/auth_router.py:72-91</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Org timeout decorative</td><td>Timeout config read but never enforced.</td><td><code class="loc">voiceai/platform/models.py:318</code>, <code class="loc">voiceai/platform/auth.py:206</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Stubs (router/workflows)</td><td>Stub endpoints return canned success; callers assume real.</td><td><code class="loc">voiceai/platform/router.py:648</code>, <code class="loc">voiceai/platform/workflows.py:204</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>Calling-hours not enforced</td><td>Config present; dial path ignores.</td><td><code class="loc">voiceai/platform/router.py:404</code>, <code class="loc">voiceai/platform/simulation.py:61</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>HTTPException not VoiceAIError</td><td>Platform raises raw HTTPException across module boundary; transport contract broken.</td><td><code class="loc">voiceai/platform/router.py:151</code> (+ invites <code>==</code> + bare task)</td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>Proxy trust (platform)</td><td>Same XFF trust as S2; throttle/auth bypass.</td><td><code class="loc">voiceai/platform/carrier_auth.py:78</code>, <code class="loc">voiceai/platform/auth.py:287</code></td><td>—</td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="s8">
+<h2>S8 · Hygiene — General <span class="muted small">collect 1797 · ruff pass (weak) · format 22 · deps/CI/docs</span></h2>
+<table><thead><tr><th>SEV</th><th>Claim</th><th>Scenario</th><th>Location</th><th>Status</th></tr></thead><tbody>
+<tr data-sev="Low" data-status="Fixed"><td><span class="badge b-low">Low</span></td><td>Collect 1797 in 0.28s (149 files)</td><td>Suite collects; no import break.</td><td><code class="loc">tests/* (149 files)</code></td><td><span class="badge b-fixed">Done</span></td></tr>
+<tr data-sev="Low" data-status="Fixed"><td><span class="badge b-low">Low</span></td><td>ruff check pass (weak rules)</td><td>E721/F811/ISC only; strengthen before relying.</td><td><code class="loc">pyproject.toml (ruff)</code></td><td><span class="badge b-fixed">Pass</span></td></tr>
+<tr data-sev="Low" data-status="Open"><td><span class="badge b-low">Low</span></td><td>format 22/303</td><td>22 files need <code>ruff format</code>.</td><td><code class="loc">ruff format --check (22 files)</code></td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="High" data-status="Open"><td><span class="badge b-high">High</span></td><td>ngrok token OPEN</td><td>Token in repo config; anyone with read clones tunnel secret. Rotate; value shown here only as <code>***</code>.</td><td><code class="loc">ngrok-config.yml:3</code></td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Low" data-status="Fixed"><td><span class="badge b-low">Low</span></td><td>torch 0 imports CLOSED</td><td>No torch import in graph.</td><td><code class="loc">graph: torch 0</code></td><td><span class="badge b-fixed">Closed</span></td></tr>
+<tr data-sev="Low" data-status="Fixed"><td><span class="badge b-low">Low</span></td><td>.env.sample 30 keys CLOSED</td><td>Sample has no live secret (all <code>***</code>-safe).</td><td><code class="loc">.env.sample (30 keys)</code></td><td><span class="badge b-fixed">Closed</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>CI 5× dispatch-only OPEN</td><td>No CI on push/PR; regressions land silently.</td><td><code class="loc">.github/workflows/* (5×)</code></td><td><span class="badge b-open">Open</span></td></tr>
+<tr data-sev="Medium" data-status="Open"><td><span class="badge b-med">Medium</span></td><td>openapi 8/40 v0.1.0 vs 0.10.217 OPEN</td><td>Contract advertises 8 of 40 routes at stale version.</td><td><code class="loc">openapi.yaml:8/40</code></td><td><span class="badge b-open">Open</span></td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="cross">
+<h2>4 · Cross-Cutting Patterns (5)</h2>
+<h3>1 · Lifecycle: unowned tasks + unbounded awaits</h3>
+<p class="small">54× bare <code>create_task</code> (S1) + 132 vs 43 Registry (S8) + 0× <code>with_timeout</code> + 64× <code>while True</code> + 589× <code>except Exception</code> (~82 pass/continue). Every provider await needs <code>TaskRegistry + iteration_guard/supervise + with_timeout</code>; background work via <code>call_soft</code> for side paths. Fixes hangup wedge, transfer stall, S2S spin, switch leaks in one move.</p>
+<h3>2 · Errors: one shape, typed raises, never spoken</h3>
+<p class="small">#12 fixed via <code>constants.py:385-401</code> but S7 still raises raw <code>HTTPException</code> at <code>router.py:151</code>. Rule: raise <code>VoiceAIError</code> subclass + <code>classify_exception</code>; render only via <code>ErrorEnvelope/register_exception_handlers</code> and <code>ws_error_frame/close_with_error</code>; speak only <code>LLM_FAILURE_SPOKEN_MESSAGE</code>.</p>
+<h3>3 · Dedup/capability drift</h3>
+<p class="small">STT matrix (<code>enums.py:13-49</code> vs gladia:133/openai:109/pixa:98), Pixa Base-not-Stream, Rime double-EOS, Deepgram mulaw@24k, turn-clock gaps, stateless resample, force-finalize append-vs-upsert. Fix with one capability table + one stream base + one EOS/sequence owner.</p>
+<h3>4 · Privacy: redact by default, scope by tenant</h3>
+<p class="small">#4 leak (190/250/256 + CSV 236 + None.csv PII) + unused redact + KB scoping 337–339 + vector raw + Talko plaintext + invites no-TTL. Fix: redact helper on every log/CSV path, per-tenant KB/vector filter, sealed secrets, TTL + idempotency on dial/batch/invite.</p>
+<h3>5 · Gates: fail-closed auth, trusted proxy, no forever-tokens</h3>
+<p class="small">#3 default-open + proxy-trust (S2+S7) + <code>*</code> ttl0 + deleted-keys-live + XFF throttle + COOKIE_SECURE off + float money + fast hash. Fix: require key in prod, trusted-proxy list, agent-scoped short TTL, revocation cache, Secure cookies, Decimal money, memory-hard KDF.</p>
+</section>
+
+<section class="card" id="plan">
+<h2>5 · 4-Pass Plan (exhaustive prefs · reasoning + redacted shapes · no live dials)</h2>
+<table><thead><tr><th>Pass</th><th>Horizon</th><th>Do</th><th>Done when</th></tr></thead><tbody>
+<tr><td><b>P1 · Stop the bleed</b></td><td>days</td><td>Rotate <code>ngrok-config.yml:3</code> → <code>***</code>; fail-closed dial (<code>carrier_auth.py:64-75</code>); scope + expire Talko token (<code>stream_token.py:99-103</code>, no <code>*</code> ttl0); redact logs + CSV (#4 190/250/256/236 + None.csv); pin SSRF egress (TOCTOU doc 53–56); tenancy filter on router/store/vector; revocation actually revokes.</td><td>No default-open path; no forever token; no cleartext secret in logs; SSRF egress pinned.</td></tr>
+<tr><td><b>P2 · Survive the call</b></td><td>1–2 wks</td><td>TM: Registry for 54 tasks + <code>with_timeout</code> on every provider await + <code>iteration_guard</code> per loop iteration; hangup single-owner cancel (3475–3497/8056–8081); synth-break EOS settle (7444–7550/7530); transcriber guard (5536–5960); transfer deadline ~5s + spoken hold (4816–4973); Plivo finally (18–31); pcm/mulaw flag (33–44); Deepgram/Google races; OpenAI commit race; Pixa stream base; Sarvam sticky-fatal.</td><td>Chaos (hangup/barge-in/transfer/provider-hang) never wedges; p95 jitter down after to_thread audio (7632/7645/8238).</td></tr>
+<tr><td><b>P3 · Off the loop</b></td><td>next</td><td>Audio + ffmpeg + PBKDF2 → <code>to_thread</code>; Azure EOS + cache; Rime EOS/WS flag; turn-clock everywhere; resample stateful; upsert finals; history copy-on-write (238–333); ledger cap; format 22 files; audioop migration plan (18 sites); deps bump (aiohttp/uvicorn/redis/twilio/fastapi); openapi regen 40/40 v0.10.217; CI on push/PR.</td><td>No blocking call on loop; contract 40/40 current; CI gates.</td></tr>
+<tr><td><b>P4 · Seams</b></td><td>after</td><td>Split 9877-line TM by seam (setup/transfer/language/S2S already mapped 1894–2048/4816–4973/6326–6915/8485–9125); validate at boundary (<code>agent_config.py:176-305</code> + <code>assistant.py:10-44</code>); strict Union order + typed task_config; evaluator single policy path; RAG URL allowlist refresh; billing Decimal + idempotent batch + calling-hours enforce; remove wavs stray (keep noise 20.6M documented).</td><td>TM modules independently testable; 6/12 zero-test STT + 8 thin synth covered.</td></tr>
+</tbody></table>
+</section>
+
+<section class="card" id="method">
+<h2>6 · Method &amp; Limits</h2>
+<ul class="small">
+<li><b>Read-only:</b> graph + source reads only. No provider calls, no live dials, no secret exfiltration. Collect-only already done by S8 (1797 in 0.28s); this page reruns nothing that dirties the tree.</li>
+<li><b>Grounding this session:</b> Read <code>voiceai/platform/stream_token.py:1-120</code>, <code>voiceai/llms/types.py:1-120</code>, <code>voiceai/agent_manager/task_manager.py:1-80</code> to anchor paths/line numbers before Write (satisfies Read-before-Write).</li>
+<li><b>Best-effort coverage:</b> graph 6705/33134 ready, index clean — clean means no recorded gap, not proof of completeness. Missed-range risk disclosed per stream; <code>file:line</code> kept exact as reported for grepability.</li>
+<li><b>Secrets redacted:</b> every secret-shaped value rendered as <code>***</code> (e.g. <code>api_token=***</code>). ngrok token NOT reproduced.</li>
+<li><b>No re-audit:</b> this page renders the supplied triage + S1–S8 verdicts verbatim; titles for #5/#6/#13–#16 reconstructed only where prior prose wasn’t re-supplied, locations/statuses unchanged.</li>
+<li><b>Full verification post-approval:</b> per user prefs — exhaustive P1–P4 verification (redacted shapes + reasoning traces, still no live dials) runs only after approval.</li>
+</ul>
+<pre>How to verify locally (read-only):
+  grep -n "RESERVED_TOOL_ARGUMENT_KEYS" voiceai/llms/types.py
+  grep -n "verify_stream_token\|WILDCARD_AGENT" voiceai/platform/stream_token.py
+  grep -cn "asyncio.create_task" voiceai/agent_manager/task_manager.py
+  grep -rn "audioop" voiceai | wc -l   # expect ~18
+  ls *.wav; du -sh noise 2>/dev/null || true</pre>
+</section>
+
+</main>
+</div>
+<footer>VoiceAI resilient-core audit · 12 Sept 2026 · revamp/resilient-core @83e60ce · graph 6705/33134 · prior master @11164d8 (1 Crit + 13 High + 2 Med) · Single self-contained file, inline CSS/JS only · Print via browser Print → Save as PDF.</footer>
+<script>
+(function(){
+var btns=document.querySelectorAll('#filters button');
+var rows=document.querySelectorAll('tr[data-sev]');
+var count=document.getElementById('count');
+function apply(f){
+var n=0,shown=0;
+rows.forEach(function(r){
+n++;
+var sev=r.getAttribute('data-sev'),st=r.getAttribute('data-status')||'';
+var ok=(f==='all')||sev===f||st===f;
+r.style.display=ok?'':'none';
+if(ok)shown++;
+});
+count.textContent=shown+' / '+n+' rows';
+btns.forEach(function(b){b.classList.toggle('active',b.getAttribute('data-f')===f)});
+}
+btns.forEach(function(b){b.addEventListener('click',function(){apply(b.getAttribute('data-f'))})});
+apply('all');
+})();
+</script>
+</body>
+</html>

@@ -91,6 +91,26 @@ async def test_caller_transcript_forwarded_as_user_text():
     assert packet["meta_info"]["role"] == "user"
 
 
+async def test_web_based_talk_leg_forwards_caller_transcript():
+    """Playground Talk legs (is_web_based_call=True) must forward caller text.
+
+    Regression: _is_browser_leg excluded web-based calls, so the Live Talk
+    transcript panel stayed empty on exactly the legs it exists for.
+    """
+    tm = make_browser_tm()
+    tm.is_web_based_call = True
+    meta_info = {"sequence_id": 3, "turn_id": 1}
+
+    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        await tm._handle_transcriber_output("llm", "appointment kal chahiye", dict(meta_info))
+
+    tm.tools["output"].handle.assert_awaited_once()
+    packet = tm.tools["output"].handle.await_args.args[0]
+    assert packet["data"] == "appointment kal chahiye"
+    assert packet["meta_info"]["type"] == "text"
+    assert packet["meta_info"]["role"] == "user"
+
+
 async def test_caller_transcript_not_forwarded_on_telephony():
     tm = make_browser_tm(io_provider="plivo")
     meta_info = {"sequence_id": 3, "turn_id": 1}
