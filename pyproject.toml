@@ -18,6 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dynamic = ["dependencies"]
+# A12: keep >=3.10 (3.13 supported via audioop-lts backport in requirements.txt).
+# stdlib audioop was removed in 3.13 (18 call sites); audioop-lts provides the same
+# `audioop` module so no code change is needed. Do NOT cap to <3.13.
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
@@ -44,10 +47,15 @@ target-version = "py310"
 [tool.ruff.lint]
 # Start minimal, grow over time. Uncomment rules as the codebase is cleaned up.
 # Roadmap: F541 → UP → F401 → F841 → I (isort) → E (pycodestyle)
+# A11 (2026-09-12): added F821 (undefined names, zero hits, safe to enforce).
+# F401 (150 hits) and ASYNC (14 hits) deferred — enabling now would force edits
+# across provider logic owned by other fixers. Do NOT enable "B"/B008: FastAPI
+# Depends() in defaults is idiomatic and B008 would false-positive on every route.
 select = [
     "E721",  # type comparison (use isinstance)
     "F811",  # redefined unused name
-    "ISC",   # implicit string concatenation bugs
+    "F821",  # undefined names
+    "ISC",  # implicit string concatenation bugs
 ]
 
 [tool.commitizen]

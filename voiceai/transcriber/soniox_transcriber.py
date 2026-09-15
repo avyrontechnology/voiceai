@@ -228,7 +228,7 @@ class SonioxTranscriber(BaseTranscriber):
         self.current_turn_interim_details = []
         self.final_transcript = ""
         self.is_transcript_sent_for_processing = False
-        self.turn_latencies.append(
+        self._upsert_turn_latency(
             {
                 "turn_id": self.current_turn_id,
                 "asr_start_epoch_ms": self.current_turn_start_time,

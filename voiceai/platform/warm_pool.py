@@ -32,6 +32,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from voiceai.errors import ConfigurationError, classify_exception, is_cancellation, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import log_ignored, safe_task
 
 logger = configure_logger(__name__)
 
@@ -396,8 +397,8 @@ class WarmPool:
         if replace_now:
             await self._replace(kind, key, entry.generation + 1)
             return
-        task = asyncio.create_task(self._replace(kind, key, entry.generation + 1))
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+        # safe_task retains the redial and logs failures (bare create_task loses them).
+        safe_task(self._replace(kind, key, entry.generation + 1), name="pool_redial", logger=logger)
 
     async def _replace(self, kind: str, key: Any, generation: int) -> None:
         if self._closed:
@@ -407,16 +408,16 @@ class WarmPool:
             if conn is not None:
                 try:
                     await conn.close()  # type: ignore[union-attr]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_ignored(logger, "pool replace close", exc, level=10)
             return
         async with self._lock:
             cap = self._max_global_tts if kind == "tts" else self._max_global_stt
             if self._key_count(kind, key) >= self._max_per_key or self._global_in_use_or_idle(kind) >= cap:
                 try:
                     await conn.close()  # type: ignore[union-attr]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_ignored(logger, "pool cap close", exc, level=10)
                 return
             self._store(kind, key).append(PoolEntry(conn=conn, key=key, kind=kind, generation=generation, in_use=False))
 
@@ -483,7 +484,7 @@ class WarmPool:
 
     def start_keeper(self) -> None:
         if self._keeper_task is None or self._keeper_task.done():
-            self._keeper_task = asyncio.create_task(self._keeper_loop())
+            self._keeper_task = safe_task(self._keeper_loop(), name="pool_keeper", logger=logger)
 
     async def close_all(self) -> None:
         """Teardown: stop the keeper and close every standby socket."""

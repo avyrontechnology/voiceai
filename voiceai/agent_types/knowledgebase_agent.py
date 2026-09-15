@@ -11,8 +11,8 @@ from voiceai.errors import ConfigurationError, classify_exception, summarize_exc
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
 from voiceai.helpers.function_calling_helpers import guard_llm_base_url
-from voiceai.helpers.utils import now_ms, format_messages
-from voiceai.llms.types import LLMStreamChunk, LatencyData
+from voiceai.helpers.utils import now_ms, format_messages, get_md5_hash
+from voiceai.llms.types import LLMStreamChunk, LatencyData, repair_tool_history
 from voiceai.providers import SUPPORTED_LLM_PROVIDERS
 from voiceai.llms import OpenAiLLM
 from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
@@ -41,14 +41,64 @@ class KnowledgeBaseAgent(BaseAgent):
         # Main LLM for conversation
         self.llm = self._initialize_llm()
 
-        # Separate LLM for checking if call should end
-        self.conversation_completion_llm = OpenAiLLM(model=os.getenv("CHECK_FOR_COMPLETION_LLM", self.llm_model))
-        self.voicemail_llm = OpenAiLLM(model=os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
+        # Aux LLMs on the correct backend (same contract as GraphAgent): Azure stays on Azure with its
+        # own key/endpoint, custom keeps its base_url — never an Azure endpoint on an OpenAI client.
+        self.conversation_completion_llm = self._create_aux_llm(os.getenv("CHECK_FOR_COMPLETION_LLM", self.llm_model))
+        self.voicemail_llm = self._create_aux_llm(os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
         # RAG configuration
         self.rag_config = self._initialize_rag_config()
         self.rag_server_url = os.getenv("RAG_SERVER_URL", "http://localhost:8000")
+        self._last_rag_fingerprint: Optional[str] = None
 
         logger.info(f"KnowledgeBaseAgent initialized with RAG collections: {self.rag_config.get('collections', [])}")
+
+    @staticmethod
+    def _repair_tool_history(messages: List[dict]) -> List[dict]:
+        """Drop orphaned tool turns left by the 50-message window (shared helper)."""
+        return repair_tool_history(messages)
+
+    def _create_aux_llm(self, model: str):
+        raw_provider = self.config.get("aux_provider") or self.config.get("provider") or "openai"
+        provider = str(raw_provider).lower()
+        if provider == "azure-openai":
+            provider = "azure"
+        aux_model = (model or "").split("/", 1)[-1] if isinstance(model, str) and "/" in str(model) else model
+        if provider == "azure":
+            azure_key = self.config.get("llm_key") or os.getenv("AZURE_OPENAI_API_KEY")
+            azure_endpoint = self.config.get("base_url") or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if azure_key and azure_endpoint:
+                from voiceai.llms.azure_llm import AzureLLM
+
+                return AzureLLM(
+                    model=aux_model or "gpt-4o-mini",
+                    llm_key=azure_key,
+                    base_url=azure_endpoint,
+                    api_version=self.config.get("api_version")
+                    or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+                )
+            platform_key = os.getenv("OPENAI_API_KEY")
+            if platform_key:
+                return OpenAiLLM(model=aux_model or "gpt-4o-mini", llm_key=platform_key)
+            kwargs: Dict = {}
+            if self.config.get("llm_key"):
+                kwargs["llm_key"] = self.config.get("llm_key")
+            return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
+        if provider == "custom":
+            kwargs = {}
+            if self.config.get("llm_key"):
+                kwargs["llm_key"] = self.config.get("llm_key")
+            if self.config.get("base_url"):
+                kwargs["base_url"] = self.config.get("base_url")
+                kwargs["provider"] = "custom"
+            return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
+        kwargs = {}
+        openai_key = self.config.get("llm_key") or os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            kwargs["llm_key"] = openai_key
+        base_url = self.config.get("base_url")
+        if base_url and "azure" not in str(base_url).lower():
+            kwargs["base_url"] = base_url
+        return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
 
     def _initialize_llm(self):
         """Initialize the LLM instance with all necessary config (including api_tools for function calling)."""
@@ -283,10 +333,23 @@ Use this information naturally when it helps answer the user's questions. Don't 
             # Build final messages
             final_messages = [{"role": "system", "content": enhanced_system_prompt}] + other_messages
 
-            # Limit history size
+            # Limit history size, then repair a slice that cut a tool pair (else the request 400s).
             max_messages = 50
             if len(final_messages) > max_messages:
                 final_messages = [final_messages[0]] + final_messages[-(max_messages - 1) :]
+            final_messages = [final_messages[0]] + self._repair_tool_history(final_messages[1:])
+
+            # The enhanced system prompt changes every turn (fresh RAG): invalidate the Responses chain
+            # when it changed so stale contexts do not linger server-side as residual.
+            fingerprint = get_md5_hash(enhanced_system_prompt)
+            if fingerprint != self._last_rag_fingerprint:
+                invalidate = getattr(getattr(self, "llm", None), "invalidate_response_chain", None)
+                if callable(invalidate):
+                    try:
+                        invalidate()
+                    except Exception:
+                        pass
+                self._last_rag_fingerprint = fingerprint
 
             return final_messages, {
                 "status": "success",
@@ -310,8 +373,13 @@ Use this information naturally when it helps answer the user's questions. Don't 
         """
         meta_info = kwargs.get("meta_info")
         synthesize = kwargs.get("synthesize", True)
+        tool_choice = kwargs.get("tool_choice")
+        tools = kwargs.get("tools")
         start_time = now_ms()
 
+        if not isinstance(meta_info, dict):
+            meta_info = {}
+            kwargs["meta_info"] = meta_info
         meta_info["llm_metadata"] = meta_info.get("llm_metadata", {})
         meta_info["llm_metadata"]["rag_info"] = {}
         meta_info["llm_metadata"]["rag_info"]["all_sources"] = self.rag_config.get("used_sources", [])
@@ -335,7 +403,11 @@ Use this information naturally when it helps answer the user's questions. Don't 
             yield {"messages": messages_with_context}
 
             async for chunk in self.llm.generate_stream(
-                messages_with_context, synthesize=synthesize, meta_info=meta_info
+                messages_with_context,
+                synthesize=synthesize,
+                meta_info=meta_info,
+                tool_choice=tool_choice,
+                tools=tools,
             ):
                 yield chunk
 

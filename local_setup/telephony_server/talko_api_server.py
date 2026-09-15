@@ -12,10 +12,12 @@ directly it asks Talko (Tata Tele) to dial:
 
 No TwiML/connect callback is needed: Tata's stream URL is Talko's static
 PSTN endpoint (vendor_config callback), not a per-call URL like Twilio.
-Because the relay builds that URL itself, give it a static signed token:
+Because the relay builds that URL itself, give it a scoped expiring token:
 configure the relay's engine URL as ``wss://engine/chat/v1/{agent_id}?token=<t>``
-where ``<t>`` comes from ``python -m voiceai.platform.stream_token --agent '*' --ttl 0``
-run with the same ``VOICE_STREAM_SECRET`` as the engine.
+where ``<t>`` comes from ``python -m voiceai.platform.stream_token --agent <agent-id> --ttl 86400``
+run with the same ``VOICE_STREAM_SECRET`` as the engine. Rotate the relay token
+(e.g. daily) and prefer per-agent tokens over ``--agent '*'``; never use ``--ttl 0``
+(a leaked never-expiring wildcard token is permanent auth for every agent).
 
 Every error is a ``voiceai.errors.VoiceAIError`` rendered by the shared envelope
 (``voiceai.responses``): 400 for request/config problems, 401 for a missing API key,
@@ -26,7 +28,8 @@ Env:
     TALKO_API_KEY       Talko partner API key (tkp_live_*, sent as API-KEY)
     TALKO_AI_DID        Dedicated DID (caller id) for AI-bridge dials
     TALKO_PARTNER_ID    Default partner_id (overridable per request)
-    TELEPHONY_API_KEY   X-API-Key required on /talko/call and /talko/hangup once set
+    TELEPHONY_API_KEY   X-API-Key required on /talko/call and /talko/hangup (open from localhost only
+                        until set; set ALLOW_OPEN_DIAL=1 to allow open non-localhost dial explicitly)
 """
 
 import os
@@ -88,7 +91,9 @@ def _headers(api_key: str = "") -> dict:
 def _require_key(api_key: str = "") -> str:
     key = api_key.strip() or talko_api_key
     if not key:
-        raise ConfigurationError("No Talko API key: pass talko_api_key or configure TALKO_API_KEY.", path="TALKO_API_KEY")
+        raise ConfigurationError(
+            "No Talko API key: pass talko_api_key or configure TALKO_API_KEY.", path="TALKO_API_KEY"
+        )
     return key
 
 

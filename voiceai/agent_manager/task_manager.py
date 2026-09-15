@@ -49,6 +49,7 @@ from voiceai.constants import (
     STUCK_AUDIO_GATE_RELEASE_S,
     WEB_BASED_CALL_PROVIDER,
     WEBCALL_TTS_SAMPLE_RATE,
+    llm_failure_spoken_message,
 )
 from voiceai.helpers.function_calling_helpers import (
     trigger_api,
@@ -80,7 +81,7 @@ from voiceai.errors import (
     classify_exception,
     summarize_exception,
 )
-from voiceai.helpers.resilience import TaskRegistry, iteration_guard, log_ignored
+from voiceai.helpers.resilience import LoopFailure, TaskRegistry, call_soft, iteration_guard, log_ignored, with_timeout
 from voiceai.prompts import *
 from voiceai.helpers.language_detector import LanguageDetector
 from voiceai.helpers.language_switcher import LanguageSwitcher
@@ -131,6 +132,13 @@ logger = configure_logger(__name__)
 # Longest the transfer webhook waits for the agent's audio to drain before handing the call off
 # anyway: is_audio_being_played_to_user latches True whenever a final mark echo never arrives.
 TRANSFER_AUDIO_DRAIN_MAX_S = 15.0
+# A5 orchestration bounds: hangup goodbye drain, transfer pre-delay/post, accumulated poller.
+HANGUP_DRAIN_MAX_S = 10.0
+TRANSFER_PRE_DELAY_S = 2.0
+TRANSFER_PRE_DELAY_TIMEOUT_S = 5.0
+TRANSFER_POST_TIMEOUT_S = 20.0
+ACCUMULATED_POLLER_TIMEOUT_S = 30.0
+WELCOME_GOODBYE_TIMEOUT_S = 5.0
 
 
 @lru_cache(maxsize=256)
@@ -1751,9 +1759,7 @@ class TaskManager(BaseManager):
                 return None
         pcm = None
         try:
-            processor = getattr(synth, "_process_audio_data", None) or getattr(
-                synth, "_process_audio_chunk", None
-            )
+            processor = getattr(synth, "_process_audio_data", None) or getattr(synth, "_process_audio_chunk", None)
             pcm = processor(raw) if callable(processor) else None
         except Exception as e:
             logger.error(f"Welcome TTS post-processing failed: {e}")
@@ -2420,9 +2426,7 @@ class TaskManager(BaseManager):
         else:
             # `raise "<str>"` raised TypeError("exceptions must derive from BaseException"),
             # so the real cause (an unknown agent_type) never reached the log or the caller.
-            raise ConfigurationError(
-                f"Unknown agent type '{agent_type}'", path="tools_config.llm_agent.agent_type"
-            )
+            raise ConfigurationError(f"Unknown agent type '{agent_type}'", path="tools_config.llm_agent.agent_type")
         return llm_agent
 
     def __setup_s2s(self):
@@ -3469,24 +3473,43 @@ class TaskManager(BaseManager):
 
     async def __process_end_of_conversation(self, web_call_timeout=False):
         if self._end_of_conversation_in_progress or self.conversation_ended:
-            logger.info("__process_end_of_conversation: Already in progress or ended, skipping duplicate call")
+            started = getattr(self, "_end_of_conversation_started_at", None)
+            drain_timeout = getattr(self, "hangup_mark_event_timeout", HANGUP_DRAIN_MAX_S) or HANGUP_DRAIN_MAX_S
+            if self.conversation_ended or started is None or (time.time() - started) < drain_timeout:
+                logger.info("__process_end_of_conversation: Already in progress or ended, skipping duplicate call")
+                return
+            logger.warning("__process_end_of_conversation: prior teardown wedged, forcing conversation end")
+            self.hangup_message_queued = False
+            self.conversation_ended = True
+            self._end_of_conversation_in_progress = False
             return
 
         self._end_of_conversation_in_progress = True
+        self._end_of_conversation_started_at = time.time()
+        # Stamp before anything is awaited so the watchdog always has a deadline,
+        # even when this path is entered without process_call_hangup.
+        if self.hangup_triggered and getattr(self, "hangup_triggered_at", None) is None:
+            self.hangup_triggered_at = time.time()
         logger.info("Got end of conversation. I'm stopping now")
 
         await self.wait_for_current_message()
 
         # Check completion of agent_hangup_message sent from output
-        # Only wait for hangup chunk if a hangup message was actually queued
+        # Only wait for hangup chunk if a hangup message was actually queued.
+        # Bounded: a missing mark echo used to wedge teardown forever and the
+        # watchdog's second entry hit the early-return above and made no progress.
+        drain_timeout = getattr(self, "hangup_mark_event_timeout", HANGUP_DRAIN_MAX_S) or HANGUP_DRAIN_MAX_S
+        wedge_deadline = time.time() + drain_timeout
         while self.hangup_triggered and self.hangup_message_queued:
             try:
                 if self.tools["output"].hangup_sent():
                     logger.info("final hangup chunk is now sent. Breaking now")
                     break
-                else:
-                    logger.info("final hangup chunk has not been sent yet")
-                    await asyncio.sleep(0.5)
+                if time.time() >= wedge_deadline:
+                    logger.warning(f"hangup drain exceeded {drain_timeout}s, proceeding to teardown")
+                    break
+                logger.info("final hangup chunk has not been sent yet")
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error while checking queue: {e}", exc_info=True)
                 break
@@ -3539,8 +3562,15 @@ class TaskManager(BaseManager):
         logger.info("Stopped input handler")
         if "transcriber" in self.tools and not self.turn_based_conversation:
             logger.info("Stopping transcriber")
-            await self.tools["transcriber"].toggle_connection()
-            await asyncio.sleep(2)  # Making sure whatever message was passed is over
+
+            async def _stop_transcriber():
+                await self.tools["transcriber"].toggle_connection()
+                await asyncio.sleep(2)  # Making sure whatever message was passed is over
+
+            try:
+                await with_timeout(_stop_transcriber(), 5, name="transcriber_teardown", component="transcriber")
+            except Exception as e:
+                log_ignored(logger, "transcriber_teardown", e)
 
         self.voicemail_handler.cancel_task()
 
@@ -3790,10 +3820,7 @@ class TaskManager(BaseManager):
 
                 # If the requested language is already active, skip handoff and switch entirely
                 if language_label == self.language:
-                    logger.info(
-                        f"switch_language: '{language_label}' is already active, "
-                        "skipping handoff and switch"
-                    )
+                    logger.info(f"switch_language: '{language_label}' is already active, skipping handoff and switch")
                     function_response = f"Already speaking in {language_label}, no switch needed"
 
                     self.conversation_history.attach_tool_calls_to_turn(turn_id, resp["model_response"])
@@ -4814,7 +4841,17 @@ class TaskManager(BaseManager):
         Split out of __execute_function_call so the speech-to-speech path can hand off a call
         without duplicating the payload, mock-provider and event-recording behaviour.
         """
-        await asyncio.sleep(2)
+        # Bounded pre-delay: holding llm_task here drops user speech via
+        # _should_ignore_transcriber_input and blocks the stall backstop, so cap it.
+        try:
+            await with_timeout(
+                asyncio.sleep(TRANSFER_PRE_DELAY_S),
+                TRANSFER_PRE_DELAY_TIMEOUT_S,
+                name="transfer_pre_delay",
+                component="tool",
+            )
+        except Exception as e:
+            log_ignored(logger, "transfer_pre_delay", e)
         try:
             from_number = self.context_data["recipient_data"]["from_number"]
         except Exception as e:
@@ -4931,14 +4968,24 @@ class TaskManager(BaseManager):
             logger.info(f"Sending the payload to stop the conversation {payload} url {url}")
             # is_audio_being_played_to_user latches True whenever a final mark echo never
             # arrives, so this wait could never end; cap it and transfer anyway.
+            # Interruptible: a hangup/transfer-cancel must not hold llm_task and user
+            # speech for the full drain window.
             _audio_wait_deadline = time.time() + TRANSFER_AUDIO_DRAIN_MAX_S
             while self.tools["input"].is_audio_being_played_to_user():
+                if getattr(self, "conversation_ended", False) or getattr(self, "hangup_triggered", False):
+                    logger.info("Transfer drain interrupted: call is ending, proceeding to transfer")
+                    break
                 if time.time() >= _audio_wait_deadline:
                     logger.warning(
                         f"Transfer proceeding after waiting {TRANSFER_AUDIO_DRAIN_MAX_S}s for agent audio to drain"
                     )
                     break
-                await asyncio.sleep(1)
+                try:
+                    await with_timeout(asyncio.sleep(0.2), 1.0, name="transfer_drain_poll", component="tool")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    log_ignored(logger, "transfer_drain_poll", e)
             function_call_log = self._start_api_call_detail(
                 called_fun=called_fun,
                 url=url,
@@ -4964,37 +5011,49 @@ class TaskManager(BaseManager):
             )
             _transfer_end_recorded = False
             try:
-                async with session.post(url, json=payload) as response:
-                    response_text = await response.text()
-                    logger.info(f"Response from the server after call transfer: {response_text}")
-                    convert_to_request_log(
-                        str(response_text),
-                        meta_info,
-                        None,
-                        LogComponent.FUNCTION_CALL,
-                        direction=LogDirection.RESPONSE,
-                        is_cached=False,
-                        run_id=self.run_id,
+
+                async def _transfer_post():
+                    async with session.post(url, json=payload) as _response:
+                        _text = await _response.text()
+                        return _text, _response.status, _response.headers.get("Content-Type")
+
+                try:
+                    response_text, response_status, response_content_type = await with_timeout(
+                        _transfer_post(), TRANSFER_POST_TIMEOUT_S, name="transfer_webhook_post", component="tool"
                     )
-                    self._finalize_api_call_detail(
-                        function_call_log,
-                        response=response_text,
-                        status_code=response.status,
-                        content_type=response.headers.get("Content-Type"),
-                    )
-                    self.transfer_call_events.append(
-                        {
-                            "type": "transfer_end",
-                            "ts_ms": round(time.time() * 1000 - self.conversation_start_init_ts, 2),
-                            "tool_call_id": resp.get("tool_call_id", ""),
-                            "turn_id": meta_info.get("turn_id"),
-                            "sequence_id": meta_info.get("sequence_id"),
-                            "status_code": response.status,
-                            "latency_ms": function_call_log.get("latency_ms"),
-                            "success": response.status < 400,
-                        }
-                    )
-                    _transfer_end_recorded = True
+                except asyncio.CancelledError:
+                    raise
+                except Exception as post_exc:
+                    raise post_exc
+                logger.info(f"Response from the server after call transfer: {response_text}")
+                convert_to_request_log(
+                    str(response_text),
+                    meta_info,
+                    None,
+                    LogComponent.FUNCTION_CALL,
+                    direction=LogDirection.RESPONSE,
+                    is_cached=False,
+                    run_id=self.run_id,
+                )
+                self._finalize_api_call_detail(
+                    function_call_log,
+                    response=response_text,
+                    status_code=response_status,
+                    content_type=response_content_type,
+                )
+                self.transfer_call_events.append(
+                    {
+                        "type": "transfer_end",
+                        "ts_ms": round(time.time() * 1000 - self.conversation_start_init_ts, 2),
+                        "tool_call_id": resp.get("tool_call_id", ""),
+                        "turn_id": meta_info.get("turn_id"),
+                        "sequence_id": meta_info.get("sequence_id"),
+                        "status_code": response_status,
+                        "latency_ms": function_call_log.get("latency_ms"),
+                        "success": response_status < 400,
+                    }
+                )
+                _transfer_end_recorded = True
             except Exception as transfer_exc:
                 logger.warning(f"Transfer webhook did not respond (call likely redirected): {transfer_exc}")
                 self._finalize_api_call_detail(function_call_log, error=transfer_exc)
@@ -5066,6 +5125,7 @@ class TaskManager(BaseManager):
 
     async def _run_llm_task(self, message):
         sequence, meta_info = self._extract_sequence_and_meta(message)
+        current = asyncio.current_task()
 
         try:
             if self._is_extraction_task() or self._is_summarization_task():
@@ -5074,7 +5134,10 @@ class TaskManager(BaseManager):
                 await self._process_conversation_task(message, sequence, meta_info)
             else:
                 logger.error("unsupported task type: {}".format(self.task_config["task_type"]))
-            self.llm_task = None
+            # Only clear our own slot: a newer turn may have replaced llm_task
+            # while this one was running; clearing unconditionally loses it.
+            if self.llm_task is current:
+                self.llm_task = None
         except VoiceAIComponentError as e:
             self.response_in_pipeline = False
             self._synthesis_awaiting_first_audio = False
@@ -5528,8 +5591,9 @@ class TaskManager(BaseManager):
             return
         await set_language(detected)
 
-    async def _listen_transcriber(self):
-        temp_transcriber_message = ""
+    async def _listen_transcriber(self, _temp_transcriber_message=None):
+        temp_transcriber_message = _temp_transcriber_message if _temp_transcriber_message is not None else ""
+        guard = self._loop_guard("_transcriber_loop_guard", "transcriber_loop", max_consecutive=50)
         try:
             while True:
                 message = await self.transcriber_output_queue.get()
@@ -5934,24 +5998,54 @@ class TaskManager(BaseManager):
         except websockets.exceptions.ConnectionClosedOK:
             # Normal WebSocket closure (code 1000)
             pass
+        except asyncio.CancelledError:
+            raise
+        except LoopFailure as lf:
+            last = getattr(lf, "last", lf)
+            provider = (self.task_config["tools_config"].get("transcriber") or {}).get("provider")
+            model = self._component_model("transcriber")
+            classified = classify_exception(last, component="transcriber", provider=provider, model=model)
+            logger.error(
+                f"_listen_transcriber fatal after retries | error_id={classified.error_id} "
+                f"code={classified.code.value} provider={provider} model={model}: {summarize_exception(last)}",
+                exc_info=last,
+            )
+            await self._end_call_on_component_error(
+                TranscriberError(str(last), provider=provider, model=model), HangupReason.TRANSCRIBER_ERROR
+            )
+            raise TranscriberError(str(last), provider=provider, model=model) from lf
         except Exception as e:
             # An s2s task stores transcriber as an explicit None, so a bare ["transcriber"].get
             # raised inside this handler and hid the failure it was reporting.
             provider = (self.task_config["tools_config"].get("transcriber") or {}).get("provider")
             model = self._component_model("transcriber")
-            # Classify first so a plain KeyError on an unexpected packet is attributable in the
-            # log (with an error_id the caller's report shares); the end-call policy below is
-            # deliberately unchanged — a transcriber failure still ends the call.
+            # Per-iteration isolation: a bad packet is classified and the loop
+            # re-enters instead of killing the leg. Only persistent failures end it.
             classified = classify_exception(e, component="transcriber", provider=provider, model=model)
             logger.error(
-                f"_listen_transcriber failed | error_id={classified.error_id} code={classified.code.value} "
-                f"provider={provider} model={model}: {summarize_exception(e)}",
-                exc_info=e,
+                f"_listen_transcriber iteration failed | error_id={classified.error_id} "
+                f"code={classified.code.value} provider={provider} model={model}: {summarize_exception(e)}",
+                exc_info=e if guard.total_failures < 3 else None,
             )
-            await self._end_call_on_component_error(
-                TranscriberError(str(e), provider=provider, model=model), HangupReason.TRANSCRIBER_ERROR
-            )
-            raise TranscriberError(str(e), provider=provider, model=model) from e
+            guard.failures += 1
+            guard.total_failures += 1
+            guard.last_error = e
+            if guard.max_consecutive is not None and guard.failures >= guard.max_consecutive:
+                failure = LoopFailure("transcriber_loop", guard.failures, e)
+                await self._end_call_on_component_error(
+                    TranscriberError(str(e), provider=provider, model=model), HangupReason.TRANSCRIBER_ERROR
+                )
+                raise TranscriberError(str(e), provider=provider, model=model) from failure
+            delay = min(guard.backoff_initial * (2 ** (guard.failures - 1)), guard.backoff_max)
+            if delay > 0:
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    raise
+            # Re-enter without losing the dedup cache; the same guard keeps
+            # counting consecutive failures across restarts. Use the unbound
+            # TaskManager method so doubles without __init__ still re-enter.
+            return await TaskManager._listen_transcriber(self, _temp_transcriber_message=temp_transcriber_message)
 
     async def __process_http_transcription(self, message):
         data = message.get("data")
@@ -7438,6 +7532,7 @@ class TaskManager(BaseManager):
 
     async def __listen_synthesizer(self):
         all_text_to_be_synthesized = []
+        guard = self._loop_guard("_synth_loop_guard", "synthesizer_loop", max_consecutive=50)
         try:
             while not self.conversation_ended:
                 logger.info("Listening to synthesizer")
@@ -7516,18 +7611,37 @@ class TaskManager(BaseManager):
                         # Give control to other tasks
                         sleep_time = self.tools["synthesizer"].get_sleep_time()
                         await asyncio.sleep(sleep_time)
+                        guard.failures = 0
 
                 except asyncio.CancelledError:
                     logger.info("Synthesizer task was cancelled.")
                     # await self.handle_cancellation("Synthesizer task was cancelled.")
                     self._turn_audio_flushed.set()
                     break
+                except LoopFailure as lf:
+                    self._turn_audio_flushed.set()
+                    model = self._component_model("synthesizer")
+                    last = getattr(lf, "last", lf)
+                    classified = classify_exception(
+                        last, component="synthesizer", provider=self.synthesizer_provider, model=model
+                    )
+                    logger.error(
+                        f"__listen_synthesizer fatal after retries | error_id={classified.error_id} "
+                        f"code={classified.code.value}: {summarize_exception(last)}",
+                        exc_info=last,
+                    )
+                    await self._end_call_on_component_error(
+                        SynthesizerError(str(last), provider=self.synthesizer_provider, model=model),
+                        HangupReason.SYNTHESIZER_ERROR,
+                    )
+                    break
                 except Exception as e:
                     self._turn_audio_flushed.set()
                     model = self._component_model("synthesizer")
                     # Classify before the existing policy runs: a KeyError on an unexpected
                     # packet is otherwise indistinguishable from a real provider outage in the
-                    # log. Which exceptions end the call is unchanged.
+                    # log. Transient packet errors re-enter instead of muting the call;
+                    # only persistent failures end it.
                     classified = classify_exception(
                         e, component="synthesizer", provider=self.synthesizer_provider, model=model
                     )
@@ -7537,11 +7651,20 @@ class TaskManager(BaseManager):
                         f"{summarize_exception(e)}",
                         exc_info=e,
                     )
-                    await self._end_call_on_component_error(
-                        SynthesizerError(str(e), provider=self.synthesizer_provider, model=model),
-                        HangupReason.SYNTHESIZER_ERROR,
-                    )
-                    break
+                    guard.failures += 1
+                    guard.total_failures += 1
+                    guard.last_error = e
+                    if guard.max_consecutive is not None and guard.failures >= guard.max_consecutive:
+                        failure = LoopFailure("synthesizer_loop", guard.failures, e)
+                        await self._end_call_on_component_error(
+                            SynthesizerError(str(e), provider=self.synthesizer_provider, model=model),
+                            HangupReason.SYNTHESIZER_ERROR,
+                        )
+                        break
+                    delay = min(guard.backoff_initial * (2 ** (guard.failures - 1)), guard.backoff_max)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    continue
 
             logger.info("Exiting __listen_synthesizer gracefully.")
 
@@ -7550,9 +7673,7 @@ class TaskManager(BaseManager):
             # await self.handle_cancellation("Synthesizer task was cancelled outside loop.")
         except Exception as e:
             model = self._component_model("synthesizer")
-            classified = classify_exception(
-                e, component="synthesizer", provider=self.synthesizer_provider, model=model
-            )
+            classified = classify_exception(e, component="synthesizer", provider=self.synthesizer_provider, model=model)
             logger.error(
                 f"__listen_synthesizer failed outside loop | error_id={classified.error_id} "
                 f"code={classified.code.value} provider={self.synthesizer_provider} model={model}: "
@@ -7772,6 +7893,8 @@ class TaskManager(BaseManager):
 
     async def __handle_accumulated_message(self):
         logger.info("Setting up __handle_accumulated_message function")
+        _poller_timeout = getattr(self, "_accumulated_poller_timeout", ACCUMULATED_POLLER_TIMEOUT_S)
+        _poller_deadline = time.time() + _poller_timeout
         while True:
             if self.tools["input"].welcome_message_played():
                 logger.info(f"Welcome message has been played")
@@ -7780,6 +7903,12 @@ class TaskManager(BaseManager):
                     logger.info(f"Sending the accumulated transcribed message - {self.transcriber_message}")
                     await self.__send_first_message(self.transcriber_message)
                     self.transcriber_message = ""
+                break
+            if getattr(self, "conversation_ended", False) or getattr(self, "hangup_triggered", False):
+                logger.info("__handle_accumulated_message: call ending, dropping accumulated poller")
+                break
+            if time.time() >= _poller_deadline:
+                logger.warning(f"__handle_accumulated_message: welcome never played in {_poller_timeout}s")
                 break
 
             await asyncio.sleep(0.1)
@@ -8265,8 +8394,34 @@ class TaskManager(BaseManager):
             while True:
                 elapsed_time = asyncio.get_running_loop().time() - start_time
                 if elapsed_time > timeout:
-                    await self.__process_end_of_conversation()
                     logger.warning("Timeout reached while waiting for stream_sid")
+                    # Bounded goodbye: never end silent and never speak exception
+                    # text; the safe fallback is language-aware and config-free.
+                    try:
+                        goodbye = llm_failure_spoken_message(getattr(self, "language", "en"))
+                        _gb_meta = {
+                            "io": self.tools["output"].get_provider()
+                            if "output" in self.tools and self.tools["output"] is not None
+                            else "default",
+                            "message_category": "agent_hangup",
+                            "request_id": str(uuid.uuid4()),
+                            "cached": False,
+                            "sequence_id": -1,
+                            "format": self.task_config["tools_config"]["output"].get("format", "pcm"),
+                            "text": goodbye,
+                            "end_of_llm_stream": True,
+                        }
+                        await with_timeout(
+                            self._synthesize(create_ws_data_packet(goodbye, meta_info=_gb_meta)),
+                            WELCOME_GOODBYE_TIMEOUT_S,
+                            name="welcome_timeout_goodbye",
+                            component="synthesizer",
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as gb_e:
+                        log_ignored(logger, "welcome_timeout_goodbye", gb_e)
+                    await self.__process_end_of_conversation()
                     break
 
                 if not self.stream_sid and not self.default_io:
@@ -8424,9 +8579,7 @@ class TaskManager(BaseManager):
         if self.s2s_provider_name == S2SProvider.GEMINI_LIVE.value:
             # GeminiTranscriber and most docs use GEMINI_API_KEY; GeminiLLM reads
             # GOOGLE_API_KEY. Accept either so a key set for one path works for S2S.
-            api_key = (
-                self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            )
+            api_key = self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
                 raise ConfigurationError(
                     "No Gemini API key: set GEMINI_API_KEY or GOOGLE_API_KEY, or pass s2s_key.",
@@ -8643,42 +8796,52 @@ class TaskManager(BaseManager):
         """Caller audio to the model, resampled to whatever rate the provider declares."""
         s2s = self.tools["s2s"]
         sent = discarded = 0
+        guard = self._loop_guard("_s2s_ingest_guard", "s2s_ingest", max_consecutive=50)
         while not self.conversation_ended:
-            try:
-                message = await asyncio.wait_for(self.audio_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
+            async with guard:
+                try:
+                    message = await asyncio.wait_for(self.audio_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
 
-            data = message.get("data")
-            if data is None:
-                if message.get("meta_info", {}).get("eos"):
-                    logger.info(f"S2S ingest: EOS received | sent={sent} discarded={discarded}")
-                    # The provider goes quiet once audio stops, so the event loop would park
-                    # on its socket forever unless the hangup is published here.
+                data = message.get("data")
+                if data is None:
+                    if message.get("meta_info", {}).get("eos"):
+                        logger.info(f"S2S ingest: EOS received | sent={sent} discarded={discarded}")
+                        # The provider goes quiet once audio stops, so the event loop would park
+                        # on its socket forever unless the hangup is published here.
+                        self.conversation_ended = True
+                        break
+                    continue
+
+                # The agent's own greeting would otherwise echo back and trip the provider's VAD.
+                if self._s2s_within_welcome_gate():
+                    discarded += 1
+                    continue
+
+                # Same gate the transcriber path uses: no answering over a handed-off call.
+                if self._should_ignore_transcriber_input():
+                    discarded += 1
+                    continue
+
+                # Encode inside the send try: a resample/decode raise on one bad
+                # frame must drop that frame, not kill the ingest leg.
+                try:
+                    pcm = self._s2s_encode_input(data)
+                except Exception as enc_e:
+                    logger.error(f"S2S ingest: encode failed, dropping one frame: {enc_e}")
+                    discarded += 1
+                    continue
+
+                try:
+                    await s2s.send_audio(pcm)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"S2S ingest: send_audio failed, ending conversation: {e}")
                     self.conversation_ended = True
                     break
-                continue
-
-            # The agent's own greeting would otherwise echo back and trip the provider's VAD.
-            if self._s2s_within_welcome_gate():
-                discarded += 1
-                continue
-
-            # Same gate the transcriber path uses: no answering over a handed-off call.
-            if self._should_ignore_transcriber_input():
-                discarded += 1
-                continue
-
-            # WB-3c: Talko mulaw-8k decode + provider-rate resample, logged once.
-            pcm = self._s2s_encode_input(data)
-
-            try:
-                await s2s.send_audio(pcm)
-            except Exception as e:
-                logger.error(f"S2S ingest: send_audio failed, ending conversation: {e}")
-                self.conversation_ended = True
-                break
-            sent += 1
+                sent += 1
         logger.info(f"S2S ingest loop exited | sent={sent} discarded={discarded}")
 
     def _s2s_encode_input(self, data: bytes) -> bytes:
@@ -8762,126 +8925,132 @@ class TaskManager(BaseManager):
 
     async def _s2s_event_loop(self):
         s2s = self.tools["s2s"]
+        guard = self._loop_guard("_s2s_event_guard", "s2s_event", max_consecutive=50)
         async for event in s2s.receive_events():
-            if self.conversation_ended:
-                break
+            async with guard:
+                if self.conversation_ended:
+                    break
 
-            if isinstance(event, s2s_events.AudioDelta):
-                if not self._s2s_agent_speaking:
-                    self._s2s_agent_speaking = True
-                    # A fresh reply must always be allowed to speak: reopen a
-                    # latched-closed output handler (transient send failure)
-                    # so one bad moment can't mute the rest of the call. A
-                    # truly dead socket just fails fast again, fully logged.
-                    reopen = getattr(self.tools.get("output"), "reopen", None)
-                    if callable(reopen):
-                        reopen("new s2s turn")
-                    self.interruption_manager.on_agent_speech_started(self._s2s_turn_seq)
-                chunk = self._s2s_encode_output(event.data)
-                self._s2s_extend_playout(chunk)
-                await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
-                self.last_transmitted_timestamp = time.time()
+                if isinstance(event, s2s_events.AudioDelta):
+                    if not self._s2s_agent_speaking:
+                        self._s2s_agent_speaking = True
+                        # A fresh reply must always be allowed to speak: reopen a
+                        # latched-closed output handler (transient send failure)
+                        # so one bad moment can't mute the rest of the call. A
+                        # truly dead socket just fails fast again, fully logged.
+                        reopen = getattr(self.tools.get("output"), "reopen", None)
+                        if callable(reopen):
+                            reopen("new s2s turn")
+                        self.interruption_manager.on_agent_speech_started(self._s2s_turn_seq)
+                    try:
+                        chunk = self._s2s_encode_output(event.data)
+                    except Exception as enc_e:
+                        logger.error(f"S2S event encode failed, dropping one frame: {enc_e}")
+                        continue
+                    self._s2s_extend_playout(chunk)
+                    await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
+                    self.last_transmitted_timestamp = time.time()
 
-            elif isinstance(event, s2s_events.TranscriptDelta):
-                if event.is_final and event.content:
-                    logger.info(f"S2S agent: {event.content[:200]}")
-                    self.conversation_history.append_assistant(event.content)
-                    # Browser/chat legs have no other transcript source.
-                    await self.buffered_output_queue.put(
-                        {
-                            "data": event.content,
-                            "meta_info": {
-                                "type": "text",
-                                "role": "agent",
-                                "message_category": "agent_transcript",
-                                "sequence_id": -1,
-                            },
-                        }
-                    )
+                elif isinstance(event, s2s_events.TranscriptDelta):
+                    if event.is_final and event.content:
+                        logger.info(f"S2S agent: {event.content[:200]}")
+                        self.conversation_history.append_assistant(event.content)
+                        # Browser/chat legs have no other transcript source.
+                        await self.buffered_output_queue.put(
+                            {
+                                "data": event.content,
+                                "meta_info": {
+                                    "type": "text",
+                                    "role": "agent",
+                                    "message_category": "agent_transcript",
+                                    "sequence_id": -1,
+                                },
+                            }
+                        )
 
-            elif isinstance(event, s2s_events.InputTranscript):
-                if event.is_final and event.content:
-                    logger.info(f"S2S caller: {event.content[:200]}")
-                    self.user_spoke = True
-                    self.conversation_history.append_user(event.content)
-                    await self.buffered_output_queue.put(
-                        {
-                            "data": event.content,
-                            "meta_info": {
-                                "type": "text",
-                                "role": "user",
-                                "message_category": "user_transcript",
-                                "sequence_id": -1,
-                            },
-                        }
-                    )
+                elif isinstance(event, s2s_events.InputTranscript):
+                    if event.is_final and event.content:
+                        logger.info(f"S2S caller: {event.content[:200]}")
+                        self.user_spoke = True
+                        self.conversation_history.append_user(event.content)
+                        await self.buffered_output_queue.put(
+                            {
+                                "data": event.content,
+                                "meta_info": {
+                                    "type": "text",
+                                    "role": "user",
+                                    "message_category": "user_transcript",
+                                    "sequence_id": -1,
+                                },
+                            }
+                        )
+                        self.time_since_last_spoken_human_word = time.time()
+                        # Cleared here rather than in the output loop: the prompt's audio is not
+                        # distinguishable from any other turn, but the caller answering is.
+                        self.asked_if_user_is_still_there = False
+                        self.interruption_manager.on_user_speech_ended()
+
+                elif isinstance(event, s2s_events.FunctionCall):
+                    self._s2s_track_task(asyncio.create_task(self._s2s_execute_tool(event)), call_id=event.call_id)
+
+                elif isinstance(event, s2s_events.Interrupted):
+                    if self._s2s_within_welcome_gate():
+                        continue
+                    # The provider reports every speech start here, so this is only a barge-in
+                    # when the agent still had the floor. InterruptionManager is accounting only:
+                    # the provider's VAD has already stopped generating, so nothing decided here
+                    # can give the agent the floor back. Barge-in sensitivity is tuned provider-side.
+                    self.interruption_manager.on_user_speech_started()
+                    # A speech start refreshes liveness, barge-in or not.
                     self.time_since_last_spoken_human_word = time.time()
-                    # Cleared here rather than in the output loop: the prompt's audio is not
-                    # distinguishable from any other turn, but the caller answering is.
-                    self.asked_if_user_is_still_there = False
-                    self.interruption_manager.on_user_speech_ended()
+                    if self._s2s_agent_has_floor():
+                        logger.info("S2S: caller barged in, dropping queued audio")
+                        self.interruption_manager.on_interruption_triggered()
+                        self._s2s_agent_speaking = False
+                        self._s2s_playout_until = 0.0
+                        await self._s2s_drop_queued_audio()
+                    else:
+                        # Speech start with no agent audio in flight: normal turn-taking,
+                        # backchannels, or pauses inside code-switched speech. There is
+                        # nothing to barge in on — emitting `clear` here chops the
+                        # response that is about to start (audible glitching, worst
+                        # around language switches) and drains transcript packets that
+                        # were never a problem. Just mark the input side idle.
+                        self.tools["input"].update_is_audio_being_played(False)
 
-            elif isinstance(event, s2s_events.FunctionCall):
-                self._s2s_track_task(asyncio.create_task(self._s2s_execute_tool(event)), call_id=event.call_id)
+                elif isinstance(event, s2s_events.ResponseDone):
+                    await self._s2s_finish_turn(event)
 
-            elif isinstance(event, s2s_events.Interrupted):
-                if self._s2s_within_welcome_gate():
-                    continue
-                # The provider reports every speech start here, so this is only a barge-in
-                # when the agent still had the floor. InterruptionManager is accounting only:
-                # the provider's VAD has already stopped generating, so nothing decided here
-                # can give the agent the floor back. Barge-in sensitivity is tuned provider-side.
-                self.interruption_manager.on_user_speech_started()
-                # A speech start refreshes liveness, barge-in or not.
-                self.time_since_last_spoken_human_word = time.time()
-                if self._s2s_agent_has_floor():
-                    logger.info("S2S: caller barged in, dropping queued audio")
-                    self.interruption_manager.on_interruption_triggered()
-                    self._s2s_agent_speaking = False
-                    self._s2s_playout_until = 0.0
-                    await self._s2s_drop_queued_audio()
-                else:
-                    # Speech start with no agent audio in flight: normal turn-taking,
-                    # backchannels, or pauses inside code-switched speech. There is
-                    # nothing to barge in on — emitting `clear` here chops the
-                    # response that is about to start (audible glitching, worst
-                    # around language switches) and drains transcript packets that
-                    # were never a problem. Just mark the input side idle.
-                    self.tools["input"].update_is_audio_being_played(False)
-
-            elif isinstance(event, s2s_events.ResponseDone):
-                await self._s2s_finish_turn(event)
-
-            elif isinstance(event, s2s_events.SessionReady):
-                await self._report_provider_health(
-                    "s2s", self.s2s_provider_name, self.s2s_model, True, event.connection_time_ms, phase="connect"
-                )
-
-            elif isinstance(event, s2s_events.SessionExpiring):
-                logger.info(f"S2S session expiring in {event.time_left_ms}ms, provider will resume it")
-
-            elif isinstance(event, s2s_events.SessionResumed):
-                logger.info(f"S2S session resumed in {event.reconnect_ms:.0f}ms")
-                await self._report_provider_health(
-                    "s2s", self.s2s_provider_name, self.s2s_model, True, event.reconnect_ms, phase="connect"
-                )
-
-            elif isinstance(event, s2s_events.FunctionCallCancelled):
-                logger.info(f"S2S: provider cancelled tool calls {event.call_ids}")
-                # The provider has discarded these ids. Letting the task run would fire a
-                # real side effect and then answer a call_id the model no longer knows.
-                for task in list(self._s2s_tool_tasks):
-                    if getattr(task, "s2s_call_id", None) in event.call_ids:
-                        task.cancel()
-
-            elif isinstance(event, s2s_events.S2SError):
-                logger.error(f"S2S error: {event.message} (code={event.code})")
-                if event.fatal:
+                elif isinstance(event, s2s_events.SessionReady):
                     await self._report_provider_health(
-                        "s2s", self.s2s_provider_name, self.s2s_model, False, blocking=True
+                        "s2s", self.s2s_provider_name, self.s2s_model, True, event.connection_time_ms, phase="connect"
                     )
-                    self.hangup_detail = HangupReason.S2S_ERROR
-                    raise LLMError(event.message, provider=self.s2s_provider_name, model=self.s2s_model)
+
+                elif isinstance(event, s2s_events.SessionExpiring):
+                    logger.info(f"S2S session expiring in {event.time_left_ms}ms, provider will resume it")
+
+                elif isinstance(event, s2s_events.SessionResumed):
+                    logger.info(f"S2S session resumed in {event.reconnect_ms:.0f}ms")
+                    await self._report_provider_health(
+                        "s2s", self.s2s_provider_name, self.s2s_model, True, event.reconnect_ms, phase="connect"
+                    )
+
+                elif isinstance(event, s2s_events.FunctionCallCancelled):
+                    logger.info(f"S2S: provider cancelled tool calls {event.call_ids}")
+                    # The provider has discarded these ids. Letting the task run would fire a
+                    # real side effect and then answer a call_id the model no longer knows.
+                    for task in list(self._s2s_tool_tasks):
+                        if getattr(task, "s2s_call_id", None) in event.call_ids:
+                            task.cancel()
+
+                elif isinstance(event, s2s_events.S2SError):
+                    logger.error(f"S2S error: {event.message} (code={event.code})")
+                    if event.fatal:
+                        await self._report_provider_health(
+                            "s2s", self.s2s_provider_name, self.s2s_model, False, blocking=True
+                        )
+                        self.hangup_detail = HangupReason.S2S_ERROR
+                        raise LLMError(event.message, provider=self.s2s_provider_name, model=self.s2s_model)
 
     def _s2s_cached_welcome_pcm(self, text: str):
         """Pre-rendered greeting PCM at the model's output rate, or None.
@@ -9022,36 +9191,40 @@ class TaskManager(BaseManager):
             await self.process_call_hangup()
 
     async def _s2s_output_loop(self):
+        guard = self._loop_guard("_s2s_output_guard", "s2s_output", max_consecutive=50)
         while not self.conversation_ended:
-            try:
-                message = await asyncio.wait_for(self.buffered_output_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
+            async with guard:
+                try:
+                    message = await asyncio.wait_for(self.buffered_output_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
 
-            try:
-                self.tools["input"].update_is_audio_being_played(True)
-                await self.tools["output"].handle(message)
+                try:
+                    self.tools["input"].update_is_audio_being_played(True)
+                    await self.tools["output"].handle(message)
 
-                # WB-3c: EOS/sentinel advances ack-independently — audio flows while
-                # total_missed is only logged, never gated on mark acks.
-                if isinstance(message, dict) and message.get("meta_info", {}).get("end_of_synthesizer_stream"):
-                    self._s2s_note_output_progress(where="output_loop")
+                    # WB-3c: EOS/sentinel advances ack-independently — audio flows while
+                    # total_missed is only logged, never gated on mark acks.
+                    if isinstance(message, dict) and message.get("meta_info", {}).get("end_of_synthesizer_stream"):
+                        self._s2s_note_output_progress(where="output_loop")
 
-                if self.should_record and isinstance(message["data"], bytes) and message["data"] != b"\x00":
-                    self.conversation_recording["output"].append(
-                        {
-                            "data": message["data"],
-                            "start_time": time.time(),
-                            "duration": calculate_audio_duration(
-                                len(message["data"]),
-                                self._s2s_output.sample_rate,
-                                format=self._s2s_output.encoding.value,
-                            ),
-                        }
-                    )
-            except Exception as e:
-                # Nothing re-creates this task, so exiting leaves the caller in silence.
-                logger.error(f"S2S output loop error, dropped one packet: {e}")
+                    if self.should_record and isinstance(message["data"], bytes) and message["data"] != b"\x00":
+                        self.conversation_recording["output"].append(
+                            {
+                                "data": message["data"],
+                                "start_time": time.time(),
+                                "duration": calculate_audio_duration(
+                                    len(message["data"]),
+                                    self._s2s_output.sample_rate,
+                                    format=self._s2s_output.encoding.value,
+                                ),
+                            }
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # Nothing re-creates this task, so exiting leaves the caller in silence.
+                    logger.error(f"S2S output loop error, dropped one packet: {e}")
 
     async def _s2s_text_loop(self):
         """Forward user-typed chat turns to the realtime model as caller text.
@@ -9064,39 +9237,45 @@ class TaskManager(BaseManager):
         if not hasattr(s2s, "send_text"):
             logger.warning(f"{self.s2s_provider_name} has no text input; typed chat disabled")
             return
+        guard = self._loop_guard("_s2s_text_guard", "s2s_text", max_consecutive=50)
         while not self.conversation_ended:
-            try:
-                message = await self.llm_queue.get()
-            except asyncio.CancelledError:
-                break
-            text = (message.get("data") or "").strip() if isinstance(message, dict) else ""
-            if not text:
-                continue
-            try:
-                self.user_spoke = True
-                self.conversation_history.append_user(text)
-                self.time_since_last_spoken_human_word = time.time()
-                self.asked_if_user_is_still_there = False
-                await s2s.send_text(text)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"S2S text chat turn dropped, continuing voice: {e}")
+            async with guard:
+                try:
+                    message = await self.llm_queue.get()
+                except asyncio.CancelledError:
+                    break
+                text = (message.get("data") or "").strip() if isinstance(message, dict) else ""
+                if not text:
+                    continue
+                try:
+                    self.user_spoke = True
+                    self.conversation_history.append_user(text)
+                    self.time_since_last_spoken_human_word = time.time()
+                    self.asked_if_user_is_still_there = False
+                    await s2s.send_text(text)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"S2S text chat turn dropped, continuing voice: {e}")
 
     async def _s2s_dtmf_loop(self):
         """Forward carrier keypad digits to the model as text; no provider sees our media leg."""
+        guard = self._loop_guard("_s2s_dtmf_guard", "s2s_dtmf", max_consecutive=50)
         while not self.conversation_ended:
-            digits = await self.queues["dtmf"].get()
-            logger.info(f"S2S DTMF collected: {digits}")
-            ts_ms = round(time.time() * 1000 - self.conversation_start_init_ts, 2)
-            for digit in digits:
-                self.dtmf_events.append({"digit": digit, "ts_ms": ts_ms})
-            try:
-                await self.tools["s2s"].send_dtmf(digits)
-            except NotImplementedError:
-                logger.warning(f"{self.s2s_provider_name} cannot accept DTMF; digits dropped")
-            except Exception as e:
-                logger.error(f"S2S DTMF forward failed: {e}")
+            async with guard:
+                digits = await self.queues["dtmf"].get()
+                logger.info(f"S2S DTMF collected: {digits}")
+                ts_ms = round(time.time() * 1000 - self.conversation_start_init_ts, 2)
+                for digit in digits:
+                    self.dtmf_events.append({"digit": digit, "ts_ms": ts_ms})
+                try:
+                    await self.tools["s2s"].send_dtmf(digits)
+                except asyncio.CancelledError:
+                    raise
+                except NotImplementedError:
+                    logger.warning(f"{self.s2s_provider_name} cannot accept DTMF; digits dropped")
+                except Exception as e:
+                    logger.error(f"S2S DTMF forward failed: {e}")
 
     async def _s2s_execute_tool(self, event):
         s2s = self.tools["s2s"]
@@ -9187,6 +9366,20 @@ class TaskManager(BaseManager):
             return json.dumps({"status": "error", "message": f"Tool '{event.name}' has no URL configured."})
 
         method = (params.get("method") or "POST").lower()
+        # Model-emitted args must never shadow the configured request: a colliding key (url,
+        # api_token, ...) would raise "got multiple values for keyword argument" in the splat.
+        from voiceai.llms.types import RESERVED_TOOL_ARGUMENT_KEYS
+
+        args_dict: dict = args if isinstance(args, dict) else {}
+        if not isinstance(args, dict):
+            logger.warning(f"S2S tool call {event.name!r}: arguments are not a JSON object, ignoring them")
+        rejected = sorted(k for k in args_dict if k in RESERVED_TOOL_ARGUMENT_KEYS)
+        if rejected:
+            logger.warning(
+                f"S2S tool call {event.name!r}: ignoring model-emitted argument(s) that collide with "
+                f"reserved or engine-owned fields: {rejected}"
+            )
+        safe_args = {k: v for k, v in args_dict.items() if k not in RESERVED_TOOL_ARGUMENT_KEYS}
         call_log = self._start_api_call_detail(
             called_fun=event.name,
             url=url,
@@ -9194,9 +9387,9 @@ class TaskManager(BaseManager):
             param=params.get("param"),
             headers=params.get("headers"),
             meta_info=meta_info,
-            runtime_args=args,
+            runtime_args=safe_args,
             request_body=params.get("param"),
-            api_params=args,
+            api_params=safe_args,
         )
         try:
             response = await trigger_api(
@@ -9208,7 +9401,7 @@ class TaskManager(BaseManager):
                 meta_info=meta_info,
                 run_id=self.run_id,
                 return_response_metadata=True,
-                **args,
+                **safe_args,
             )
         except asyncio.CancelledError:
             self._finalize_api_call_detail(call_log, error="cancelled")
@@ -9478,10 +9671,7 @@ class TaskManager(BaseManager):
             # this, run() yields None and the socket handler crashes on it.
             _has_asr_tts = "transcriber" in self.tools and "synthesizer" in self.tools
             _is_text_only = (
-                self._is_conversation_task()
-                and not _has_asr_tts
-                and "s2s" not in self.tools
-                and "output" in self.tools
+                self._is_conversation_task() and not _has_asr_tts and "s2s" not in self.tools and "output" in self.tools
             )
             if self._is_conversation_task() and (_has_asr_tts or "s2s" in self.tools or _is_text_only):
                 if _has_asr_tts:

@@ -7,11 +7,23 @@ the simulator later without contract changes.
 """
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer
+
+
+def _to_decimal(value: Any) -> Decimal:
+    """Coerce float/int/str to Decimal without binary-float dust (Decimal(str(v)))."""
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+#: Credits stored as Decimal internally, serialized as float for API compat.
+CreditAmount = Annotated[Decimal, BeforeValidator(_to_decimal), PlainSerializer(lambda v: float(v), return_type=float)]
 
 
 def utcnow() -> datetime:
@@ -78,6 +90,8 @@ class Execution(BaseModel):
     started_at: datetime = Field(default_factory=utcnow)
     ended_at: Optional[datetime] = None
     duration_s: float = 0
+    # Tenancy starter: single-default compat (old rows default to "default").
+    org_id: str = Field("default", description="Owning org; lists/gets are scoped to the caller org.")
 
 
 class ExecutionListResponse(BaseModel):
@@ -112,24 +126,50 @@ class BatchEntry(BaseModel):
     variables: Dict[str, Any] = Field(default_factory=dict)
 
 
+#: Max entries per batch/campaign. Batches run in the background (202 + poll) so a 1000-entry
+#: gather with semaphore 3 x 20s trunk timeouts would block the worker for ~2h; 100 keeps the
+#: queue bounded while the status endpoint reports progress. Override via BATCH_MAX_ENTRIES env.
+BATCH_MAX_ENTRIES = 100
+CAMPAIGN_MAX_ENTRIES = 100
+
+
 class BatchStats(BaseModel):
     total: int = 0
     queued: int = 0
     completed: int = 0
     failed: int = 0
+    pending: int = Field(
+        default=0,
+        description="Talko-accepted dials awaiting CDR (execution IN_PROGRESS, media outcome in Talko).",
+    )
 
 
 class CallingHours(BaseModel):
-    """Daily calling window in 24h HH:MM. start == end means closed all day."""
+    """Daily calling window in 24h HH:MM. start == end means closed all day.
+
+    `tz` is an IANA zone (e.g. "Asia/Kolkata", "UTC"). The window is evaluated in that zone;
+    UTC is the default so bare "09:00-18:00" keeps its historical meaning. run_batch and
+    run_campaign enforce the window themselves (not only the HTTP start route).
+    """
 
     start: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     end: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    tz: str = Field(default="UTC", description='IANA timezone for the window, e.g. "Asia/Kolkata".')
 
 
 class CreateBatchRequest(BaseModel):
+    """Create a dial batch (max 100 entries).
+
+    Start is asynchronous: POST /batches/{id}/start claims the batch (compare-and-set
+    DRAFT/SCHEDULED -> RUNNING, Idempotency-Key supported) and returns 202 with RUNNING;
+    poll GET /batches/{id} (or /batches/{id}/status) until completed/stopped. Talko dials
+    stay IN_PROGRESS (batch pending, media outcome in Talko CDR) while simulated dials end
+    COMPLETED/FAILED. Dials never debit the wallet (topup-only decorative balance).
+    """
+
     agent_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    entries: List[BatchEntry] = Field(..., min_length=1, max_length=1000)
+    entries: List[BatchEntry] = Field(..., min_length=1, max_length=100)
     schedule_at: Optional[datetime] = None
     calling_hours: Optional[CallingHours] = None
     delay_scale: float = Field(0.5, ge=0)
@@ -142,11 +182,25 @@ class CreateBatchRequest(BaseModel):
     )
     talko_api_key: Optional[str] = Field(
         None,
-        description="Talko partner API key for this batch's dials (defaults to trunk TALKO_API_KEY). Lets each user dial with their own key.",
+        description=(
+            "Write-only per-batch Talko key. Accepted on create, held ephemerally for the dial "
+            "(request-scoped store), never persisted readable nor serialized back. "
+            "Omit to use trunk TALKO_API_KEY env."
+        ),
     )
 
 
 class Batch(BaseModel):
+    """A dial batch. Lifecycle: DRAFT/SCHEDULED -> RUNNING -> COMPLETED/STOPPED.
+
+    Start uses compare-and-set (only DRAFT/SCHEDULED may move to RUNNING) with an optional
+    Idempotency-Key: replaying the same key returns the same batch without a second dial pass.
+    Stop sets STOPPED; run_batch checks the flag before every entry and cancels in-flight
+    trunk HTTP so pending dials never start. Talko-accepted entries count as `stats.pending`
+    (execution IN_PROGRESS, completion arrives via Talko CDR callback — not yet wired, see
+    talko_dialer) rather than `stats.completed`.
+    """
+
     batch_id: str
     agent_id: str
     name: str
@@ -157,7 +211,14 @@ class Batch(BaseModel):
     calling_hours: Optional[CallingHours] = None
     provider: Literal["simulated", "talko"] = "simulated"
     from_number: Optional[str] = None
-    talko_api_key: Optional[str] = None
+    idempotency_key: Optional[str] = Field(
+        default=None, description="Last Idempotency-Key that claimed the start (CAS guard)."
+    )
+    # Deprecated readable copy: never serialized (exclude) and never persisted for new
+    # batches. Per-batch keys live ephemerally in the store (see MemoryStore batch secrets)
+    # and fall back to trunk TALKO_API_KEY env. Old persisted values are dropped on next save.
+    talko_api_key: Optional[str] = Field(default=None, exclude=True)
+    org_id: str = Field("default", description="Owning org; lists/gets are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -233,6 +294,7 @@ class Tool(BaseModel):
     kind: ToolKind
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    org_id: str = Field("default", description="Owning org; lists are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -253,6 +315,7 @@ class Webhook(BaseModel):
     url: str
     events: List[str] = Field(default_factory=list)
     enabled: bool = True
+    org_id: str = Field("default", description="Owning org; lists are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -261,20 +324,27 @@ class WebhookListResponse(BaseModel):
 
 
 class Wallet(BaseModel):
-    balance_credits: float = 0
+    """Topup-only decorative balance (no debit path calls it yet; `debit` ledger type is reserved).
+
+    Amounts are Decimal internally (serialized as float for API compat) and topups are
+    atomic via the store lock; Redis multi-worker deployments need a Lua/WATCH transaction
+    for the same guarantee (see MemoryStore.topup_wallet_credits).
+    """
+
+    balance_credits: CreditAmount = Field(default=Decimal("0"))
     currency: str = "credits"
     updated_at: datetime = Field(default_factory=utcnow)
 
 
 class TopUpRequest(BaseModel):
-    amount_credits: float = Field(..., gt=0)
+    amount_credits: CreditAmount = Field(..., gt=0)
     reason: Optional[str] = None
 
 
 class LedgerEntry(BaseModel):
     entry_id: str
     type: Literal["topup", "debit"]
-    amount_credits: float
+    amount_credits: CreditAmount
     reason: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -339,13 +409,18 @@ class ApiKey(BaseModel):
     key_id: str
     name: str
     prefix: str
-    # bcrypt hash of the full secret (secret itself is never stored).
-    key_hash: Optional[str] = None
+    # SHA-256 hex of the full secret (fast hash is fine: secrets are 256-bit high-entropy;
+    # passwords use PBKDF2 instead). Never serialized to clients; list endpoints must strip it.
+    key_hash: Optional[str] = Field(default=None, description="SHA-256 of secret; never exposed via API.")
     scopes: List[str] = Field(default_factory=list)
     expires_at: Optional[datetime] = None
     created_by: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: Optional[datetime] = None
+
+    def public(self) -> "ApiKey":
+        """Copy safe for API responses: hash stripped, store untouched."""
+        return self.model_copy(update={"key_hash": None})
 
 
 class ApiKeyListResponse(BaseModel):
@@ -354,8 +429,6 @@ class ApiKeyListResponse(BaseModel):
 
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(..., min_length=1)
-    scopes: List[str] = Field(default_factory=list)
-    expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
     scopes: List[str] = Field(default_factory=list)
     expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
 
@@ -581,7 +654,9 @@ class SubAccountListResponse(BaseModel):
 
 class Integration(BaseModel):
     integration_id: str
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal[
+        "twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"
+    ]
     name: str
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -596,7 +671,9 @@ class Integration(BaseModel):
 
 
 class CreateIntegrationRequest(BaseModel):
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal[
+        "twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"
+    ]
     name: str = Field(..., min_length=1)
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -625,6 +702,16 @@ def mask_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
         else:
             masked[field] = value
     return masked
+
+
+def is_masked_secret(value: Any) -> bool:
+    """True when the client echoed the masked literal back (must never overwrite the real secret)."""
+    return value == MASKED_SECRET
+
+
+def strip_masked_values(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop masked-literal entries so a GET→PUT round-trip preserves real secrets."""
+    return {field: value for field, value in config.items() if value != MASKED_SECRET}
 
 
 class InboundConfig(BaseModel):
@@ -675,6 +762,8 @@ class VectorStoreConfig(BaseModel):
     """Manual vector-store connection for knowledge/graph agents.
 
     Persisted per agent in the platform store (never silently dropped).
+    `connection_string` holds credentials: GETs return the masked literal,
+    PUTs with the masked literal preserve the stored secret (never clobber).
     """
 
     provider: Literal["mongodb", "lancedb"] = "mongodb"
@@ -692,6 +781,20 @@ class VectorStoreConfig(BaseModel):
     candidate_count: int = 20
     final_count: int = 5
     updated_at: datetime = Field(default_factory=utcnow)
+
+    def masked(self) -> "VectorStoreConfig":
+        """Copy safe for API responses: connection string replaced, store untouched."""
+        copy = self.model_copy(deep=True)
+        if copy.connection_string:
+            copy.connection_string = MASKED_SECRET
+        return copy
+
+    def with_real_secret(self, existing: Optional["VectorStoreConfig"]) -> "VectorStoreConfig":
+        """Resolve a PUT payload: masked literal keeps the stored secret, else the new value wins."""
+        if self.connection_string == MASKED_SECRET:
+            real = existing.connection_string if existing and existing.connection_string else None
+            return self.model_copy(update={"connection_string": real})
+        return self
 
 
 class GraphDoc(BaseModel):
@@ -829,6 +932,9 @@ class WorkflowCampaign(BaseModel):
     status: WorkflowCampaignStatus = WorkflowCampaignStatus.DRAFT
     entries: List[CampaignEntry] = Field(default_factory=list)
     stats: CampaignStats = Field(default_factory=CampaignStats)
+    calling_hours: Optional[CallingHours] = Field(
+        default=None, description="Daily calling window enforced on start and inside run_campaign."
+    )
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -841,7 +947,10 @@ class WorkflowCampaignListResponse(BaseModel):
 class CreateCampaignRequest(BaseModel):
     workflow_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    entries: List[CampaignEntry] = Field(..., min_length=1, max_length=1000)
+    entries: List[CampaignEntry] = Field(..., min_length=1, max_length=100)
+    calling_hours: Optional[CallingHours] = Field(
+        default=None, description="Daily calling window (with tz) enforced on start and inside run_campaign."
+    )
 
 
 class LatencyBucket(BaseModel):

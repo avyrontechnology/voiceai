@@ -843,7 +843,12 @@ class KalpaSynthesizer(StreamSynthesizer):
             self.connection_error = str(e)
             return None
         except InvalidHandshake as e:
-            logger.error(f"Kalpa TTS handshake failed: {e}")
+            error_msg = str(e)
+            if "401" in error_msg or "403" in error_msg:
+                logger.error(f"Kalpa TTS authentication failed: {e}")
+            else:
+                logger.error(f"Kalpa TTS handshake failed: {e}")
+            self.connection_error = str(e)
             return None
         except Exception as e:
             logger.error(f"Failed to connect to Kalpa TTS: {e}")

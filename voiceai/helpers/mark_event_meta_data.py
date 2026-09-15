@@ -57,6 +57,12 @@ class MarkStats(BaseModel):
             self.per_sequence[sequence_id] = SequenceStats()
 
 
+MAX_MARK_HISTORY = 500
+MAX_LIVE_MARKS = 500
+MAX_DELAY_SAMPLES = 500
+MAX_SEQUENCES = 200
+
+
 class MarkEventMetaData:
     def __init__(self):
         self.mark_event_meta_data = {}
@@ -71,6 +77,19 @@ class MarkEventMetaData:
         self.last_heard_response_uid = None
         self.welcome_pre_mark_id = None
         self.audio_playing_until = 0.0
+
+    def _evict_history_if_needed(self) -> None:
+        while len(self._mark_history) > MAX_MARK_HISTORY:
+            oldest = next(iter(self._mark_history))
+            self._mark_history.pop(oldest, None)
+        while len(self.mark_event_meta_data) > MAX_LIVE_MARKS:
+            oldest = next(iter(self.mark_event_meta_data))
+            self.mark_event_meta_data.pop(oldest, None)
+        if len(self._mark_stats.delays) > MAX_DELAY_SAMPLES:
+            self._mark_stats.delays = self._mark_stats.delays[-MAX_DELAY_SAMPLES:]
+        while len(self._mark_stats.per_sequence) > MAX_SEQUENCES:
+            oldest = sorted(self._mark_stats.per_sequence.keys())[0]
+            self._mark_stats.per_sequence.pop(oldest, None)
 
     def _note_audio_queued(self, value, duration):
         # Audio is handed over faster than real time, so a chunk starts playing when the
@@ -89,31 +108,35 @@ class MarkEventMetaData:
         self.audio_playing_until = 0.0
 
     def update_data(self, mark_id, value):
-        value["counter"] = self.counter
-        value.setdefault("acked", False)
-        value.setdefault("ack_ts", None)
+        # Copy-on-write: callers reuse/mutate the dict they passed; the ledger must own its copy.
+        stored = copy.deepcopy(value) if isinstance(value, dict) else dict(value or {})
+        stored["counter"] = self.counter
+        stored.setdefault("acked", False)
+        stored.setdefault("ack_ts", None)
+        stored.setdefault("sent_ts", time.time())
         self.counter += 1
-        self.mark_event_meta_data[mark_id] = value
-        duration = value.get("duration") or 0
-        if value.get("type") != "pre_mark_message":
-            self._mark_history[mark_id] = value
+        self.mark_event_meta_data[mark_id] = stored
+        duration = stored.get("duration") or 0
+        if stored.get("type") != "pre_mark_message":
+            self._mark_history[mark_id] = copy.deepcopy(stored)
+            self._evict_history_if_needed()
         logger.info(
             "VOICEAI_TRACE_MARK update mark_id=%s type=%s seq=%s turn=%s response_uid=%s group_uid=%s counter=%s dur=%.3f text_len=%s",
             mark_id,
-            value.get("type"),
-            value.get("sequence_id"),
-            value.get("turn_id"),
-            value.get("response_uid"),
-            value.get("response_group_uid"),
-            value.get("counter"),
+            stored.get("type"),
+            stored.get("sequence_id"),
+            stored.get("turn_id"),
+            stored.get("response_uid"),
+            stored.get("response_group_uid"),
+            stored.get("counter"),
             duration,
-            len(value.get("text_synthesized", "") or ""),
+            len(stored.get("text_synthesized", "") or ""),
         )
         self.mark_changed.set()
-        if value.get("type") != "pre_mark_message":
-            self._note_audio_queued(value, duration)
+        if stored.get("type") != "pre_mark_message":
+            self._note_audio_queued(stored, duration)
             self._mark_stats.total_sent += 1
-            seq = value.get("sequence_id")
+            seq = stored.get("sequence_id")
             if seq is not None:
                 self._mark_stats.ensure_sequence(seq)
                 entry = self._mark_stats.per_sequence[seq]
@@ -125,7 +148,7 @@ class MarkEventMetaData:
                 entry.last_sent_ts = now
                 if duration > 0:
                     entry.total_audio_duration += duration
-                turn_id = value.get("turn_id")
+                turn_id = stored.get("turn_id")
                 if turn_id is not None and entry.turn_id is None:
                     entry.turn_id = turn_id
 
@@ -133,12 +156,16 @@ class MarkEventMetaData:
         self._mark_stats.total_acked += 1
         if delay >= 0:
             self._mark_stats.delays.append(delay)
+            if len(self._mark_stats.delays) > MAX_DELAY_SAMPLES:
+                self._mark_stats.delays = self._mark_stats.delays[-MAX_DELAY_SAMPLES:]
         if sequence_id is not None:
             self._mark_stats.ensure_sequence(sequence_id)
             entry = self._mark_stats.per_sequence[sequence_id]
             entry.acked += 1
             if delay >= 0:
                 entry.delays.append(delay)
+                if len(entry.delays) > MAX_DELAY_SAMPLES:
+                    entry.delays = entry.delays[-MAX_DELAY_SAMPLES:]
 
     def record_heard_text(self, mark_data, heard_text):
         if not heard_text:
@@ -174,13 +201,17 @@ class MarkEventMetaData:
         entry = self.mark_event_meta_data.pop(mark_id, {})
         if entry:
             entry["cleared"] = True
-        return entry
+        return copy.deepcopy(entry)
 
     def fetch_data(self, mark_id):
         entry = self.mark_event_meta_data.get(mark_id)
         if entry is not None and entry.get("type") != "pre_mark_message":
             entry["acked"] = True
             entry["ack_ts"] = time.time()
+            hist = self._mark_history.get(mark_id)
+            if isinstance(hist, dict):
+                hist["acked"] = True
+                hist["ack_ts"] = entry["ack_ts"]
         result = self.mark_event_meta_data.pop(mark_id, {})
         if result:
             logger.info(
@@ -194,7 +225,7 @@ class MarkEventMetaData:
                 result.get("counter"),
             )
             self.mark_changed.set()
-        return result
+        return copy.deepcopy(result)
 
     def clear_data(self):
         logger.info(f"Clearing mark meta data dict")
@@ -209,6 +240,11 @@ class MarkEventMetaData:
         for mark_id, value in self.mark_event_meta_data.items():
             if value.get("type") != "pre_mark_message":
                 value["cleared_on_interrupt"] = True
+                # Copy-on-write split live/history: mirror the flag into history so post-call
+                # analytics still see the interruption.
+                hist = self._mark_history.get(mark_id)
+                if isinstance(hist, dict):
+                    hist["cleared_on_interrupt"] = True
                 seq = value.get("sequence_id")
                 if seq is not None and seq in self._mark_stats.per_sequence:
                     self._mark_stats.per_sequence[seq].interrupted = True
@@ -275,7 +311,8 @@ class MarkEventMetaData:
 
         Returns one dict per agent audio chunk (excluding pre_mark_message), ordered
         by send counter. Each entry carries the actually-spoken text, send/ack
-        timestamps, sequence/turn linkage, and an interruption flag.
+        timestamps, sequence/turn linkage, and an interruption flag. Copies are returned
+        so callers cannot mutate the ledger.
         """
         out = []
         for mark_id, data in self._mark_history.items():
@@ -297,8 +334,13 @@ class MarkEventMetaData:
                     "cleared_on_interrupt": data.get("cleared_on_interrupt", False),
                 }
             )
-        out.sort(key=lambda m: m["sent_ts"] if m.get("sent_ts") is not None else 0)
-        return out
+        out.sort(
+            key=lambda m: (
+                m.get("sent_ts") if m.get("sent_ts") is not None else 0,
+                m.get("counter") if m.get("counter") is not None else 0,
+            )
+        )
+        return copy.deepcopy(out)
 
     def __str__(self):
         return f"{self.mark_event_meta_data}"

@@ -8,6 +8,7 @@ import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech import CancellationErrorCode
 
 from .base_synthesizer import BaseSynthesizer
+from voiceai.errors import SynthesizerError, classify_exception
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
@@ -37,11 +38,13 @@ class AzureSynthesizer(BaseSynthesizer):
         logger.info(f"{self.voice} initialized")
         self.sample_rate = str(sampling_rate)
         self.stream = stream
-        self.caching = False
+        self.caching = caching
         self.speed = speed
         if caching:
             self.cache = InmemoryScalarCache()
-        self.loop = asyncio.get_event_loop()
+        # Bound lazily in generate() (async context): capturing it here grabs the wrong
+        # loop (or none) when the synth is built synchronously at call setup.
+        self.loop = None
 
         self.subscription_key = kwargs.get("synthesizer_key", os.getenv("AZURE_SPEECH_KEY"))
         self.region = kwargs.get("region", os.getenv("AZURE_SPEECH_REGION"))
@@ -99,10 +102,13 @@ class AzureSynthesizer(BaseSynthesizer):
     async def _generate_http(self, text):
         synthesizer = speechsdk.SpeechSynthesizer(speech_config=self.speech_config, audio_config=None)
         ssml = self._build_ssml(text)
+        # The SDK's .get() blocks the event loop; offload it.
         if ssml:
-            result = synthesizer.speak_ssml_async(ssml).get()
+            future = synthesizer.speak_ssml_async(ssml)
+            result = await asyncio.to_thread(future.get)
         else:
-            result = synthesizer.speak_text_async(text).get()
+            future = synthesizer.speak_text_async(text)
+            result = await asyncio.to_thread(future.get)
 
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
             return result.audio_data
@@ -129,7 +135,7 @@ class AzureSynthesizer(BaseSynthesizer):
         msg = error_map.get(error_code, f"error (code: {error_code})")
         logger.error(f"Azure TTS {msg} - Region: {self.region}")
         if raise_exception:
-            raise Exception(f"Azure TTS {msg}. Details: {error_details}")
+            raise SynthesizerError(f"Azure TTS {msg}. Details: {error_details}", provider="azure")
 
     async def synthesize(self, text):
         return await self._generate_http(text)
@@ -140,6 +146,11 @@ class AzureSynthesizer(BaseSynthesizer):
 
     async def generate(self):
         try:
+            # Bind the running loop for SDK-thread callbacks (see on_synthesizing).
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
             while True:
                 message = await self.internal_queue.get()
                 logger.info(f"Generating TTS response for message: {message}")
@@ -147,7 +158,7 @@ class AzureSynthesizer(BaseSynthesizer):
 
                 if not self.should_synthesize_response(meta_info.get("sequence_id")):
                     logger.info(f"Not synthesizing: sequence_id {meta_info.get('sequence_id')} not current")
-                    return
+                    continue
 
                 # Cache path
                 if self.caching and self.cache.get(text):
@@ -207,20 +218,36 @@ class AzureSynthesizer(BaseSynthesizer):
                 ssml = self._build_ssml(text)
                 start_time = time.perf_counter()
                 try:
+                    # Await the SDK future off the event loop; discarding it lost
+                    # failures and left the turn without an EOS.
                     if ssml:
-                        synthesizer.speak_ssml_async(ssml)
+                        _future = synthesizer.speak_ssml_async(ssml)
                     else:
-                        synthesizer.speak_text_async(text)
+                        _future = synthesizer.speak_text_async(text)
+                    await asyncio.to_thread(_future.get)
                 except Exception as e:
-                    logger.error(f"Failed to start Azure TTS synthesis: {e}")
+                    err = classify_exception(e, component="synthesizer", provider="azure")
+                    logger.error(f"Failed Azure TTS synthesis (error_id={err.error_id}): {e}")
+                    # Empty turn must still close or the task manager waits forever.
+                    if meta_info.get("end_of_llm_stream"):
+                        self._stamp_end_of_stream(meta_info)
+                        meta_info["text"] = text
+                        meta_info["format"] = "wav"
+                        meta_info["text_synthesized"] = f"{text} "
+                        self._stamp_mark_id(meta_info)
+                        from voiceai.constants import AUDIO_STREAM_END_SENTINELS
+
+                        yield create_ws_data_packet(AUDIO_STREAM_END_SENTINELS[0], meta_info)
                     continue
 
                 logger.info(f"Azure TTS request sent for {len(text)} chars")
                 full_audio = bytearray()
+                got_audio = False
 
                 while not done_event.is_set() or not chunk_queue.empty():
                     try:
                         chunk = await asyncio.wait_for(chunk_queue.get(), timeout=0.01)
+                        got_audio = True
 
                         if self.caching:
                             full_audio.extend(chunk)
@@ -256,6 +283,22 @@ class AzureSynthesizer(BaseSynthesizer):
 
                     except asyncio.TimeoutError:
                         continue
+
+                if not got_audio:
+                    # SDK produced no callbacks (e.g. instant cancel): still close the turn
+                    # when this was its last chunk, or playback stays marked in progress.
+                    logger.warning(f"azure: no audio for {len(text or '')} chars, closing turn if final")
+                    if meta_info.get("end_of_llm_stream"):
+                        self._stamp_end_of_stream(meta_info)
+                        meta_info["text"] = text
+                        meta_info["format"] = "wav"
+                        meta_info["text_synthesized"] = f"{text} "
+                        self._stamp_mark_id(meta_info)
+                        from voiceai.constants import AUDIO_STREAM_END_SENTINELS
+
+                        yield create_ws_data_packet(AUDIO_STREAM_END_SENTINELS[0], meta_info)
+                    self.synthesized_characters += len(text) if text else 0
+                    continue
 
                 if self.caching and full_audio:
                     logger.info(f"Caching audio for text: {text}")

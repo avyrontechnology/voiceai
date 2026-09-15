@@ -63,7 +63,19 @@ class LanguageDetector:
 
         if len(self._transcripts) >= self.turns_threshold:
             self._in_progress = True
-            self._task = asyncio.create_task(self._run_detection())
+            try:
+                from voiceai.helpers.resilience import safe_task as _safe_task
+
+                self._task = _safe_task(self._run_detection(), name="language_detector", logger=logger)
+            except RuntimeError:
+                self._task = asyncio.create_task(self._run_detection(), name="language_detector")
+                self._task.add_done_callback(
+                    lambda t: (
+                        logger.warning(f"language_detector failed: {t.exception()}")
+                        if not t.cancelled() and t.exception() is not None
+                        else None
+                    )
+                )
 
     def set_enabled_status(self, enabled: bool):
         """Enable or disable language detection."""

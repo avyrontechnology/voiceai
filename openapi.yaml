@@ -1,8 +1,72 @@
+# Generated 2026-09-12 (A11 hygiene) from FastAPI: quickstart_server.app + talko/twilio/plivo apps + manual WS entry.
+# Package version 0.10.217; 90 paths (was 8 @ 0.1.0). Regenerate after route changes.
 openapi: 3.1.0
 info:
-  title: FastAPI
-  version: 0.1.0
+  title: VoiceAI engine + platform + telephony
+  version: 0.10.217
+  description: 'Merged spec: engine (agent CRUD, /health, ws /chat/v1/{agent_id})
+    + platform routers (/calls/simulate, /executions/stats, batches, auth, graphs,
+    workflows) + telephony (/talko/*, /twilio/*, /plivo/*). Generated from FastAPI
+    openapi() (A11 hygiene 2026-09-12).'
 paths:
+  /agent:
+    post:
+      tags:
+      - Agents
+      summary: Create New Agent
+      description: Creates a new agent configuration, generates an ID, and stores
+        it in Redis. If extraction tasks are present, it will automatically generate
+        extraction prompts.
+      operationId: create_agent_agent_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentPayload'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCreatedResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /agent/{agent_id}:
     get:
       tags:
@@ -23,24 +87,42 @@ paths:
           content:
             application/json:
               schema: {}
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '404':
           description: Agent not found.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
-          description: Validation Error
+          description: Validation error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     put:
       tags:
       - Agents
@@ -68,24 +150,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AgentUpdatedResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '404':
           description: Agent not found.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
-          description: Validation Error
+          description: Validation error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     delete:
       tags:
       - Agents
@@ -106,52 +206,152 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AgentDeletedResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '404':
           description: Agent not found.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error.
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /agent/{agent_id}/prompts:
+    get:
+      tags:
+      - Agents
+      summary: Get Agent Prompts
+      description: Fetches an agent's stored prompts (system prompt, welcome message,
+        multilingual variants) by its unique ID. Returns null prompts when none were
+        saved.
+      operationId: get_agent_prompts_agent__agent_id__prompts_get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentPromptsResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /agents/{agent_id}/vector-config:
+    get:
+      tags:
+      - Agents
+      summary: Get Vector Config
+      operationId: get_vector_config_agents__agent_id__vector_config_get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorStoreConfig'
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /agent:
-    post:
+    put:
       tags:
       - Agents
-      summary: Create New Agent
-      description: Creates a new agent configuration, generates an ID, and stores
-        it in Redis. If extraction tasks are present, it will automatically generate
-        extraction prompts.
-      operationId: create_agent_agent_post
+      summary: Put Vector Config
+      operationId: put_vector_config_agents__agent_id__vector_config_put
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateAgentPayload'
-        required: true
+              $ref: '#/components/schemas/VectorStoreConfig'
       responses:
-        '201':
+        '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AgentCreatedResponse'
-        '500':
-          description: Internal server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/VectorStoreConfig'
         '422':
           description: Validation Error
           content:
@@ -173,81 +373,1709 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AgentListResponse'
-        '500':
-          description: Internal server error.
+        '401':
+          description: Not authenticated.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /twilio/call:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Missing scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Agent not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Internal server error (body carries an error_id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: A backing service (Redis, extraction model) is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api-keys:
+    get:
+      tags:
+      - API Keys
+      summary: List Api Keys
+      operationId: list_api_keys_api_keys_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponse'
     post:
       tags:
-      - Twilio Telephony
-      summary: Initiate Outbound Call (Twilio)
-      description: Initiates an outbound call using Twilio to the specified recipient
-        phone number and connects it to the specified agent.
-      operationId: make_call_call_post
+      - API Keys
+      summary: Create Api Key
+      operationId: create_api_key_api_keys_post
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CallDetails'
+              $ref: '#/components/schemas/CreateApiKeyRequest'
         required: true
       responses:
-        '200':
-          description: Call initiated successfully.
-          content:
-            application/json:
-              schema: {}
-        '404':
-          description: Agent or recipient phone number not provided.
+        '201':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/CreateApiKeyResponse'
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /twilio/twilio_connect:
-    post:
+  /api-keys/{key_id}:
+    delete:
       tags:
-      - Twilio Telephony
-      summary: Twilio TwiML Connect Callback
-      description: Callback endpoint for Twilio to provide TwiML instructions for
-        streaming audio to the VoiceAI WebSocket server.
-      operationId: twilio_connect_twilio_connect_post
+      - API Keys
+      summary: Delete Api Key
+      operationId: delete_api_key_api_keys__key_id__delete
       parameters:
-      - name: voiceai_host
-        in: query
+      - name: key_id
+        in: path
         required: true
         schema:
           type: string
-          description: The public URL of the VoiceAI websocket host
-          title: Voiceai Host
-        description: The public URL of the VoiceAI websocket host
-      - name: agent_id
-        in: query
-        required: true
-        schema:
-          type: string
-          description: The ID of the agent to connect
-          title: Agent Id
-        description: The ID of the agent to connect
+          title: Key Id
       responses:
         '200':
-          description: TwiML instructions returned successfully.
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/accept:
+    post:
+      tags:
+      - Auth
+      summary: Accept Invite
+      operationId: accept_invite_auth_accept_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInviteRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/events:
+    get:
+      tags:
+      - Auth
+      summary: Auth Events
+      operationId: auth_events_auth_events_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthEventListResponse'
+  /auth/invite:
+    post:
+      tags:
+      - Auth
+      summary: Invite
+      operationId: invite_auth_invite_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInviteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/invites:
+    get:
+      tags:
+      - Auth
+      summary: List Invites
+      operationId: list_invites_auth_invites_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteListResponse'
+  /auth/invites/{invite_id}:
+    delete:
+      tags:
+      - Auth
+      summary: Delete Invite
+      operationId: delete_invite_auth_invites__invite_id__delete
+      parameters:
+      - name: invite_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Invite Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete Invite Auth Invites  Invite Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/login:
+    post:
+      tags:
+      - Auth
+      summary: Login
+      operationId: login_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/logout:
+    post:
+      tags:
+      - Auth
+      summary: Logout
+      operationId: logout_auth_logout_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Logout Auth Logout Post
+  /auth/me:
+    get:
+      tags:
+      - Auth
+      summary: Me
+      operationId: me_auth_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+  /auth/password:
+    put:
+      tags:
+      - Auth
+      summary: Change Password
+      operationId: change_password_auth_password_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Change Password Auth Password Put
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/signup:
+    post:
+      tags:
+      - Auth
+      summary: Signup
+      operationId: signup_auth_signup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/users:
+    get:
+      tags:
+      - Auth
+      summary: List Users
+      operationId: list_users_auth_users_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+  /auth/users/{user_id}:
+    delete:
+      tags:
+      - Auth
+      summary: Delete User
+      operationId: delete_user_auth_users__user_id__delete
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete User Auth Users  User Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/users/{user_id}/role:
+    put:
+      tags:
+      - Auth
+      summary: Set User Role
+      operationId: set_user_role_auth_users__user_id__role_put
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetRoleRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/ws-ticket:
+    post:
+      tags:
+      - Auth
+      summary: Ws Ticket
+      operationId: ws_ticket_auth_ws_ticket_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WsTicketResponse'
+  /batches:
+    post:
+      tags:
+      - Batches
+      summary: Create Batch
+      operationId: create_batch_batches_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBatchRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Batches
+      summary: List Batches
+      operationId: list_batches_batches_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}:
+    get:
+      tags:
+      - Batches
+      summary: Get Batch
+      operationId: get_batch_batches__batch_id__get
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Batches
+      summary: Delete Batch
+      operationId: delete_batch_batches__batch_id__delete
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}/executions:
+    get:
+      tags:
+      - Batches
+      summary: Get Batch Executions
+      operationId: get_batch_executions_batches__batch_id__executions_get
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          description: Page size (capped).
+          default: 100
+          title: Limit
+        description: Page size (capped).
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Rows to skip for pagination.
+          default: 0
+          title: Offset
+        description: Rows to skip for pagination.
+      - name: include_transcript
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Set false for list views to skip heavy transcripts.
+          default: true
+          title: Include Transcript
+        description: Set false for list views to skip heavy transcripts.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}/retry-failed:
+    post:
+      tags:
+      - Batches
+      summary: Retry Failed
+      operationId: retry_failed_batches__batch_id__retry_failed_post
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      - name: include_live
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: When false (default) live IN_PROGRESS/RINGING/QUEUED entries
+            are excluded; set true to explicitly re-dial them.
+          default: false
+          title: Include Live
+        description: When false (default) live IN_PROGRESS/RINGING/QUEUED entries
+          are excluded; set true to explicitly re-dial them.
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}/start:
+    post:
+      tags:
+      - Batches
+      summary: Start Batch
+      description: 'Claim a batch and dial it in the background (202 + poll GET /batches/{id}).
+
+
+        Compare-and-set DRAFT/SCHEDULED -> RUNNING with Idempotency-Key: replaying
+        the same key
+
+        returns the same batch without a second dial pass; a different key while running/terminal
+
+        gets 409. Calling windows (with tz) are enforced here and again inside run_batch.'
+      operationId: start_batch_batches__batch_id__start_post
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      - name: delay_scale
+        in: query
+        required: false
+        schema:
+          type: number
+          minimum: 0
+          description: Per-dial delay scale for simulated batches (0 = instant).
+          default: 0.0
+          title: Delay Scale
+        description: Per-dial delay scale for simulated batches (0 = instant).
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}/status:
+    get:
+      tags:
+      - Batches
+      summary: Get Batch Status
+      description: Lightweight poll endpoint for background starts (202 pattern).
+      operationId: get_batch_status_batches__batch_id__status_get
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      responses:
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /batches/{batch_id}/stop:
+    post:
+      tags:
+      - Batches
+      summary: Stop Batch
+      operationId: stop_batch_batches__batch_id__stop_post
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Batch Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /calls/simulate:
+    post:
+      tags:
+      - Calls
+      summary: Simulate Call
+      description: Start a simulated outbound call. delay_scale=0 completes inline.
+      operationId: simulate_call_calls_simulate_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateCallRequest'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /chat/v1/{agent_id}:
+    get:
+      tags:
+      - Voice WebSocket
+      summary: Live voice websocket (upgrade)
+      description: 'Bidirectional voice media + events over WebSocket. Connect as
+        wss://engine/chat/v1/{agent_id}?token=<stream-token>. Auth: ws-ticket, session
+        cookie (calls:write), or signed carrier stream token. See VOICE_STREAM_SECRET.
+        This entry documents the WS upgrade (OpenAPI has no native WS type).'
+      operationId: voice_websocket_chat_v1_agent_id_get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: token
+        in: query
+        required: false
+        schema:
+          type: string
+        description: ws-ticket or signed stream token
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket upgrade)
+        '401':
+          description: Missing/invalid auth
+        '403':
+          description: Forbidden (carrier signature / scope)
+  /executions:
+    get:
+      tags:
+      - Executions
+      summary: List Executions
+      operationId: list_executions_executions_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      - name: batch_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/ExecutionStatus'
+          - type: 'null'
+          title: Status
+      - name: direction
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by call direction (outbound/inbound).
+          title: Direction
+        description: Filter by call direction (outbound/inbound).
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          description: Page size (capped to keep list views fast).
+          default: 50
+          title: Limit
+        description: Page size (capped to keep list views fast).
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Rows to skip for pagination.
+          default: 0
+          title: Offset
+        description: Rows to skip for pagination.
+      - name: include_transcript
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Set false for list views to skip heavy transcript payloads.
+          default: true
+          title: Include Transcript
+        description: Set false for list views to skip heavy transcript payloads.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /executions/latency/summary:
+    get:
+      tags:
+      - Executions
+      summary: Get Latency Stats
+      operationId: get_latency_stats_executions_latency_summary_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 90
+          minimum: 1
+          description: Bounded window in days (1..90).
+          default: 30
+          title: Days
+        description: Bounded window in days (1..90).
+      - name: max_scan
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 1
+          description: Max recent rows aggregated (bounded scan).
+          default: 5000
+          title: Max Scan
+        description: Max recent rows aggregated (bounded scan).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatencyStats'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /executions/stats:
+    get:
+      tags:
+      - Executions
+      summary: Get Execution Stats
+      operationId: get_execution_stats_executions_stats_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      - name: days
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 90
+            minimum: 1
+          - type: 'null'
+          description: Bounded window in days (None = all time, capped at 90 when
+            set).
+          title: Days
+        description: Bounded window in days (None = all time, capped at 90 when set).
+      - name: max_scan
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 1
+          description: Max recent rows aggregated (bounded scan).
+          default: 5000
+          title: Max Scan
+        description: Max recent rows aggregated (bounded scan).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionStats'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /executions/{execution_id}:
+    get:
+      tags:
+      - Executions
+      summary: Get Execution
+      operationId: get_execution_executions__execution_id__get
+      parameters:
+      - name: execution_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Execution Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs:
+    get:
+      tags:
+      - Graphs
+      summary: List Graphs
+      operationId: list_graphs_graphs_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphListResponse'
+    post:
+      tags:
+      - Graphs
+      summary: Create Graph
+      operationId: create_graph_graphs_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphDoc'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}:
+    get:
+      tags:
+      - Graphs
+      summary: Get Graph
+      operationId: get_graph_graphs__graph_id__get
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphDoc'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Graphs
+      summary: Update Graph
+      operationId: update_graph_graphs__graph_id__put
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGraphRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphDoc'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Graphs
+      summary: Delete Graph
+      operationId: delete_graph_graphs__graph_id__delete
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}/deploy:
+    post:
+      tags:
+      - Graphs
+      summary: Deploy Graph
+      operationId: deploy_graph_graphs__graph_id__deploy_post
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeployGraphRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}/dry-run:
+    post:
+      tags:
+      - Graphs
+      summary: Dry Run Graph
+      operationId: dry_run_graph_graphs__graph_id__dry_run_post
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DryRunResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}/restore/{version_number}:
+    post:
+      tags:
+      - Graphs
+      summary: Restore Graph Version
+      operationId: restore_graph_version_graphs__graph_id__restore__version_number__post
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      - name: version_number
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version Number
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphDoc'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}/validate:
+    post:
+      tags:
+      - Graphs
+      summary: Validate Graph
+      operationId: validate_graph_graphs__graph_id__validate_post
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /graphs/{graph_id}/versions:
+    get:
+      tags:
+      - Graphs
+      summary: List Graph Versions
+      operationId: list_graph_versions_graphs__graph_id__versions_get
+      parameters:
+      - name: graph_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Graph Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphVersionListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /health:
+    get:
+      tags:
+      - Health
+      summary: Liveness and dependency status
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /inbound/{agent_id}:
+    get:
+      tags:
+      - Inbound
+      summary: Get Inbound
+      operationId: get_inbound_inbound__agent_id__get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundConfig'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Inbound
+      summary: Put Inbound
+      operationId: put_inbound_inbound__agent_id__put
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInboundRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundConfig'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /integrations:
+    get:
+      tags:
+      - Integrations
+      summary: List Integrations
+      operationId: list_integrations_integrations_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationListResponse'
+    post:
+      tags:
+      - Integrations
+      summary: Create Integration
+      operationId: create_integration_integrations_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntegrationRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Integration'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /integrations/{integration_id}:
+    get:
+      tags:
+      - Integrations
+      summary: Get Integration
+      operationId: get_integration_integrations__integration_id__get
+      parameters:
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Integration'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Integrations
+      summary: Update Integration
+      operationId: update_integration_integrations__integration_id__put
+      parameters:
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateIntegrationRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Integration'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Integrations
+      summary: Delete Integration
+      operationId: delete_integration_integrations__integration_id__delete
+      parameters:
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /knowledgebases:
+    get:
+      tags:
+      - Knowledge Bases
+      summary: List Kbs
+      operationId: list_kbs_knowledgebases_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KBListResponse'
+    post:
+      tags:
+      - Knowledge Bases
+      summary: Create Kb
+      operationId: create_kb_knowledgebases_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateKBRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBase'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /knowledgebases/{kb_id}:
+    delete:
+      tags:
+      - Knowledge Bases
+      summary: Delete Kb
+      operationId: delete_kb_knowledgebases__kb_id__delete
+      parameters:
+      - name: kb_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Kb Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /knowledgebases/{kb_id}/attach:
+    post:
+      tags:
+      - Knowledge Bases
+      summary: Attach Kb
+      operationId: attach_kb_knowledgebases__kb_id__attach_post
+      parameters:
+      - name: kb_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Kb Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachKBRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBase'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /knowledgebases/{kb_id}/detach:
+    post:
+      tags:
+      - Knowledge Bases
+      summary: Detach Kb
+      operationId: detach_kb_knowledgebases__kb_id__detach_post
+      parameters:
+      - name: kb_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Kb Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachKBRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeBase'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /organization:
+    get:
+      tags:
+      - Organization
+      summary: Get Organization
+      operationId: get_organization_organization_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+    put:
+      tags:
+      - Organization
+      summary: Update Organization
+      operationId: update_organization_organization_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /organization/reset:
+    post:
+      tags:
+      - Organization
+      summary: Reset Workspace
+      operationId: reset_workspace_organization_reset_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResetResponse'
+  /phone-numbers:
+    get:
+      tags:
+      - Phone Numbers
+      summary: List Numbers
+      operationId: list_numbers_phone_numbers_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumberListResponse'
+    post:
+      tags:
+      - Phone Numbers
+      summary: Create Number
+      operationId: create_number_phone_numbers_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePhoneNumberRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumber'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /phone-numbers/{number_id}:
+    delete:
+      tags:
+      - Phone Numbers
+      summary: Delete Number
+      operationId: delete_number_phone_numbers__number_id__delete
+      parameters:
+      - name: number_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Number Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /phone-numbers/{number_id}/assign:
+    post:
+      tags:
+      - Phone Numbers
+      summary: Assign Number
+      operationId: assign_number_phone_numbers__number_id__assign_post
+      parameters:
+      - name: number_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Number Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignNumberRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumber'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /phone-numbers/{number_id}/unassign:
+    post:
+      tags:
+      - Phone Numbers
+      summary: Unassign Number
+      operationId: unassign_number_phone_numbers__number_id__unassign_post
+      parameters:
+      - name: number_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Number Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumber'
         '422':
           description: Validation Error
           content:
@@ -262,36 +2090,60 @@ paths:
       description: Initiates an outbound call using Plivo to the specified recipient
         phone number and connects it to the specified agent.
       operationId: make_call_call_post
+      parameters:
+      - name: X-API-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CallDetails'
-        required: true
       responses:
         '200':
-          description: Call initiated successfully.
-          content:
-            application/json:
-              schema: {}
-        '404':
-          description: Agent or recipient phone number not provided.
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal Server Error
+                $ref: '#/components/schemas/CallInitiated'
+        '401':
+          description: Missing or invalid X-API-Key.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
-          description: Validation Error
+          description: Invalid request body.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: Plivo rejected the call.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: ngrok or Plivo credentials unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /plivo/plivo_connect:
     post:
       tags:
@@ -323,6 +2175,18 @@ paths:
           content:
             application/json:
               schema: {}
+        '403':
+          description: Plivo signature invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: VOICE_STREAM_SECRET not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '422':
           description: Validation Error
           content:
@@ -331,7 +2195,9 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
   /plivo/plivo_hangup_callback:
     post:
-      summary: Plivo Hangup Callback
+      tags:
+      - Plivo Telephony
+      summary: Plivo hangup callback
       operationId: plivo_hangup_callback_plivo_hangup_callback_post
       responses:
         '200':
@@ -339,6 +2205,1139 @@ paths:
           content:
             application/json:
               schema: {}
+  /sub-accounts:
+    get:
+      tags:
+      - Sub-Accounts
+      summary: List Sub Accounts
+      operationId: list_sub_accounts_sub_accounts_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccountListResponse'
+    post:
+      tags:
+      - Sub-Accounts
+      summary: Create Sub Account
+      operationId: create_sub_account_sub_accounts_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubAccountRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccount'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sub-accounts/{sub_id}:
+    get:
+      tags:
+      - Sub-Accounts
+      summary: Get Sub Account
+      operationId: get_sub_account_sub_accounts__sub_id__get
+      parameters:
+      - name: sub_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Sub Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccount'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Sub-Accounts
+      summary: Delete Sub Account
+      operationId: delete_sub_account_sub_accounts__sub_id__delete
+      parameters:
+      - name: sub_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Sub Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sub-accounts/{sub_id}/members:
+    post:
+      tags:
+      - Sub-Accounts
+      summary: Add Member
+      operationId: add_member_sub_accounts__sub_id__members_post
+      parameters:
+      - name: sub_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Sub Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMemberRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccount'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Sub-Accounts
+      summary: Remove Member
+      operationId: remove_member_sub_accounts__sub_id__members_delete
+      parameters:
+      - name: sub_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Sub Id
+      - name: email
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Email
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccount'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /talko/call:
+    post:
+      tags:
+      - Talko Telephony
+      summary: Initiate Outbound Call via Talko (Tata Tele)
+      description: Asks talko-service to dial the recipient; Tata streams the answered
+        call back to Talko, which relays media to the voiceai agent.
+      operationId: make_call_talko_call_post
+      parameters:
+      - name: X-API-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TalkoCallDetails'
+      responses:
+        '200':
+          description: Call initiated successfully.
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Missing agent_id / phone / DID / credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Missing or invalid X-API-Key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: talko-service unreachable or rejected the request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /talko/hangup:
+    post:
+      tags:
+      - Talko Telephony
+      summary: Hang up a Talko call
+      description: Passthrough to talko-service hangup for AI-bridge calls.
+      operationId: hangup_call_talko_hangup_post
+      parameters:
+      - name: X-API-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TalkoHangupDetails'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: Missing or invalid X-API-Key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: talko-service unreachable or rejected the request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /talko/health:
+    get:
+      tags:
+      - Talko Telephony
+      summary: Talko trunk health
+      description: Checks reachability of talko-service (public /health endpoint).
+      operationId: talko_health_talko_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /templates:
+    get:
+      tags:
+      - Templates
+      summary: List Templates
+      operationId: list_templates_templates_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateListResponse'
+  /templates/{template_id}:
+    get:
+      tags:
+      - Templates
+      summary: Get Template
+      operationId: get_template_templates__template_id__get
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /templates/{template_id}/import:
+    post:
+      tags:
+      - Templates
+      summary: Import Template
+      operationId: import_template_templates__template_id__import_post
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tools:
+    post:
+      tags:
+      - Tools
+      summary: Create Tool
+      operationId: create_tool_tools_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateToolRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tool'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Tools
+      summary: List Tools
+      operationId: list_tools_tools_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /tools/{tool_id}:
+    delete:
+      tags:
+      - Tools
+      summary: Delete Tool
+      operationId: delete_tool_tools__tool_id__delete
+      parameters:
+      - name: tool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tool Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /twilio/call:
+    post:
+      tags:
+      - Twilio Telephony
+      summary: Initiate Outbound Call (Twilio)
+      description: Initiates an outbound call using Twilio to the specified recipient
+        phone number and connects it to the specified agent.
+      operationId: make_call_call_post
+      parameters:
+      - name: X-API-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Api-Key
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallDetails'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallInitiated'
+        '401':
+          description: Missing or invalid X-API-Key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '502':
+          description: Twilio rejected the call.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: ngrok or Twilio credentials unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /twilio/twilio_connect:
+    post:
+      tags:
+      - Twilio Telephony
+      summary: Twilio TwiML Connect Callback
+      description: Callback endpoint for Twilio to provide TwiML instructions for
+        streaming audio to the VoiceAI WebSocket server.
+      operationId: twilio_connect_twilio_connect_post
+      parameters:
+      - name: voiceai_host
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The public URL of the VoiceAI websocket host
+          title: Voiceai Host
+        description: The public URL of the VoiceAI websocket host
+      - name: agent_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: The ID of the agent to connect
+          title: Agent Id
+        description: The ID of the agent to connect
+      responses:
+        '200':
+          description: TwiML instructions returned successfully.
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: Twilio signature invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: VOICE_STREAM_SECRET not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /voices:
+    post:
+      tags:
+      - Voices
+      summary: Create Voice
+      operationId: create_voice_voices_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVoiceRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceEntry'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Voices
+      summary: List Voices
+      operationId: list_voices_voices_get
+      parameters:
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /voices/{voice_id}:
+    delete:
+      tags:
+      - Voices
+      summary: Delete Voice
+      operationId: delete_voice_voices__voice_id__delete
+      parameters:
+      - name: voice_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Voice Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /wallet:
+    get:
+      tags:
+      - Wallet
+      summary: Get Wallet
+      operationId: get_wallet_wallet_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+  /wallet/ledger:
+    get:
+      tags:
+      - Wallet
+      summary: Get Ledger
+      operationId: get_ledger_wallet_ledger_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+          title: Limit
+      - name: type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Type
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /wallet/topup:
+    post:
+      tags:
+      - Wallet
+      summary: Topup Wallet
+      operationId: topup_wallet_wallet_topup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopUpRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /webhooks:
+    get:
+      tags:
+      - Webhooks
+      summary: List Webhooks
+      operationId: list_webhooks_webhooks_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookListResponse'
+    post:
+      tags:
+      - Webhooks
+      summary: Create Webhook
+      operationId: create_webhook_webhooks_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /webhooks/{webhook_id}:
+    delete:
+      tags:
+      - Webhooks
+      summary: Delete Webhook
+      operationId: delete_webhook_webhooks__webhook_id__delete
+      parameters:
+      - name: webhook_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Webhook Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-campaigns:
+    get:
+      tags:
+      - Workflow Campaigns
+      summary: List Campaigns
+      operationId: list_campaigns_workflow_campaigns_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+    post:
+      tags:
+      - Workflow Campaigns
+      summary: Create Campaign
+      operationId: create_campaign_workflow_campaigns_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCampaignRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-campaigns/{campaign_id}:
+    get:
+      tags:
+      - Workflow Campaigns
+      summary: Get Campaign
+      operationId: get_campaign_workflow_campaigns__campaign_id__get
+      parameters:
+      - name: campaign_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Campaign Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-campaigns/{campaign_id}/runs:
+    get:
+      tags:
+      - Workflow Campaigns
+      summary: Get Campaign Runs
+      operationId: get_campaign_runs_workflow_campaigns__campaign_id__runs_get
+      parameters:
+      - name: campaign_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Campaign Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-campaigns/{campaign_id}/start:
+    post:
+      tags:
+      - Workflow Campaigns
+      summary: Start Campaign
+      operationId: start_campaign_workflow_campaigns__campaign_id__start_post
+      parameters:
+      - name: campaign_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Campaign Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-campaigns/{campaign_id}/stop:
+    post:
+      tags:
+      - Workflow Campaigns
+      summary: Stop Campaign
+      operationId: stop_campaign_workflow_campaigns__campaign_id__stop_post
+      parameters:
+      - name: campaign_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Campaign Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflow-runs/{run_id}:
+    get:
+      tags:
+      - Workflow Runs
+      summary: Get Workflow Run
+      operationId: get_workflow_run_workflow_runs__run_id__get
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows:
+    get:
+      tags:
+      - Workflows
+      summary: List Workflows
+      operationId: list_workflows_workflows_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+    post:
+      tags:
+      - Workflows
+      summary: Create Workflow
+      operationId: create_workflow_workflows_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows/{workflow_id}:
+    get:
+      tags:
+      - Workflows
+      summary: Get Workflow
+      operationId: get_workflow_workflows__workflow_id__get
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Workflows
+      summary: Update Workflow
+      operationId: update_workflow_workflows__workflow_id__put
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkflowRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Workflows
+      summary: Delete Workflow
+      operationId: delete_workflow_workflows__workflow_id__delete
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows/{workflow_id}/restore/{version_number}:
+    post:
+      tags:
+      - Workflows
+      summary: Restore Workflow Version
+      operationId: restore_workflow_version_workflows__workflow_id__restore__version_number__post
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      - name: version_number
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version Number
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows/{workflow_id}/test-run:
+    post:
+      tags:
+      - Workflows
+      summary: Test Run Workflow
+      operationId: test_run_workflow_workflows__workflow_id__test_run_post
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestRunRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows/{workflow_id}/validate:
+    post:
+      tags:
+      - Workflows
+      summary: Validate Workflow Route
+      operationId: validate_workflow_route_workflows__workflow_id__validate_post
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /workflows/{workflow_id}/versions:
+    get:
+      tags:
+      - Workflows
+      summary: List Workflow Versions
+      operationId: list_workflow_versions_workflows__workflow_id__versions_get
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     APIParams:
@@ -405,6 +3404,52 @@ components:
           title: Nodes
       type: object
       title: APIParams
+    AcceptInviteRequest:
+      properties:
+        token:
+          type: string
+          minLength: 1
+          title: Token
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        password:
+          type: string
+          maxLength: 128
+          minLength: 8
+          title: Password
+      type: object
+      required:
+      - token
+      - password
+      title: AcceptInviteRequest
+    AddMemberRequest:
+      properties:
+        email:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+          default: member
+      type: object
+      required:
+      - email
+      title: AddMemberRequest
     AgentCreatedResponse:
       properties:
         agent_id:
@@ -494,6 +3539,24 @@ components:
       - agent_name
       - tasks
       title: AgentModel
+    AgentPromptsResponse:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+          description: The unique identifier for the agent.
+        agent_prompts:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Agent Prompts
+          description: Stored prompts mapped by task (e.g. task_1), or null when none
+            were saved.
+      type: object
+      required:
+      - agent_id
+      title: AgentPromptsResponse
     AgentRouteConfig:
       properties:
         utterances:
@@ -528,6 +3591,142 @@ components:
       required:
       - agent_id
       title: AgentUpdatedResponse
+    ApiKey:
+      properties:
+        key_id:
+          type: string
+          title: Key Id
+        name:
+          type: string
+          title: Name
+        prefix:
+          type: string
+          title: Prefix
+        key_hash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Key Hash
+          description: SHA-256 of secret; never exposed via API.
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+        created_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created By
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+      type: object
+      required:
+      - key_id
+      - name
+      - prefix
+      title: ApiKey
+    ApiKeyListResponse:
+      properties:
+        api_keys:
+          items:
+            $ref: '#/components/schemas/ApiKey'
+          type: array
+          title: Api Keys
+      type: object
+      required:
+      - api_keys
+      title: ApiKeyListResponse
+    AssignNumberRequest:
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          title: Agent Id
+      type: object
+      required:
+      - agent_id
+      title: AssignNumberRequest
+    AttachKBRequest:
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          title: Agent Id
+      type: object
+      required:
+      - agent_id
+      title: AttachKBRequest
+    AuthEvent:
+      properties:
+        event_id:
+          type: string
+          title: Event Id
+        type:
+          type: string
+          title: Type
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - event_id
+      - type
+      title: AuthEvent
+    AuthEventListResponse:
+      properties:
+        events:
+          items:
+            $ref: '#/components/schemas/AuthEvent'
+          type: array
+          title: Events
+      type: object
+      required:
+      - events
+      title: AuthEventListResponse
+    AuthMeResponse:
+      properties:
+        user:
+          $ref: '#/components/schemas/UserResponse'
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+      type: object
+      required:
+      - user
+      title: AuthMeResponse
     AzureConfig:
       properties:
         voice:
@@ -551,6 +3750,206 @@ components:
       - model
       - language
       title: AzureConfig
+    Batch:
+      properties:
+        batch_id:
+          type: string
+          title: Batch Id
+        agent_id:
+          type: string
+          title: Agent Id
+        name:
+          type: string
+          title: Name
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+          default: draft
+        entries:
+          items:
+            $ref: '#/components/schemas/BatchEntry'
+          type: array
+          title: Entries
+        stats:
+          $ref: '#/components/schemas/BatchStats'
+        schedule_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Schedule At
+        calling_hours:
+          anyOf:
+          - $ref: '#/components/schemas/CallingHours'
+          - type: 'null'
+        provider:
+          type: string
+          enum:
+          - simulated
+          - talko
+          title: Provider
+          default: simulated
+        from_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Number
+        idempotency_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency Key
+          description: Last Idempotency-Key that claimed the start (CAS guard).
+        org_id:
+          type: string
+          title: Org Id
+          description: Owning org; lists/gets are scoped to the caller org.
+          default: default
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        started_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Started At
+        ended_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Ended At
+      type: object
+      required:
+      - batch_id
+      - agent_id
+      - name
+      title: Batch
+      description: 'A dial batch. Lifecycle: DRAFT/SCHEDULED -> RUNNING -> COMPLETED/STOPPED.
+
+
+        Start uses compare-and-set (only DRAFT/SCHEDULED may move to RUNNING) with
+        an optional
+
+        Idempotency-Key: replaying the same key returns the same batch without a second
+        dial pass.
+
+        Stop sets STOPPED; run_batch checks the flag before every entry and cancels
+        in-flight
+
+        trunk HTTP so pending dials never start. Talko-accepted entries count as `stats.pending`
+
+        (execution IN_PROGRESS, completion arrives via Talko CDR callback — not yet
+        wired, see
+
+        talko_dialer) rather than `stats.completed`.'
+    BatchEntry:
+      properties:
+        to_number:
+          type: string
+          minLength: 1
+          title: To Number
+        variables:
+          additionalProperties: true
+          type: object
+          title: Variables
+      type: object
+      required:
+      - to_number
+      title: BatchEntry
+    BatchListResponse:
+      properties:
+        batches:
+          items:
+            $ref: '#/components/schemas/Batch'
+          type: array
+          title: Batches
+      type: object
+      required:
+      - batches
+      title: BatchListResponse
+    BatchStats:
+      properties:
+        total:
+          type: integer
+          title: Total
+          default: 0
+        queued:
+          type: integer
+          title: Queued
+          default: 0
+        completed:
+          type: integer
+          title: Completed
+          default: 0
+        failed:
+          type: integer
+          title: Failed
+          default: 0
+        pending:
+          type: integer
+          title: Pending
+          description: Talko-accepted dials awaiting CDR (execution IN_PROGRESS, media
+            outcome in Talko).
+          default: 0
+      type: object
+      title: BatchStats
+    BatchStatus:
+      type: string
+      enum:
+      - draft
+      - scheduled
+      - running
+      - paused
+      - completed
+      - stopped
+      title: BatchStatus
+    CallingHours:
+      properties:
+        start:
+          type: string
+          pattern: ^\d{2}:\d{2}$
+          title: Start
+        end:
+          type: string
+          pattern: ^\d{2}:\d{2}$
+          title: End
+        tz:
+          type: string
+          title: Tz
+          description: IANA timezone for the window, e.g. "Asia/Kolkata".
+          default: UTC
+      type: object
+      required:
+      - start
+      - end
+      title: CallingHours
+      description: 'Daily calling window in 24h HH:MM. start == end means closed all
+        day.
+
+
+        `tz` is an IANA zone (e.g. "Asia/Kolkata", "UTC"). The window is evaluated
+        in that zone;
+
+        UTC is the default so bare "09:00-18:00" keeps its historical meaning. run_batch
+        and
+
+        run_campaign enforce the window themselves (not only the HTTP start route).'
+    CampaignEntry:
+      properties:
+        to_number:
+          type: string
+          minLength: 1
+          title: To Number
+        variables:
+          additionalProperties: true
+          type: object
+          title: Variables
+      type: object
+      required:
+      - to_number
+      title: CampaignEntry
     CartesiaConfig:
       properties:
         voice_id:
@@ -578,6 +3977,23 @@ components:
       - model
       - language
       title: CartesiaConfig
+    ChangePasswordRequest:
+      properties:
+        current_password:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Current Password
+        new_password:
+          type: string
+          maxLength: 128
+          minLength: 8
+          title: New Password
+      type: object
+      required:
+      - current_password
+      - new_password
+      title: ChangePasswordRequest
     ConversationConfig:
       properties:
         optimize_latency:
@@ -750,8 +4166,7 @@ components:
         agent_prompts:
           anyOf:
           - additionalProperties:
-              additionalProperties:
-                type: string
+              additionalProperties: true
               type: object
             type: object
           - type: 'null'
@@ -761,6 +4176,410 @@ components:
       required:
       - agent_config
       title: CreateAgentPayload
+    CreateApiKeyRequest:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+        expires_in_days:
+          anyOf:
+          - type: integer
+            maximum: 3650.0
+            minimum: 1.0
+          - type: 'null'
+          title: Expires In Days
+      type: object
+      required:
+      - name
+      title: CreateApiKeyRequest
+    CreateApiKeyResponse:
+      properties:
+        key_id:
+          type: string
+          title: Key Id
+        name:
+          type: string
+          title: Name
+        prefix:
+          type: string
+          title: Prefix
+        key:
+          type: string
+          title: Key
+          description: Full secret, returned once at creation.
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - key_id
+      - name
+      - prefix
+      - key
+      title: CreateApiKeyResponse
+    CreateBatchRequest:
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          title: Agent Id
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        entries:
+          items:
+            $ref: '#/components/schemas/BatchEntry'
+          type: array
+          maxItems: 100
+          minItems: 1
+          title: Entries
+        schedule_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Schedule At
+        calling_hours:
+          anyOf:
+          - $ref: '#/components/schemas/CallingHours'
+          - type: 'null'
+        delay_scale:
+          type: number
+          minimum: 0.0
+          title: Delay Scale
+          default: 0.5
+        provider:
+          type: string
+          enum:
+          - simulated
+          - talko
+          title: Provider
+          description: '''talko'' dials each entry for real via the Talko trunk (Tata
+            Tele); anything else simulates.'
+          default: simulated
+        from_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Number
+          description: Caller DID override for talko-dialed batches (defaults to trunk
+            TALKO_AI_DID).
+        talko_api_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Talko Api Key
+          description: Write-only per-batch Talko key. Accepted on create, held ephemerally
+            for the dial (request-scoped store), never persisted readable nor serialized
+            back. Omit to use trunk TALKO_API_KEY env.
+      type: object
+      required:
+      - agent_id
+      - name
+      - entries
+      title: CreateBatchRequest
+      description: 'Create a dial batch (max 100 entries).
+
+
+        Start is asynchronous: POST /batches/{id}/start claims the batch (compare-and-set
+
+        DRAFT/SCHEDULED -> RUNNING, Idempotency-Key supported) and returns 202 with
+        RUNNING;
+
+        poll GET /batches/{id} (or /batches/{id}/status) until completed/stopped.
+        Talko dials
+
+        stay IN_PROGRESS (batch pending, media outcome in Talko CDR) while simulated
+        dials end
+
+        COMPLETED/FAILED. Dials never debit the wallet (topup-only decorative balance).'
+    CreateCampaignRequest:
+      properties:
+        workflow_id:
+          type: string
+          minLength: 1
+          title: Workflow Id
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        entries:
+          items:
+            $ref: '#/components/schemas/CampaignEntry'
+          type: array
+          maxItems: 100
+          minItems: 1
+          title: Entries
+        calling_hours:
+          anyOf:
+          - $ref: '#/components/schemas/CallingHours'
+          - type: 'null'
+          description: Daily calling window (with tz) enforced on start and inside
+            run_campaign.
+      type: object
+      required:
+      - workflow_id
+      - name
+      - entries
+      title: CreateCampaignRequest
+    CreateGraphRequest:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        definition:
+          additionalProperties: true
+          type: object
+          title: Definition
+      type: object
+      required:
+      - name
+      title: CreateGraphRequest
+    CreateIntegrationRequest:
+      properties:
+        kind:
+          type: string
+          enum:
+          - twilio
+          - plivo
+          - exotel
+          - vobiz
+          - talko
+          - calcom
+          - n8n
+          - zapier
+          - sheets
+          - sip
+          - truecaller
+          title: Kind
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+      type: object
+      required:
+      - kind
+      - name
+      title: CreateIntegrationRequest
+    CreateInviteResponse:
+      properties:
+        invite_id:
+          type: string
+          title: Invite Id
+        email:
+          type: string
+          title: Email
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+        token:
+          type: string
+          title: Token
+          description: Raw invite token, shown once. Accept via POST /auth/accept.
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - invite_id
+      - email
+      - role
+      - token
+      - expires_at
+      title: CreateInviteResponse
+    CreateKBRequest:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        sources:
+          items:
+            $ref: '#/components/schemas/KBSource'
+          type: array
+          title: Sources
+      type: object
+      required:
+      - name
+      title: CreateKBRequest
+    CreatePhoneNumberRequest:
+      properties:
+        number:
+          type: string
+          minLength: 1
+          title: Number
+        provider:
+          type: string
+          enum:
+          - twilio
+          - plivo
+          - exotel
+          - vobiz
+          - talko
+          - simulated
+          title: Provider
+          default: simulated
+        country:
+          type: string
+          minLength: 1
+          title: Country
+          default: IN
+      type: object
+      required:
+      - number
+      title: CreatePhoneNumberRequest
+    CreateSubAccountRequest:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        concurrency_cap:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Concurrency Cap
+      type: object
+      required:
+      - name
+      title: CreateSubAccountRequest
+    CreateToolRequest:
+      properties:
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        kind:
+          type: string
+          enum:
+          - transfer
+          - calendar
+          - custom
+          - datetime
+          title: Kind
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+      type: object
+      required:
+      - name
+      - kind
+      title: CreateToolRequest
+    CreateVoiceRequest:
+      properties:
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        provider:
+          type: string
+          minLength: 1
+          title: Provider
+        provider_voice_id:
+          type: string
+          minLength: 1
+          title: Provider Voice Id
+        source:
+          type: string
+          enum:
+          - provider
+          - cloned
+          - imported
+          title: Source
+          default: provider
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+      type: object
+      required:
+      - name
+      - provider
+      - provider_voice_id
+      title: CreateVoiceRequest
+    CreateWebhookRequest:
+      properties:
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        url:
+          type: string
+          minLength: 1
+          title: Url
+        events:
+          items:
+            type: string
+          type: array
+          title: Events
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+      type: object
+      required:
+      - url
+      title: CreateWebhookRequest
+    CreateWorkflowRequest:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        definition:
+          additionalProperties: true
+          type: object
+          title: Definition
+      type: object
+      required:
+      - name
+      title: CreateWorkflowRequest
     DeepgramConfig:
       properties:
         voice_id:
@@ -778,6 +4597,59 @@ components:
       - voice
       - model
       title: DeepgramConfig
+    DeletedResponse:
+      properties:
+        state:
+          type: string
+          title: State
+          default: deleted
+      type: object
+      title: DeletedResponse
+    DeployGraphRequest:
+      properties:
+        agent_name:
+          type: string
+          minLength: 1
+          title: Agent Name
+      type: object
+      required:
+      - agent_name
+      title: DeployGraphRequest
+    DryRunResult:
+      properties:
+        path:
+          items:
+            type: string
+          type: array
+          title: Path
+        transcript_preview:
+          items:
+            $ref: '#/components/schemas/DryRunTurn'
+          type: array
+          title: Transcript Preview
+        steps:
+          type: integer
+          title: Steps
+          default: 0
+        loop_detected:
+          type: boolean
+          title: Loop Detected
+          default: false
+      type: object
+      title: DryRunResult
+    DryRunTurn:
+      properties:
+        node:
+          type: string
+          title: Node
+        text:
+          type: string
+          title: Text
+      type: object
+      required:
+      - node
+      - text
+      title: DryRunTurn
     Edge:
       properties:
         start_node:
@@ -846,16 +4718,220 @@ components:
       - voice_id
       - model
       title: ElevenLabsConfig
-    ErrorResponse:
+    ErrorBody:
       properties:
+        code:
+          type: string
+          title: Code
+          description: Stable error code; see voiceai.errors.ErrorCode.
+        message:
+          type: string
+          title: Message
+          description: Caller-safe description of what went wrong.
+        error_id:
+          type: string
+          title: Error Id
+          description: Correlation id that also appears in the server log.
+        retryable:
+          type: boolean
+          title: Retryable
+          description: Whether the same request may succeed if retried.
+          default: false
+        component:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Component
+          description: Subsystem that failed (llm, synthesizer, api, ...).
+        provider:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+          description: Upstream provider, when the failure was theirs.
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: Model or deployment involved, when known.
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Details
+          description: Structured context such as a config path or validation issues.
+      type: object
+      required:
+      - code
+      - message
+      - error_id
+      title: ErrorBody
+      description: Structured error as it appears on the wire (``error`` key).
+    ErrorEnvelope:
+      properties:
+        ok:
+          type: boolean
+          title: Ok
+          description: Always false for error bodies.
+          default: false
         detail:
           type: string
           title: Detail
-          description: Error description message.
+          description: Same as error.message; kept for FastAPI-style clients.
+        error:
+          $ref: '#/components/schemas/ErrorBody'
       type: object
       required:
       - detail
-      title: ErrorResponse
+      - error
+      title: ErrorEnvelope
+      description: Body of every non-2xx HTTP response produced by the engine.
+    Execution:
+      properties:
+        execution_id:
+          type: string
+          title: Execution Id
+        agent_id:
+          type: string
+          title: Agent Id
+        batch_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+        direction:
+          type: string
+          enum:
+          - outbound
+          - inbound
+          title: Direction
+          default: outbound
+        to_number:
+          type: string
+          title: To Number
+        from_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Number
+        status:
+          $ref: '#/components/schemas/ExecutionStatus'
+          default: queued
+        variables:
+          additionalProperties: true
+          type: object
+          title: Variables
+        transcript:
+          items:
+            $ref: '#/components/schemas/TranscriptTurn'
+          type: array
+          title: Transcript
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        extracted_data:
+          additionalProperties: true
+          type: object
+          title: Extracted Data
+        latency:
+          anyOf:
+          - $ref: '#/components/schemas/LatencyBreakdown'
+          - type: 'null'
+        hangup_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hangup Code
+        started_at:
+          type: string
+          format: date-time
+          title: Started At
+        ended_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Ended At
+        duration_s:
+          type: number
+          title: Duration S
+          default: 0
+        org_id:
+          type: string
+          title: Org Id
+          description: Owning org; lists/gets are scoped to the caller org.
+          default: default
+      type: object
+      required:
+      - execution_id
+      - agent_id
+      - to_number
+      title: Execution
+    ExecutionListResponse:
+      properties:
+        executions:
+          items:
+            $ref: '#/components/schemas/Execution'
+          type: array
+          title: Executions
+        total:
+          type: integer
+          title: Total
+          default: 0
+        limit:
+          type: integer
+          title: Limit
+          default: 50
+        offset:
+          type: integer
+          title: Offset
+          default: 0
+      type: object
+      required:
+      - executions
+      title: ExecutionListResponse
+    ExecutionStats:
+      properties:
+        total:
+          type: integer
+          title: Total
+          default: 0
+        by_status:
+          additionalProperties:
+            type: integer
+          type: object
+          title: By Status
+        avg_e2e_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Avg E2E Ms
+        total_duration_s:
+          type: number
+          title: Total Duration S
+          default: 0
+        completed_rate:
+          type: number
+          title: Completed Rate
+          default: 0
+      type: object
+      title: ExecutionStats
+    ExecutionStatus:
+      type: string
+      enum:
+      - queued
+      - ringing
+      - in_progress
+      - completed
+      - failed
+      - no-answer
+      - busy
+      - canceled
+      title: ExecutionStatus
     ExpressionCondition:
       properties:
         variable:
@@ -972,6 +5048,36 @@ components:
           default: true
       type: object
       title: GeminiLiveConfig
+    GraphDoc:
+      properties:
+        graph_id:
+          type: string
+          title: Graph Id
+        name:
+          type: string
+          title: Name
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        definition:
+          additionalProperties: true
+          type: object
+          title: Definition
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - graph_id
+      - name
+      title: GraphDoc
     GraphEdge:
       properties:
         to_node_id:
@@ -1044,6 +5150,62 @@ components:
         Each edge represents a possible transition from the current node.
 
         The LLM will call the transition function when the condition is met.'
+    GraphListResponse:
+      properties:
+        graphs:
+          items:
+            $ref: '#/components/schemas/GraphDoc'
+          type: array
+          title: Graphs
+      type: object
+      required:
+      - graphs
+      title: GraphListResponse
+    GraphVersion:
+      properties:
+        version_id:
+          type: string
+          title: Version Id
+        graph_id:
+          type: string
+          title: Graph Id
+        version_number:
+          type: integer
+          title: Version Number
+        name:
+          type: string
+          title: Name
+        definition:
+          additionalProperties: true
+          type: object
+          title: Definition
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - version_id
+      - graph_id
+      - version_number
+      - name
+      title: GraphVersion
+    GraphVersionListResponse:
+      properties:
+        versions:
+          items:
+            $ref: '#/components/schemas/GraphVersion'
+          type: array
+          title: Versions
+      type: object
+      required:
+      - versions
+      title: GraphVersionListResponse
     HTTPValidationError:
       properties:
         detail:
@@ -1053,6 +5215,27 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    HealthResponse:
+      properties:
+        ok:
+          type: boolean
+          title: Ok
+        redis:
+          type: boolean
+          title: Redis
+        platform:
+          type: boolean
+          title: Platform
+        stream_secret_configured:
+          type: boolean
+          title: Stream Secret Configured
+      type: object
+      required:
+      - ok
+      - redis
+      - platform
+      - stream_secret_configured
+      title: HealthResponse
     IOModel:
       properties:
         provider:
@@ -1068,6 +5251,223 @@ components:
       required:
       - provider
       title: IOModel
+    InboundConfig:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+        assigned_number_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assigned Number Id
+        greeting:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Greeting
+        spam_protection:
+          type: boolean
+          title: Spam Protection
+          default: true
+        caller_match_source:
+          type: string
+          enum:
+          - none
+          - csv
+          - sheets
+          - api
+          title: Caller Match Source
+          default: none
+        caller_match_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Caller Match Ref
+        blocklist:
+          items:
+            type: string
+          type: array
+          title: Blocklist
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - agent_id
+      title: InboundConfig
+    Integration:
+      properties:
+        integration_id:
+          type: string
+          title: Integration Id
+        kind:
+          type: string
+          enum:
+          - twilio
+          - plivo
+          - exotel
+          - vobiz
+          - talko
+          - calcom
+          - n8n
+          - zapier
+          - sheets
+          - sip
+          - truecaller
+          title: Kind
+        name:
+          type: string
+          title: Name
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - integration_id
+      - kind
+      - name
+      title: Integration
+    IntegrationListResponse:
+      properties:
+        integrations:
+          items:
+            $ref: '#/components/schemas/Integration'
+          type: array
+          title: Integrations
+      type: object
+      required:
+      - integrations
+      title: IntegrationListResponse
+    Invite:
+      properties:
+        invite_id:
+          type: string
+          title: Invite Id
+        email:
+          type: string
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+          default: member
+        token_hash:
+          type: string
+          title: Token Hash
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        accepted:
+          type: boolean
+          title: Accepted
+          default: false
+        created_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created By
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - invite_id
+      - email
+      - token_hash
+      - expires_at
+      title: Invite
+    InviteListResponse:
+      properties:
+        invites:
+          items:
+            $ref: '#/components/schemas/Invite'
+          type: array
+          title: Invites
+      type: object
+      required:
+      - invites
+      title: InviteListResponse
+    InviteRequest:
+      properties:
+        email:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          title: Email
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+          default: member
+      type: object
+      required:
+      - email
+      title: InviteRequest
+    KBListResponse:
+      properties:
+        knowledgebases:
+          items:
+            $ref: '#/components/schemas/KnowledgeBase'
+          type: array
+          title: Knowledgebases
+      type: object
+      required:
+      - knowledgebases
+      title: KBListResponse
+    KBSource:
+      properties:
+        type:
+          type: string
+          enum:
+          - pdf
+          - url
+          - text
+          title: Type
+        ref:
+          type: string
+          minLength: 1
+          title: Ref
+          description: URL, file key, or inline text.
+      type: object
+      required:
+      - type
+      - ref
+      title: KBSource
     KalpaConfig:
       properties:
         voice:
@@ -1265,6 +5665,37 @@ components:
           description: Context data injected into the agent's knowledge space.
       type: object
       title: KnowledgeAgentConfig
+    KnowledgeBase:
+      properties:
+        kb_id:
+          type: string
+          title: Kb Id
+        name:
+          type: string
+          title: Name
+        sources:
+          items:
+            $ref: '#/components/schemas/KBSource'
+          type: array
+          title: Sources
+        status:
+          type: string
+          title: Status
+          default: ready
+        agent_ids:
+          items:
+            type: string
+          type: array
+          title: Agent Ids
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - kb_id
+      - name
+      title: KnowledgeBase
     KnowledgebaseAgent:
       properties:
         model:
@@ -1427,6 +5858,117 @@ components:
       additionalProperties: true
       type: object
       title: LanceDBProviderConfig
+    LatencyBreakdown:
+      properties:
+        transcriber_ms:
+          type: integer
+          title: Transcriber Ms
+          default: 0
+        llm_ms:
+          type: integer
+          title: Llm Ms
+          default: 0
+        synthesizer_ms:
+          type: integer
+          title: Synthesizer Ms
+          default: 0
+        e2e_ms:
+          type: integer
+          title: E2E Ms
+          default: 0
+      type: object
+      title: LatencyBreakdown
+    LatencyBucket:
+      properties:
+        date:
+          type: string
+          title: Date
+        count:
+          type: integer
+          title: Count
+        avg_e2e_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Avg E2E Ms
+      type: object
+      required:
+      - date
+      - count
+      title: LatencyBucket
+    LatencyStats:
+      properties:
+        count:
+          type: integer
+          title: Count
+          default: 0
+        avg_e2e_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Avg E2E Ms
+        p50_e2e_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: P50 E2E Ms
+        p95_e2e_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: P95 E2E Ms
+        by_stage:
+          additionalProperties:
+            type: integer
+          type: object
+          title: By Stage
+        buckets:
+          items:
+            $ref: '#/components/schemas/LatencyBucket'
+          type: array
+          title: Buckets
+      type: object
+      title: LatencyStats
+    LedgerEntry:
+      properties:
+        entry_id:
+          type: string
+          title: Entry Id
+        type:
+          type: string
+          enum:
+          - topup
+          - debit
+          title: Type
+        amount_credits:
+          type: number
+          title: Amount Credits
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - entry_id
+      - type
+      - amount_credits
+      title: LedgerEntry
+    LedgerListResponse:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+          type: array
+          title: Entries
+      type: object
+      required:
+      - entries
+      title: LedgerListResponse
     Llm:
       properties:
         model:
@@ -1589,6 +6131,27 @@ components:
       - nodes
       - edges
       title: LlmAgentGraph
+    LoginRequest:
+      properties:
+        email:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          title: Email
+        password:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Password
+        remember:
+          type: boolean
+          title: Remember
+          description: Extend the session to 30 days instead of the default week.
+          default: false
+      type: object
+      required:
+      - email
+      - password
+      title: LoginRequest
     MayaConfig:
       properties:
         voice_id:
@@ -1612,6 +6175,34 @@ components:
       - voice
       - model
       title: MayaConfig
+    Member:
+      properties:
+        email:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+          default: member
+        added_at:
+          type: string
+          format: date-time
+          title: Added At
+      type: object
+      required:
+      - email
+      title: Member
     MongoDBProviderConfig:
       properties:
         connection_string:
@@ -1728,6 +6319,34 @@ components:
       - static
       - router
       title: NodeType
+    NotificationPrefs:
+      properties:
+        low_balance_enabled:
+          type: boolean
+          title: Low Balance Enabled
+          default: true
+        low_balance_threshold:
+          type: number
+          title: Low Balance Threshold
+          default: 50
+        call_failed_enabled:
+          type: boolean
+          title: Call Failed Enabled
+          default: true
+        batch_completed_enabled:
+          type: boolean
+          title: Batch Completed Enabled
+          default: true
+        channel_email:
+          type: boolean
+          title: Channel Email
+          default: true
+        channel_webhook:
+          type: boolean
+          title: Channel Webhook
+          default: false
+      type: object
+      title: NotificationPrefs
     OpenAIConfig:
       properties:
         voice:
@@ -1819,6 +6438,97 @@ components:
           description: Language constraint for the session.
       type: object
       title: OpenAIRealtimeConfig
+    Organization:
+      properties:
+        org_id:
+          type: string
+          title: Org Id
+          default: default
+        name:
+          type: string
+          title: Name
+          default: Acme Neural Corp
+        support_email:
+          type: string
+          title: Support Email
+          default: ops@acmeneural.io
+        data_residency:
+          type: string
+          enum:
+          - in
+          - us
+          - eu
+          title: Data Residency
+          default: in
+        session_timeout_mins:
+          type: integer
+          title: Session Timeout Mins
+          default: 60
+        ip_allowlist:
+          items:
+            type: string
+          type: array
+          title: Ip Allowlist
+        notifications:
+          $ref: '#/components/schemas/NotificationPrefs'
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      title: Organization
+    PhoneNumber:
+      properties:
+        number_id:
+          type: string
+          title: Number Id
+        number:
+          type: string
+          title: Number
+        provider:
+          type: string
+          enum:
+          - twilio
+          - plivo
+          - exotel
+          - vobiz
+          - talko
+          - simulated
+          title: Provider
+          default: simulated
+        country:
+          type: string
+          title: Country
+          default: IN
+        assigned_agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assigned Agent Id
+        status:
+          type: string
+          title: Status
+          default: active
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - number_id
+      - number
+      title: PhoneNumber
+    PhoneNumberListResponse:
+      properties:
+        numbers:
+          items:
+            $ref: '#/components/schemas/PhoneNumber'
+          type: array
+          title: Numbers
+      type: object
+      required:
+      - numbers
+      title: PhoneNumberListResponse
     PixaConfig:
       properties:
         voice_id:
@@ -1900,6 +6610,19 @@ components:
       type: object
       title: RerankerConfig
       description: Configuration for document reranking in RAG systems.
+    ResetResponse:
+      properties:
+        state:
+          type: string
+          title: State
+          default: reset
+        cleared:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Cleared
+      type: object
+      title: ResetResponse
     RimeConfig:
       properties:
         voice_id:
@@ -1971,6 +6694,42 @@ components:
       - voice
       - model
       title: SarvamConfig
+    SetRoleRequest:
+      properties:
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+      type: object
+      required:
+      - role
+      title: SetRoleRequest
+    SignupRequest:
+      properties:
+        email:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          title: Email
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        password:
+          type: string
+          maxLength: 128
+          minLength: 8
+          title: Password
+      type: object
+      required:
+      - email
+      - password
+      title: SignupRequest
     SimpleLlmAgent:
       properties:
         model:
@@ -2106,6 +6865,41 @@ components:
           title: Summarization Details
       type: object
       title: SimpleLlmAgent
+    SimulateCallRequest:
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          title: Agent Id
+        to_number:
+          type: string
+          minLength: 1
+          title: To Number
+        from_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Number
+        variables:
+          additionalProperties: true
+          type: object
+          title: Variables
+        batch_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+        delay_scale:
+          type: number
+          minimum: 0.0
+          title: Delay Scale
+          description: 0 = complete inline (tests), >0 = background with scaled delays.
+          default: 0.5
+      type: object
+      required:
+      - agent_id
+      - to_number
+      title: SimulateCallRequest
     SmallestConfig:
       properties:
         voice_id:
@@ -2127,6 +6921,44 @@ components:
       - voice
       - model
       title: SmallestConfig
+    SubAccount:
+      properties:
+        sub_id:
+          type: string
+          title: Sub Id
+        name:
+          type: string
+          title: Name
+        concurrency_cap:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Concurrency Cap
+        members:
+          items:
+            $ref: '#/components/schemas/Member'
+          type: array
+          title: Members
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - sub_id
+      - name
+      title: SubAccount
+    SubAccountListResponse:
+      properties:
+        sub_accounts:
+          items:
+            $ref: '#/components/schemas/SubAccount'
+          type: array
+          title: Sub Accounts
+      type: object
+      required:
+      - sub_accounts
+      title: SubAccountListResponse
     Synthesizer:
       properties:
         provider:
@@ -2207,6 +7039,104 @@ components:
       - tools_config
       - toolchain
       title: Task
+    TemplateListResponse:
+      properties:
+        templates:
+          items:
+            $ref: '#/components/schemas/TemplateSummary'
+          type: array
+          title: Templates
+      type: object
+      required:
+      - templates
+      title: TemplateListResponse
+    TemplateSummary:
+      properties:
+        template_id:
+          type: string
+          title: Template Id
+        name:
+          type: string
+          title: Name
+        industry:
+          type: string
+          title: Industry
+        description:
+          type: string
+          title: Description
+        languages:
+          items:
+            type: string
+          type: array
+          title: Languages
+      type: object
+      required:
+      - template_id
+      - name
+      - industry
+      - description
+      title: TemplateSummary
+    TestRunRequest:
+      properties:
+        to_number:
+          type: string
+          title: To Number
+          default: '+910000000000'
+        variables:
+          additionalProperties: true
+          type: object
+          title: Variables
+        delay_scale:
+          type: number
+          minimum: 0.0
+          title: Delay Scale
+          default: 0.5
+      type: object
+      title: TestRunRequest
+    Tool:
+      properties:
+        tool_id:
+          type: string
+          title: Tool Id
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        name:
+          type: string
+          title: Name
+        kind:
+          type: string
+          enum:
+          - transfer
+          - calendar
+          - custom
+          - datetime
+          title: Kind
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+        org_id:
+          type: string
+          title: Org Id
+          description: Owning org; lists are scoped to the caller org.
+          default: default
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - tool_id
+      - name
+      - kind
+      title: Tool
     ToolDescription:
       properties:
         type:
@@ -2268,6 +7198,17 @@ components:
       - description
       - parameters
       title: ToolFunction
+    ToolListResponse:
+      properties:
+        tools:
+          items:
+            $ref: '#/components/schemas/Tool'
+          type: array
+          title: Tools
+      type: object
+      required:
+      - tools
+      title: ToolListResponse
     ToolModel:
       properties:
         tools:
@@ -2387,6 +7328,24 @@ components:
           description: Mapping of agent names for multi-agent dispatching.
       type: object
       title: ToolsConfig
+    TopUpRequest:
+      properties:
+        amount_credits:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Amount Credits
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+      type: object
+      required:
+      - amount_credits
+      title: TopUpRequest
     Transcriber:
       properties:
         model:
@@ -2518,6 +7477,230 @@ components:
           default: 300
       type: object
       title: Transcriber
+    TranscriptTurn:
+      properties:
+        role:
+          type: string
+          enum:
+          - agent
+          - user
+          title: Role
+          description: Who spoke this turn.
+        text:
+          type: string
+          title: Text
+          description: Spoken text.
+        ts:
+          type: number
+          title: Ts
+          description: Offset in seconds from call start.
+        latency_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Latency Ms
+          description: Agent response latency for this turn.
+      type: object
+      required:
+      - role
+      - text
+      - ts
+      title: TranscriptTurn
+    UpdateGraphRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        definition:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Definition
+      type: object
+      title: UpdateGraphRequest
+    UpdateInboundRequest:
+      properties:
+        assigned_number_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assigned Number Id
+        greeting:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Greeting
+        spam_protection:
+          type: boolean
+          title: Spam Protection
+          default: true
+        caller_match_source:
+          type: string
+          enum:
+          - none
+          - csv
+          - sheets
+          - api
+          title: Caller Match Source
+          default: none
+        caller_match_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Caller Match Ref
+        blocklist:
+          items:
+            type: string
+          type: array
+          title: Blocklist
+      type: object
+      title: UpdateInboundRequest
+    UpdateIntegrationRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Config
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      type: object
+      title: UpdateIntegrationRequest
+    UpdateOrganizationRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        support_email:
+          anyOf:
+          - type: string
+            pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          - type: 'null'
+          title: Support Email
+        data_residency:
+          anyOf:
+          - type: string
+            enum:
+            - in
+            - us
+            - eu
+          - type: 'null'
+          title: Data Residency
+        session_timeout_mins:
+          anyOf:
+          - type: integer
+            maximum: 480.0
+            minimum: 5.0
+          - type: 'null'
+          title: Session Timeout Mins
+        ip_allowlist:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Ip Allowlist
+        notifications:
+          anyOf:
+          - $ref: '#/components/schemas/NotificationPrefs'
+          - type: 'null'
+      type: object
+      title: UpdateOrganizationRequest
+    UpdateWorkflowRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Name
+        definition:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Definition
+      type: object
+      title: UpdateWorkflowRequest
+    UserListResponse:
+      properties:
+        users:
+          items:
+            $ref: '#/components/schemas/UserResponse'
+          type: array
+          title: Users
+      type: object
+      required:
+      - users
+      title: UserListResponse
+    UserResponse:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        email:
+          type: string
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        role:
+          type: string
+          enum:
+          - owner
+          - admin
+          - member
+          - viewer
+          title: Role
+        org_id:
+          type: string
+          title: Org Id
+          default: default
+        disabled:
+          type: boolean
+          title: Disabled
+          default: false
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        last_login_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Login At
+      type: object
+      required:
+      - user_id
+      - email
+      - role
+      - created_at
+      title: UserResponse
     ValidationError:
       properties:
         loc:
@@ -2539,6 +7722,25 @@ components:
       - msg
       - type
       title: ValidationError
+    ValidationResult:
+      properties:
+        valid:
+          type: boolean
+          title: Valid
+        errors:
+          items:
+            type: string
+          type: array
+          title: Errors
+        warnings:
+          items:
+            type: string
+          type: array
+          title: Warnings
+      type: object
+      required:
+      - valid
+      title: ValidationResult
     VectorStore:
       properties:
         provider:
@@ -2554,6 +7756,88 @@ components:
       - provider
       - provider_config
       title: VectorStore
+    VectorStoreConfig:
+      properties:
+        provider:
+          type: string
+          enum:
+          - mongodb
+          - lancedb
+          title: Provider
+          default: mongodb
+        connection_string:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Connection String
+        db_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Db Name
+        collection_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Collection Name
+        index_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Index Name
+        embedding_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Embedding Model
+        embedding_dimensions:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Embedding Dimensions
+        vector_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Vector Id
+        similarity_top_k:
+          type: integer
+          title: Similarity Top K
+          default: 5
+        score_threshold:
+          type: number
+          title: Score Threshold
+          default: 0.1
+        reranker_enabled:
+          type: boolean
+          title: Reranker Enabled
+          default: false
+        reranker_model_type:
+          type: string
+          title: Reranker Model Type
+          default: minilm-l6-v2
+        candidate_count:
+          type: integer
+          title: Candidate Count
+          default: 20
+        final_count:
+          type: integer
+          title: Final Count
+          default: 5
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      title: VectorStoreConfig
+      description: 'Manual vector-store connection for knowledge/graph agents.
+
+
+        Persisted per agent in the platform store (never silently dropped).
+
+        `connection_string` holds credentials: GETs return the masked literal,
+
+        PUTs with the masked literal preserve the stored secret (never clobber).'
     Verbosity:
       type: string
       enum:
@@ -2561,14 +7845,204 @@ components:
       - medium
       - high
       title: Verbosity
-    CallDetails:
+    VoiceEntry:
+      properties:
+        voice_id:
+          type: string
+          title: Voice Id
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        name:
+          type: string
+          title: Name
+        provider:
+          type: string
+          title: Provider
+        provider_voice_id:
+          type: string
+          title: Provider Voice Id
+        source:
+          type: string
+          enum:
+          - provider
+          - cloned
+          - imported
+          title: Source
+          default: provider
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - voice_id
+      - name
+      - provider
+      - provider_voice_id
+      title: VoiceEntry
+    VoiceListResponse:
+      properties:
+        voices:
+          items:
+            $ref: '#/components/schemas/VoiceEntry'
+          type: array
+          title: Voices
+      type: object
+      required:
+      - voices
+      title: VoiceListResponse
+    Wallet:
+      properties:
+        balance_credits:
+          type: number
+          title: Balance Credits
+          default: 0.0
+        currency:
+          type: string
+          title: Currency
+          default: credits
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      title: Wallet
+      description: 'Topup-only decorative balance (no debit path calls it yet; `debit`
+        ledger type is reserved).
+
+
+        Amounts are Decimal internally (serialized as float for API compat) and topups
+        are
+
+        atomic via the store lock; Redis multi-worker deployments need a Lua/WATCH
+        transaction
+
+        for the same guarantee (see MemoryStore.topup_wallet_credits).'
+    Webhook:
+      properties:
+        webhook_id:
+          type: string
+          title: Webhook Id
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+        url:
+          type: string
+          title: Url
+        events:
+          items:
+            type: string
+          type: array
+          title: Events
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+        org_id:
+          type: string
+          title: Org Id
+          description: Owning org; lists are scoped to the caller org.
+          default: default
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - webhook_id
+      - url
+      title: Webhook
+    WebhookListResponse:
+      properties:
+        webhooks:
+          items:
+            $ref: '#/components/schemas/Webhook'
+          type: array
+          title: Webhooks
+      type: object
+      required:
+      - webhooks
+      title: WebhookListResponse
+    WsTicketResponse:
+      properties:
+        ticket:
+          type: string
+          title: Ticket
+          description: Single-use websocket ticket, valid 60s.
+        expires_in:
+          type: integer
+          title: Expires In
+          default: 60
+      type: object
+      required:
+      - ticket
+      title: WsTicketResponse
+    TalkoCallDetails:
       properties:
         agent_id:
           type: string
           title: Agent Id
+          description: voiceai agent id that will handle the call.
+        recipient_phone_number:
+          type: string
+          title: Recipient Phone Number
+          description: Customer number to dial (e.g. 919812345678).
+        caller_did:
+          type: string
+          title: Caller Did
+          description: Override for the dedicated DID (defaults to TALKO_AI_DID).
+          default: ''
+        partner_id:
+          type: string
+          title: Partner Id
+          description: Override for TALKO_PARTNER_ID.
+          default: ''
+        talko_api_key:
+          type: string
+          title: Talko Api Key
+          description: Talko partner API key for this call (defaults to TALKO_API_KEY
+            env). Lets each UI user dial with their own key.
+          default: ''
+      type: object
+      required:
+      - agent_id
+      - recipient_phone_number
+      title: TalkoCallDetails
+    TalkoHangupDetails:
+      properties:
+        call_id:
+          type: string
+          title: Call Id
+          description: Vendor call_id to hang up (from /talko/call response when present).
+        talko_api_key:
+          type: string
+          title: Talko Api Key
+          description: Talko partner API key (defaults to TALKO_API_KEY env).
+          default: ''
+      type: object
+      required:
+      - call_id
+      title: TalkoHangupDetails
+    CallDetails:
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          title: Agent Id
           description: The ID of the agent to handle the call.
         recipient_phone_number:
           type: string
+          minLength: 3
           title: Recipient Phone Number
           description: The phone number to call in E.164 format (e.g., +1234567890).
       type: object
@@ -2576,3 +8050,22 @@ components:
       - agent_id
       - recipient_phone_number
       title: CallDetails
+    CallInitiated:
+      properties:
+        status:
+          type: string
+          title: Status
+          default: initiated
+        request_uuid:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Request Uuid
+          description: Plivo request UUID when the carrier accepted the request.
+        agent_id:
+          type: string
+          title: Agent Id
+      type: object
+      required:
+      - agent_id
+      title: CallInitiated

@@ -132,17 +132,13 @@ class GladiaTranscriber(BaseTranscriber):
 
     def _configure_audio_params(self):
         """Configure audio parameters based on telephony provider."""
-        if self.provider in TelephonyProvider.mulaw_values():
-            # Twilio/sip-trunk send mulaw at 8kHz - Gladia supports this natively
-            self.encoding = "wav/ulaw"
+        if self.provider in TelephonyProvider.telephony_values():
+            # All telephony legs stream 8kHz: mulaw (twilio/sip-trunk/talko) natively,
+            # linear16 (exotel/plivo/vobiz) as wav/pcm.
+            is_mulaw = self.provider in TelephonyProvider.mulaw_values()
+            self.encoding = "wav/ulaw" if is_mulaw else "wav/pcm"
             self.sample_rate = 8000
-            self.bit_depth = 8
-            self.audio_frame_duration = 0.2
-        elif self.provider in ("exotel", "plivo"):
-            # Exotel and Plivo send linear16 at 8kHz
-            self.encoding = "wav/pcm"
-            self.sample_rate = 8000
-            self.bit_depth = 16
+            self.bit_depth = 8 if is_mulaw else 16
             self.audio_frame_duration = 0.2
         elif self.provider == "web_based_call":
             # Web calls typically use 16kHz
@@ -150,6 +146,12 @@ class GladiaTranscriber(BaseTranscriber):
             self.sample_rate = 16000
             self.bit_depth = 16
             self.audio_frame_duration = 0.256
+        elif self.provider == TelephonyProvider.FREESWITCH.value:
+            # FreeSWITCH webcall media fork streams linear16 mono @16k.
+            self.encoding = "wav/pcm"
+            self.sample_rate = 16000
+            self.bit_depth = 16
+            self.audio_frame_duration = 0.2
         elif self.provider == "playground":
             # Playground/dashboard mode
             self.encoding = "wav/pcm"
@@ -348,11 +350,11 @@ class GladiaTranscriber(BaseTranscriber):
                 self.current_turn_interim_details
             )
 
-            self.turn_latencies.append(
+            self._upsert_turn_latency(
                 {
                     "turn_id": self.current_turn_id,
                     "sequence_id": self.current_turn_id,
-                    "interim_details": self.current_turn_interim_details,
+                    "interim_details": list(self.current_turn_interim_details),
                     "first_interim_to_final_ms": first_interim_to_final_ms,
                     "last_interim_to_final_ms": last_interim_to_final_ms,
                     "force_finalized": True,
@@ -614,11 +616,11 @@ class GladiaTranscriber(BaseTranscriber):
                                     self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                                 )
 
-                                self.turn_latencies.append(
+                                self._upsert_turn_latency(
                                     {
                                         "turn_id": self.current_turn_id,
                                         "sequence_id": self.current_turn_id,
-                                        "interim_details": self.current_turn_interim_details,
+                                        "interim_details": list(self.current_turn_interim_details),
                                         "first_interim_to_final_ms": first_interim_to_final_ms,
                                         "last_interim_to_final_ms": last_interim_to_final_ms,
                                         "asr_start_epoch_ms": self.speech_start_time,

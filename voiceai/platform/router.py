@@ -10,7 +10,7 @@ import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
@@ -128,6 +128,79 @@ from voiceai.platform.templates_seed import get_template as lookup_template
 
 logger = configure_logger(__name__)
 
+# Batch background execution: start returns 202 immediately so a 100-entry Talko pass
+# (semaphore 3 x 20s trunk timeouts) never blocks the worker. Poll GET /batches/{id}.
+_BATCH_TASKS = None  # lazy TaskRegistry to avoid import cycles at module load
+_BATCH_JOBS: Dict[str, asyncio.Task] = {}
+_CALL_TASKS = None  # registry for /calls/simulate background progressions
+
+
+def _batch_registry():  # type: ignore[no-untyped-def]
+    global _BATCH_TASKS
+    if _BATCH_TASKS is None:
+        from voiceai.helpers.resilience import TaskRegistry
+
+        _BATCH_TASKS = TaskRegistry("batches", logger=logger)
+    return _BATCH_TASKS
+
+
+def _call_registry():  # type: ignore[no-untyped-def]
+    global _CALL_TASKS
+    if _CALL_TASKS is None:
+        from voiceai.helpers.resilience import TaskRegistry
+
+        _CALL_TASKS = TaskRegistry("calls", logger=logger)
+    return _CALL_TASKS
+
+
+def _batch_max_entries() -> int:
+    from voiceai.platform.models import BATCH_MAX_ENTRIES
+
+    try:
+        return max(1, int(os.getenv("BATCH_MAX_ENTRIES", str(BATCH_MAX_ENTRIES))))
+    except ValueError:
+        return BATCH_MAX_ENTRIES
+
+
+async def _run_batch_background(store: MemoryStore, batch_id: str, delay_scale: float) -> None:
+    """Background dial pass for POST /batches/{id}/start (TaskRegistry-owned)."""
+    from voiceai.errors import VoiceAIError, is_cancellation
+
+    try:
+        from voiceai.platform.simulation import run_batch as _run_batch
+
+        await _run_batch(store, batch_id, delay_scale=delay_scale)
+        _ANALYTICS_CACHE.clear()
+    except asyncio.CancelledError:
+        raise
+    except VoiceAIError as exc:
+        # Window/limit refusals that raced the claim: park the batch back so the client sees why.
+        if is_cancellation(exc):
+            raise
+        logger.warning(f"Batch {batch_id} background run refused: {exc}")
+        try:
+            batch = await store.get_batch(batch_id)
+            if batch is not None and batch.status == BatchStatus.RUNNING:
+                batch.status = BatchStatus.STOPPED
+                batch.ended_at = utcnow()
+                await store.save_batch(batch)
+        except Exception:
+            pass
+    except Exception as exc:
+        if is_cancellation(exc):
+            raise
+        logger.error(f"Batch {batch_id} background run failed: {exc}", exc_info=exc)
+        try:
+            batch = await store.get_batch(batch_id)
+            if batch is not None and batch.status == BatchStatus.RUNNING:
+                batch.status = BatchStatus.STOPPED
+                batch.ended_at = utcnow()
+                await store.save_batch(batch)
+        except Exception:
+            pass
+    finally:
+        _BATCH_JOBS.pop(batch_id, None)
+
 
 def get_store(request: Request) -> MemoryStore:
     return request.app.state.platform_store
@@ -135,6 +208,24 @@ def get_store(request: Request) -> MemoryStore:
 
 def _not_found(resource: str, resource_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{resource} {resource_id} not found")
+
+
+def _org_of(principal: Principal) -> str:
+    return principal.org_id or "default"
+
+
+def _require_same_org(principal: Principal, resource_org: Optional[str], resource: str = "resource") -> None:
+    """Tenancy starter: strict org match (single-default compat). Raises 403 on cross-org access."""
+    from voiceai.errors import AuthorizationError
+
+    expected = _org_of(principal)
+    actual = resource_org or "default"
+    if actual != expected:
+        raise AuthorizationError(f"{resource} belongs to another organization")
+
+
+def _same_org(principal: Principal, resource_org: Optional[str]) -> bool:
+    return (resource_org or "default") == _org_of(principal)
 
 
 # --- executions & calls ---------------------------------------------------------
@@ -149,10 +240,13 @@ _ANALYTICS_CACHE: Dict[Tuple[Any, ...], Tuple[float, Any]] = {}
 
 
 @calls_router.post("/simulate", response_model=Execution, status_code=202)
-async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:write")),
+async def simulate_call(
+    payload: SimulateCallRequest,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("calls:write")),
 ) -> Execution:
     """Start a simulated outbound call. delay_scale=0 completes inline."""
+    org_id = _org_of(principal)
     if payload.delay_scale == 0:
         result = await run_simulated_call(
             store,
@@ -162,6 +256,7 @@ async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depen
             variables=payload.variables,
             batch_id=payload.batch_id,
             delay_scale=0,
+            org_id=org_id,
         )
         _ANALYTICS_CACHE.clear()
         return result
@@ -172,10 +267,14 @@ async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depen
         to_number=payload.to_number,
         from_number=payload.from_number,
         variables=payload.variables,
+        org_id=org_id,
     )
     await store.save_execution(execution)
     _ANALYTICS_CACHE.clear()
-    asyncio.create_task(progress_simulated_call(store, execution.execution_id, payload.delay_scale))
+    _call_registry().create(
+        progress_simulated_call(store, execution.execution_id, payload.delay_scale),
+        name=f"simulate-{execution.execution_id}",
+    )
     return execution
 
 
@@ -222,14 +321,13 @@ async def list_executions(
     direction: Optional[str] = Query(None, description="Filter by call direction (outbound/inbound)."),
     limit: int = Query(50, ge=1, le=1000, description="Page size (capped to keep list views fast)."),
     offset: int = Query(0, ge=0, description="Rows to skip for pagination."),
-    include_transcript: bool = Query(
-        True, description="Set false for list views to skip heavy transcript payloads."
-    ),
+    include_transcript: bool = Query(True, description="Set false for list views to skip heavy transcript payloads."),
     store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
+    principal: Principal = Depends(require_scope("calls:read")),
 ) -> ExecutionListResponse:
     if direction is not None and direction not in ("outbound", "inbound"):
         raise HTTPException(status_code=422, detail="direction must be outbound or inbound")
+    org_id = _org_of(principal)
     executions = await store.list_executions(
         agent_id=agent_id,
         batch_id=batch_id,
@@ -238,9 +336,14 @@ async def list_executions(
         offset=offset,
         direction=direction,
         include_transcript=include_transcript,
+        org_id=org_id,
     )
     total = await store.count_executions(
-        agent_id=agent_id, batch_id=batch_id, status=status.value if status else None, direction=direction
+        agent_id=agent_id,
+        batch_id=batch_id,
+        status=status.value if status else None,
+        direction=direction,
+        org_id=org_id,
     )
     return ExecutionListResponse(executions=executions, total=total, limit=limit, offset=offset)
 
@@ -253,14 +356,15 @@ async def get_execution_stats(
     ),
     max_scan: int = Query(5000, ge=1, le=10000, description="Max recent rows aggregated (bounded scan)."),
     store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
+    principal: Principal = Depends(require_scope("calls:read")),
 ) -> ExecutionStats:
-    cache_key = (id(store), "stats", agent_id, days, max_scan)
+    org_id = _org_of(principal)
+    cache_key = (id(store), "stats", agent_id, days, max_scan, org_id)
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     since = _cutoff_for_days(days)
-    agg = await store.aggregate_execution_stats(agent_id=agent_id, since=since, max_scan=max_scan)
+    agg = await store.aggregate_execution_stats(agent_id=agent_id, since=since, max_scan=max_scan, org_id=org_id)
     by_status: dict[str, int] = dict(agg.get("by_status") or {})
     latencies: list[int] = list(agg.get("latencies") or [])
     total_duration: float = float(agg.get("total_duration") or 0.0)
@@ -278,12 +382,15 @@ async def get_execution_stats(
 
 
 @executions_router.get("/{execution_id}", response_model=Execution)
-async def get_execution(execution_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
+async def get_execution(
+    execution_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("calls:read")),
 ) -> Execution:
     execution = await store.get_execution(execution_id)
     if execution is None:
         raise _not_found("Execution", execution_id)
+    _require_same_org(principal, getattr(execution, "org_id", "default"), "Execution")
     return execution
 
 
@@ -293,16 +400,17 @@ async def get_latency_stats(
     days: int = Query(30, ge=1, le=90, description="Bounded window in days (1..90)."),
     max_scan: int = Query(5000, ge=1, le=10000, description="Max recent rows aggregated (bounded scan)."),
     store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
+    principal: Principal = Depends(require_scope("platform:read")),
 ) -> LatencyStats:
     from datetime import datetime, timezone
 
-    cache_key = (id(store), "latency", agent_id, days, max_scan)
+    org_id = _org_of(principal)
+    cache_key = (id(store), "latency", agent_id, days, max_scan, org_id)
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     since = _cutoff_for_days(days)
-    agg = await store.aggregate_latency_stats(agent_id=agent_id, since=since, max_scan=max_scan)
+    agg = await store.aggregate_latency_stats(agent_id=agent_id, since=since, max_scan=max_scan, org_id=org_id)
     fresh_raw = agg.get("fresh") or []
 
     def _e2e(raw: dict) -> Optional[int]:
@@ -363,9 +471,19 @@ batches_router = APIRouter(prefix="/batches", tags=["Batches"])
 
 
 @batches_router.post("", response_model=Batch, status_code=201)
-async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:write")),
+async def create_batch(
+    payload: CreateBatchRequest,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:write")),
 ) -> Batch:
+    from voiceai.errors import InvalidRequestError
+
+    # Bounded queue: 100 entries max (BATCH_MAX_ENTRIES env may lower it). Start is async 202 +
+    # poll, so larger gathers would still block the trunk semaphore for minutes; the limit keeps
+    # the worker and the status poll bounded. Dials never debit the wallet (decorative balance).
+    if len(payload.entries) > _batch_max_entries():
+        raise InvalidRequestError(f"Batch exceeds max entries ({_batch_max_entries()})")
+    # talko_api_key is write-only: held ephemerally for the dial, never in the batch row.
     batch = Batch(
         batch_id=new_id("batch"),
         agent_id=payload.agent_id,
@@ -376,61 +494,122 @@ async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends
         calling_hours=payload.calling_hours,
         provider=payload.provider,
         from_number=payload.from_number,
-        talko_api_key=payload.talko_api_key,
+        org_id=_org_of(principal),
     )
     batch.stats.total = len(batch.entries)
     batch.stats.queued = len(batch.entries)
     await store.save_batch(batch)
+    if payload.talko_api_key:
+        setter = getattr(store, "set_batch_talko_key", None)
+        if callable(setter):
+            await setter(batch.batch_id, payload.talko_api_key)
     return batch
 
 
 @batches_router.get("", response_model=BatchListResponse)
-async def list_batches(agent_id: Optional[str] = None, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:read")),
+async def list_batches(
+    agent_id: Optional[str] = None,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:read")),
 ) -> BatchListResponse:
-    return BatchListResponse(batches=await store.list_batches(agent_id=agent_id))
+    return BatchListResponse(batches=await store.list_batches(agent_id=agent_id, org_id=_org_of(principal)))
 
 
 @batches_router.get("/{batch_id}", response_model=Batch)
-async def get_batch(batch_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:read")),
+async def get_batch(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:read")),
 ) -> Batch:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
     return batch
 
 
-@batches_router.post("/{batch_id}/start", response_model=Batch)
-async def start_batch(batch_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:write")),
+@batches_router.post("/{batch_id}/start", response_model=Batch, status_code=202)
+async def start_batch(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:write")),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    delay_scale: float = Query(
+        default=0.0, ge=0, description="Per-dial delay scale for simulated batches (0 = instant)."
+    ),
 ) -> Batch:
+    """Claim a batch and dial it in the background (202 + poll GET /batches/{id}).
+
+    Compare-and-set DRAFT/SCHEDULED -> RUNNING with Idempotency-Key: replaying the same key
+    returns the same batch without a second dial pass; a different key while running/terminal
+    gets 409. Calling windows (with tz) are enforced here and again inside run_batch.
+    """
+    from voiceai.errors import ConflictError
+
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    if batch.status not in (BatchStatus.DRAFT, BatchStatus.SCHEDULED):
-        raise HTTPException(status_code=409, detail=f"Batch {batch_id} is {batch.status.value}, cannot start")
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
     if batch.calling_hours is not None and not is_within_calling_hours(utcnow(), batch.calling_hours):
-        raise HTTPException(status_code=409, detail=f"Batch {batch_id} is outside its calling hours")
-    # delay_scale lives on the create payload in spirit; executions here run
-    # inline so the response reflects the terminal state deterministically.
-    updated = await run_batch(store, batch_id, delay_scale=0)
-    assert updated is not None
+        raise ConflictError(f"Batch {batch_id} is outside its calling hours")
+    try:
+        claimed_batch, claimed = await store.try_claim_batch_start(batch_id, idempotency_key)
+    except KeyError:
+        raise _not_found("Batch", batch_id)
+    if not claimed:
+        # Idempotent replay: the winning pass is already running/finished; never re-dial.
+        logger.info(f"Batch {batch_id} start replayed with same Idempotency-Key")
+        return claimed_batch
     _ANALYTICS_CACHE.clear()
-    return updated
+    task = _batch_registry().create(_run_batch_background(store, batch_id, delay_scale), name=f"batch-{batch_id}")
+    _BATCH_JOBS[batch_id] = task
+    running = await store.get_batch(batch_id)
+    assert running is not None
+    return running
+
+
+@batches_router.get("/{batch_id}/status")
+async def get_batch_status(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:read")),
+) -> JSONResponse:
+    """Lightweight poll endpoint for background starts (202 pattern)."""
+    batch = await store.get_batch(batch_id)
+    if batch is None:
+        raise _not_found("Batch", batch_id)
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
+    return JSONResponse(
+        content={
+            "batch_id": batch.batch_id,
+            "status": batch.status.value,
+            "stats": batch.stats.model_dump(mode="json"),
+            "provider": batch.provider,
+            "started_at": batch.started_at.isoformat() if batch.started_at else None,
+            "ended_at": batch.ended_at.isoformat() if batch.ended_at else None,
+        }
+    )
 
 
 @batches_router.post("/{batch_id}/stop", response_model=Batch)
-async def stop_batch(batch_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:write")),
+async def stop_batch(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:write")),
 ) -> Batch:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
     if batch.status not in (BatchStatus.STOPPED, BatchStatus.COMPLETED):
         batch.status = BatchStatus.STOPPED
         batch.ended_at = utcnow()
         await store.save_batch(batch)
+    # Cancel the background dial pass: run_batch checks STOPPED before every entry and the
+    # in-flight trunk POST propagates cancellation, so no new dials start after this.
+    task = _BATCH_JOBS.get(batch_id)
+    if task is not None and not task.done():
+        task.cancel()
     return batch
 
 
@@ -441,53 +620,117 @@ async def get_batch_executions(
     offset: int = Query(0, ge=0, description="Rows to skip for pagination."),
     include_transcript: bool = Query(True, description="Set false for list views to skip heavy transcripts."),
     store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:read")),
+    principal: Principal = Depends(require_scope("batches:read")),
 ) -> ExecutionListResponse:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
+    org_id = _org_of(principal)
     executions = await store.list_executions(
-        batch_id=batch_id, limit=limit, offset=offset, include_transcript=include_transcript
+        batch_id=batch_id, limit=limit, offset=offset, include_transcript=include_transcript, org_id=org_id
     )
-    total = await store.count_executions(batch_id=batch_id)
+    total = await store.count_executions(batch_id=batch_id, org_id=org_id)
     return ExecutionListResponse(executions=executions, total=total, limit=limit, offset=offset)
 
 
 @batches_router.post("/{batch_id}/retry-failed", response_model=Batch, status_code=201)
-async def retry_failed(batch_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:write")),
+async def retry_failed(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:write")),
+    include_live: bool = Query(
+        default=False,
+        description="When false (default) live IN_PROGRESS/RINGING/QUEUED entries are excluded; "
+        "set true to explicitly re-dial them.",
+    ),
 ) -> Batch:
+    from voiceai.errors import ConflictError, InvalidRequestError
+
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    # Bounded: batches cap at 1000 entries, so 2000 covers retries without a 10k full-scan.
-    executions = await store.list_executions(batch_id=batch_id, limit=2000)
-    failed = [e for e in executions if e.status != ExecutionStatus.COMPLETED]
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
+    # Bounded: batches cap at 100 entries, so 500 covers retries without a full scan.
+    executions = await store.list_executions(batch_id=batch_id, limit=500, org_id=_org_of(principal))
+    terminal = {
+        ExecutionStatus.FAILED,
+        ExecutionStatus.NO_ANSWER,
+        ExecutionStatus.BUSY,
+        ExecutionStatus.CANCELED,
+    }
+    if include_live:
+        failed = [e for e in executions if e.status != ExecutionStatus.COMPLETED]
+    else:
+        # Live Talko dials stay IN_PROGRESS forever (outcome in CDR): re-dialing them would place
+        # a second real call, so they require explicit ?include_live=true.
+        failed = [e for e in executions if e.status in terminal]
     if not failed:
-        raise HTTPException(status_code=409, detail=f"Batch {batch_id} has no failed executions to retry")
+        raise ConflictError(f"Batch {batch_id} has no failed executions to retry")
+    if len(failed) > _batch_max_entries():
+        raise InvalidRequestError(f"Retry exceeds max entries ({_batch_max_entries()})")
     retried = Batch(
         batch_id=new_id("batch"),
         agent_id=batch.agent_id,
         name=f"{batch.name} (retry)",
         entries=[BatchEntry(to_number=e.to_number, variables=dict(e.variables)) for e in failed],
         calling_hours=batch.calling_hours,
+        provider=getattr(batch, "provider", "simulated"),
+        from_number=getattr(batch, "from_number", None),
+        org_id=_org_of(principal),
     )
     retried.stats.total = len(retried.entries)
     retried.stats.queued = len(retried.entries)
     await store.save_batch(retried)
+    # Carry the ephemeral Talko key so retries dial with the same per-batch credential.
+    try:
+        getter = getattr(store, "get_batch_talko_key", None)
+        setter = getattr(store, "set_batch_talko_key", None)
+        if callable(getter) and callable(setter):
+            prior = await getter(batch_id)
+            if prior:
+                await setter(retried.batch_id, prior)
+    except Exception:
+        pass
     logger.info(f"Batch {batch_id} retried as {retried.batch_id} with {len(retried.entries)} entries")
     return retried
 
 
 @batches_router.delete("/{batch_id}", response_model=DeletedResponse)
-async def delete_batch(batch_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("batches:write")),
+async def delete_batch(
+    batch_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("batches:write")),
 ) -> DeletedResponse:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    batch.status = BatchStatus.STOPPED
-    await store.save_batch(batch)
+    _require_same_org(principal, getattr(batch, "org_id", "default"), "Batch")
+    # Stop the background pass first so no new dials start, then delete the record, its
+    # executions, and the ephemeral Talko key. A deleted batch reads back 404.
+    task = _BATCH_JOBS.get(batch_id)
+    if task is not None and not task.done():
+        task.cancel()
+        _BATCH_JOBS.pop(batch_id, None)
+    org_id = _org_of(principal)
+    try:
+        deleter = getattr(store, "delete_executions_for_batch", None)
+        if callable(deleter):
+            await deleter(batch_id, org_id)
+    except Exception:
+        pass
+    remover = getattr(store, "delete_batch", None)
+    if callable(remover):
+        await remover(batch_id)
+    else:
+        batch.status = BatchStatus.STOPPED
+        await store.save_batch(batch)
+    try:
+        clearer = getattr(store, "clear_batch_talko_key", None)
+        if callable(clearer):
+            await clearer(batch_id)
+    except Exception:
+        pass
     return DeletedResponse()
 
 
@@ -497,7 +740,9 @@ numbers_router = APIRouter(prefix="/phone-numbers", tags=["Phone Numbers"])
 
 
 @numbers_router.post("", response_model=PhoneNumber, status_code=201)
-async def create_number(payload: CreatePhoneNumberRequest, store: MemoryStore = Depends(get_store),
+async def create_number(
+    payload: CreatePhoneNumberRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> PhoneNumber:
     number = PhoneNumber(
@@ -508,7 +753,8 @@ async def create_number(payload: CreatePhoneNumberRequest, store: MemoryStore = 
 
 
 @numbers_router.get("", response_model=PhoneNumberListResponse)
-async def list_numbers(store: MemoryStore = Depends(get_store),
+async def list_numbers(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> PhoneNumberListResponse:
     return PhoneNumberListResponse(numbers=await store.list_numbers())
@@ -516,7 +762,9 @@ async def list_numbers(store: MemoryStore = Depends(get_store),
 
 @numbers_router.post("/{number_id}/assign", response_model=PhoneNumber)
 async def assign_number(
-    number_id: str, payload: AssignNumberRequest, store: MemoryStore = Depends(get_store),
+    number_id: str,
+    payload: AssignNumberRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> PhoneNumber:
     number = await store.get_number(number_id)
@@ -528,7 +776,9 @@ async def assign_number(
 
 
 @numbers_router.post("/{number_id}/unassign", response_model=PhoneNumber)
-async def unassign_number(number_id: str, store: MemoryStore = Depends(get_store),
+async def unassign_number(
+    number_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> PhoneNumber:
     number = await store.get_number(number_id)
@@ -540,7 +790,9 @@ async def unassign_number(number_id: str, store: MemoryStore = Depends(get_store
 
 
 @numbers_router.delete("/{number_id}", response_model=DeletedResponse)
-async def delete_number(number_id: str, store: MemoryStore = Depends(get_store),
+async def delete_number(
+    number_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_number(number_id):
@@ -554,7 +806,9 @@ kbs_router = APIRouter(prefix="/knowledgebases", tags=["Knowledge Bases"])
 
 
 @kbs_router.post("", response_model=KnowledgeBase, status_code=201)
-async def create_kb(payload: CreateKBRequest, store: MemoryStore = Depends(get_store),
+async def create_kb(
+    payload: CreateKBRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> KnowledgeBase:
     kb = KnowledgeBase(kb_id=new_id("kb"), name=payload.name, sources=list(payload.sources), status="ready")
@@ -563,14 +817,18 @@ async def create_kb(payload: CreateKBRequest, store: MemoryStore = Depends(get_s
 
 
 @kbs_router.get("", response_model=KBListResponse)
-async def list_kbs(store: MemoryStore = Depends(get_store),
+async def list_kbs(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> KBListResponse:
     return KBListResponse(knowledgebases=await store.list_kbs())
 
 
 @kbs_router.post("/{kb_id}/attach", response_model=KnowledgeBase)
-async def attach_kb(kb_id: str, payload: AttachKBRequest, store: MemoryStore = Depends(get_store),
+async def attach_kb(
+    kb_id: str,
+    payload: AttachKBRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> KnowledgeBase:
     kb = await store.get_kb(kb_id)
@@ -583,7 +841,9 @@ async def attach_kb(kb_id: str, payload: AttachKBRequest, store: MemoryStore = D
 
 
 @kbs_router.delete("/{kb_id}", response_model=DeletedResponse)
-async def delete_kb(kb_id: str, store: MemoryStore = Depends(get_store),
+async def delete_kb(
+    kb_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_kb(kb_id):
@@ -592,7 +852,10 @@ async def delete_kb(kb_id: str, store: MemoryStore = Depends(get_store),
 
 
 @kbs_router.post("/{kb_id}/detach", response_model=KnowledgeBase)
-async def detach_kb(kb_id: str, payload: AttachKBRequest, store: MemoryStore = Depends(get_store),
+async def detach_kb(
+    kb_id: str,
+    payload: AttachKBRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> KnowledgeBase:
     kb = await store.get_kb(kb_id)
@@ -609,8 +872,10 @@ tools_router = APIRouter(prefix="/tools", tags=["Tools"])
 
 
 @tools_router.post("", response_model=Tool, status_code=201)
-async def create_tool(payload: CreateToolRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
+async def create_tool(
+    payload: CreateToolRequest,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:write")),
 ) -> Tool:
     tool = Tool(
         tool_id=new_id("tool"),
@@ -619,24 +884,32 @@ async def create_tool(payload: CreateToolRequest, store: MemoryStore = Depends(g
         kind=payload.kind,
         config=dict(payload.config),
         enabled=payload.enabled,
+        org_id=_org_of(principal),
     )
     await store.save_tool(tool)
     return tool
 
 
 @tools_router.get("", response_model=ToolListResponse)
-async def list_tools(agent_id: Optional[str] = None, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
+async def list_tools(
+    agent_id: Optional[str] = None,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:read")),
 ) -> ToolListResponse:
-    return ToolListResponse(tools=await store.list_tools(agent_id=agent_id))
+    return ToolListResponse(tools=await store.list_tools(agent_id=agent_id, org_id=_org_of(principal)))
 
 
 @tools_router.delete("/{tool_id}", response_model=DeletedResponse)
-async def delete_tool(tool_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
+async def delete_tool(
+    tool_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
-    if not await store.delete_tool(tool_id):
+    existing = await store.get_tool(tool_id)
+    if existing is None:
         raise _not_found("Tool", tool_id)
+    _require_same_org(principal, getattr(existing, "org_id", "default"), "Tool")
+    await store.delete_tool(tool_id)
     return DeletedResponse()
 
 
@@ -646,8 +919,10 @@ webhooks_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 @webhooks_router.post("", response_model=Webhook, status_code=201)
-async def create_webhook(payload: CreateWebhookRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
+async def create_webhook(
+    payload: CreateWebhookRequest,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:write")),
 ) -> Webhook:
     hook = Webhook(
         webhook_id=new_id("wh"),
@@ -655,24 +930,31 @@ async def create_webhook(payload: CreateWebhookRequest, store: MemoryStore = Dep
         url=payload.url,
         events=list(payload.events),
         enabled=payload.enabled,
+        org_id=_org_of(principal),
     )
     await store.save_webhook(hook)
     return hook
 
 
 @webhooks_router.get("", response_model=WebhookListResponse)
-async def list_webhooks(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
+async def list_webhooks(
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:read")),
 ) -> WebhookListResponse:
-    return WebhookListResponse(webhooks=await store.list_webhooks())
+    return WebhookListResponse(webhooks=await store.list_webhooks(org_id=_org_of(principal)))
 
 
 @webhooks_router.delete("/{webhook_id}", response_model=DeletedResponse)
-async def delete_webhook(webhook_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
+async def delete_webhook(
+    webhook_id: str,
+    store: MemoryStore = Depends(get_store),
+    principal: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
-    if not await store.delete_webhook(webhook_id):
+    existing = await store.get_webhook(webhook_id)
+    if existing is None:
         raise _not_found("Webhook", webhook_id)
+    _require_same_org(principal, getattr(existing, "org_id", "default"), "Webhook")
+    await store.delete_webhook(webhook_id)
     return DeletedResponse()
 
 
@@ -682,29 +964,30 @@ wallet_router = APIRouter(prefix="/wallet", tags=["Wallet"])
 
 
 @wallet_router.get("", response_model=Wallet)
-async def get_wallet(store: MemoryStore = Depends(get_store),
+async def get_wallet(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> Wallet:
     return await store.get_wallet()
 
 
 @wallet_router.post("/topup", response_model=Wallet)
-async def topup_wallet(payload: TopUpRequest, store: MemoryStore = Depends(get_store),
+async def topup_wallet(
+    payload: TopUpRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> Wallet:
-    wallet = await store.get_wallet()
-    wallet.balance_credits += payload.amount_credits
-    wallet.updated_at = utcnow()
-    await store.save_wallet(wallet)
-    await store.add_ledger_entry(
-        LedgerEntry(entry_id=new_id("led"), type="topup", amount_credits=payload.amount_credits, reason=payload.reason)
-    )
-    return wallet
+    from decimal import Decimal as _Decimal
+
+    # Atomic Decimal topup (lock in store); never float-add here to avoid 0.1+0.2 dust.
+    return await store.topup_wallet_credits(_Decimal(str(payload.amount_credits)), reason=payload.reason)
 
 
 @wallet_router.get("/ledger", response_model=LedgerListResponse)
 async def get_ledger(
-    limit: int = 50, type: Optional[str] = None, store: MemoryStore = Depends(get_store),
+    limit: int = 50,
+    type: Optional[str] = None,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> LedgerListResponse:
     return LedgerListResponse(entries=await store.list_ledger(limit=limit, entry_type=type))
@@ -734,7 +1017,8 @@ async def list_templates(
 
 
 @templates_router.get("/{template_id}")
-async def get_template(template_id: str,
+async def get_template(
+    template_id: str,
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     template = lookup_template(template_id)
@@ -744,7 +1028,8 @@ async def get_template(template_id: str,
 
 
 @templates_router.post("/{template_id}/import")
-async def import_template(template_id: str,
+async def import_template(
+    template_id: str,
     _auth: Principal = Depends(require_scope("agents:write")),
 ) -> JSONResponse:
     template = lookup_template(template_id)
@@ -760,7 +1045,9 @@ inbound_router = APIRouter(prefix="/inbound", tags=["Inbound"])
 
 
 @inbound_router.get("/{agent_id}", response_model=InboundConfig)
-async def get_inbound(agent_id: str, store: MemoryStore = Depends(get_store),
+async def get_inbound(
+    agent_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> InboundConfig:
     config = await store.get_inbound(agent_id)
@@ -769,7 +1056,9 @@ async def get_inbound(agent_id: str, store: MemoryStore = Depends(get_store),
 
 @inbound_router.put("/{agent_id}", response_model=InboundConfig)
 async def put_inbound(
-    agent_id: str, payload: UpdateInboundRequest, store: MemoryStore = Depends(get_store),
+    agent_id: str,
+    payload: UpdateInboundRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> InboundConfig:
     config = InboundConfig(agent_id=agent_id, **payload.model_dump())
@@ -783,7 +1072,9 @@ voices_router = APIRouter(prefix="/voices", tags=["Voices"])
 
 
 @voices_router.post("", response_model=VoiceEntry, status_code=201)
-async def create_voice(payload: CreateVoiceRequest, store: MemoryStore = Depends(get_store),
+async def create_voice(
+    payload: CreateVoiceRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> VoiceEntry:
     voice = VoiceEntry(voice_id=new_id("voice"), **payload.model_dump())
@@ -792,14 +1083,18 @@ async def create_voice(payload: CreateVoiceRequest, store: MemoryStore = Depends
 
 
 @voices_router.get("", response_model=VoiceListResponse)
-async def list_voices(agent_id: Optional[str] = None, store: MemoryStore = Depends(get_store),
+async def list_voices(
+    agent_id: Optional[str] = None,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> VoiceListResponse:
     return VoiceListResponse(voices=await store.list_voices(agent_id=agent_id))
 
 
 @voices_router.delete("/{voice_id}", response_model=DeletedResponse)
-async def delete_voice(voice_id: str, store: MemoryStore = Depends(get_store),
+async def delete_voice(
+    voice_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_voice(voice_id):
@@ -813,20 +1108,28 @@ agents_router = APIRouter(prefix="/agents", tags=["Agents"])
 
 
 @agents_router.get("/{agent_id}/vector-config", response_model=VectorStoreConfig)
-async def get_vector_config(agent_id: str, store: MemoryStore = Depends(get_store),
+async def get_vector_config(
+    agent_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> VectorStoreConfig:
     config = await store.get_vector_config(agent_id)
-    return config if config is not None else VectorStoreConfig()
+    current = config if config is not None else VectorStoreConfig()
+    return current.masked()
 
 
 @agents_router.put("/{agent_id}/vector-config", response_model=VectorStoreConfig)
 async def put_vector_config(
-    agent_id: str, payload: VectorStoreConfig, store: MemoryStore = Depends(get_store),
+    agent_id: str,
+    payload: VectorStoreConfig,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> VectorStoreConfig:
-    await store.save_vector_config(agent_id, payload)
-    return payload
+    existing = await store.get_vector_config(agent_id)
+    resolved = payload.with_real_secret(existing)
+    resolved.updated_at = utcnow()
+    await store.save_vector_config(agent_id, resolved)
+    return resolved.masked()
 
 
 # --- sub-accounts --------------------------------------------------------------------------
@@ -835,7 +1138,9 @@ subs_router = APIRouter(prefix="/sub-accounts", tags=["Sub-Accounts"])
 
 
 @subs_router.post("", response_model=SubAccount, status_code=201)
-async def create_sub_account(payload: CreateSubAccountRequest, store: MemoryStore = Depends(get_store),
+async def create_sub_account(
+    payload: CreateSubAccountRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> SubAccount:
     sub = SubAccount(sub_id=new_id("sub"), name=payload.name, concurrency_cap=payload.concurrency_cap)
@@ -844,14 +1149,17 @@ async def create_sub_account(payload: CreateSubAccountRequest, store: MemoryStor
 
 
 @subs_router.get("", response_model=SubAccountListResponse)
-async def list_sub_accounts(store: MemoryStore = Depends(get_store),
+async def list_sub_accounts(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> SubAccountListResponse:
     return SubAccountListResponse(sub_accounts=await store.list_sub_accounts())
 
 
 @subs_router.get("/{sub_id}", response_model=SubAccount)
-async def get_sub_account(sub_id: str, store: MemoryStore = Depends(get_store),
+async def get_sub_account(
+    sub_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> SubAccount:
     sub = await store.get_sub_account(sub_id)
@@ -861,7 +1169,9 @@ async def get_sub_account(sub_id: str, store: MemoryStore = Depends(get_store),
 
 
 @subs_router.delete("/{sub_id}", response_model=DeletedResponse)
-async def delete_sub_account(sub_id: str, store: MemoryStore = Depends(get_store),
+async def delete_sub_account(
+    sub_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> DeletedResponse:
     if not await store.delete_sub_account(sub_id):
@@ -870,7 +1180,10 @@ async def delete_sub_account(sub_id: str, store: MemoryStore = Depends(get_store
 
 
 @subs_router.post("/{sub_id}/members", response_model=SubAccount)
-async def add_member(sub_id: str, payload: AddMemberRequest, store: MemoryStore = Depends(get_store),
+async def add_member(
+    sub_id: str,
+    payload: AddMemberRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> SubAccount:
     sub = await store.get_sub_account(sub_id)
@@ -883,7 +1196,10 @@ async def add_member(sub_id: str, payload: AddMemberRequest, store: MemoryStore 
 
 
 @subs_router.delete("/{sub_id}/members", response_model=SubAccount)
-async def remove_member(sub_id: str, email: str, store: MemoryStore = Depends(get_store),
+async def remove_member(
+    sub_id: str,
+    email: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> SubAccount:
     sub = await store.get_sub_account(sub_id)
@@ -900,7 +1216,9 @@ integrations_router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
 
 @integrations_router.post("", response_model=Integration, status_code=201)
-async def create_integration(payload: CreateIntegrationRequest, store: MemoryStore = Depends(get_store),
+async def create_integration(
+    payload: CreateIntegrationRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> Integration:
     integration = Integration(
@@ -915,7 +1233,8 @@ async def create_integration(payload: CreateIntegrationRequest, store: MemorySto
 
 
 @integrations_router.get("", response_model=IntegrationListResponse)
-async def list_integrations(store: MemoryStore = Depends(get_store),
+async def list_integrations(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> IntegrationListResponse:
     integrations = await store.list_integrations()
@@ -923,7 +1242,9 @@ async def list_integrations(store: MemoryStore = Depends(get_store),
 
 
 @integrations_router.get("/{integration_id}", response_model=Integration)
-async def get_integration(integration_id: str, store: MemoryStore = Depends(get_store),
+async def get_integration(
+    integration_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> Integration:
     integration = await store.get_integration(integration_id)
@@ -934,16 +1255,21 @@ async def get_integration(integration_id: str, store: MemoryStore = Depends(get_
 
 @integrations_router.put("/{integration_id}", response_model=Integration)
 async def update_integration(
-    integration_id: str, payload: UpdateIntegrationRequest, store: MemoryStore = Depends(get_store),
+    integration_id: str,
+    payload: UpdateIntegrationRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> Integration:
+    from voiceai.platform.models import strip_masked_values
+
     integration = await store.get_integration(integration_id)
     if integration is None:
         raise _not_found("Integration", integration_id)
     if payload.name is not None:
         integration.name = payload.name
     if payload.config is not None:
-        integration.config = {**integration.config, **payload.config}
+        # Filter the masked literal so GET→PUT round-trips never clobber real secrets.
+        integration.config = {**integration.config, **strip_masked_values(payload.config)}
     if payload.enabled is not None:
         integration.enabled = payload.enabled
     integration.updated_at = utcnow()
@@ -952,7 +1278,9 @@ async def update_integration(
 
 
 @integrations_router.delete("/{integration_id}", response_model=DeletedResponse)
-async def delete_integration(integration_id: str, store: MemoryStore = Depends(get_store),
+async def delete_integration(
+    integration_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_integration(integration_id):
@@ -997,7 +1325,9 @@ async def _snapshot_version(store: MemoryStore, graph: GraphDoc, note: Optional[
 
 
 @graphs_router.post("", response_model=GraphDoc, status_code=201)
-async def create_graph(payload: CreateGraphRequest, store: MemoryStore = Depends(get_store),
+async def create_graph(
+    payload: CreateGraphRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> GraphDoc:
     graph = GraphDoc(
@@ -1009,21 +1339,27 @@ async def create_graph(payload: CreateGraphRequest, store: MemoryStore = Depends
 
 
 @graphs_router.get("", response_model=GraphListResponse)
-async def list_graphs(store: MemoryStore = Depends(get_store),
+async def list_graphs(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> GraphListResponse:
     return GraphListResponse(graphs=await store.list_graphs())
 
 
 @graphs_router.get("/{graph_id}", response_model=GraphDoc)
-async def get_graph(graph_id: str, store: MemoryStore = Depends(get_store),
+async def get_graph(
+    graph_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> GraphDoc:
     return await _load_graph(store, graph_id)
 
 
 @graphs_router.put("/{graph_id}", response_model=GraphDoc)
-async def update_graph(graph_id: str, payload: UpdateGraphRequest, store: MemoryStore = Depends(get_store),
+async def update_graph(
+    graph_id: str,
+    payload: UpdateGraphRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> GraphDoc:
     graph = await _load_graph(store, graph_id)
@@ -1040,7 +1376,9 @@ async def update_graph(graph_id: str, payload: UpdateGraphRequest, store: Memory
 
 
 @graphs_router.delete("/{graph_id}", response_model=DeletedResponse)
-async def delete_graph(graph_id: str, store: MemoryStore = Depends(get_store),
+async def delete_graph(
+    graph_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_graph(graph_id):
@@ -1049,7 +1387,9 @@ async def delete_graph(graph_id: str, store: MemoryStore = Depends(get_store),
 
 
 @graphs_router.get("/{graph_id}/versions", response_model=GraphVersionListResponse)
-async def list_graph_versions(graph_id: str, store: MemoryStore = Depends(get_store),
+async def list_graph_versions(
+    graph_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> GraphVersionListResponse:
     await _load_graph(store, graph_id)
@@ -1058,7 +1398,9 @@ async def list_graph_versions(graph_id: str, store: MemoryStore = Depends(get_st
 
 @graphs_router.post("/{graph_id}/restore/{version_number}", response_model=GraphDoc)
 async def restore_graph_version(
-    graph_id: str, version_number: int, store: MemoryStore = Depends(get_store),
+    graph_id: str,
+    version_number: int,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> GraphDoc:
     graph = await _load_graph(store, graph_id)
@@ -1075,7 +1417,9 @@ async def restore_graph_version(
 
 
 @graphs_router.post("/{graph_id}/validate", response_model=ValidationResult)
-async def validate_graph(graph_id: str, store: MemoryStore = Depends(get_store),
+async def validate_graph(
+    graph_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> ValidationResult:
     graph = await _load_graph(store, graph_id)
@@ -1083,7 +1427,9 @@ async def validate_graph(graph_id: str, store: MemoryStore = Depends(get_store),
 
 
 @graphs_router.post("/{graph_id}/dry-run", response_model=DryRunResult)
-async def dry_run_graph(graph_id: str, store: MemoryStore = Depends(get_store),
+async def dry_run_graph(
+    graph_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DryRunResult:
     graph = await _load_graph(store, graph_id)
@@ -1092,7 +1438,9 @@ async def dry_run_graph(graph_id: str, store: MemoryStore = Depends(get_store),
 
 @graphs_router.post("/{graph_id}/deploy")
 async def deploy_graph(
-    graph_id: str, payload: DeployGraphRequest, store: MemoryStore = Depends(get_store),
+    graph_id: str,
+    payload: DeployGraphRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("agents:write")),
 ) -> JSONResponse:
     graph = await _load_graph(store, graph_id)
@@ -1145,7 +1493,9 @@ async def _snapshot_workflow_version(store: MemoryStore, workflow, note: Optiona
 
 
 @workflows_router.post("", status_code=201)
-async def create_workflow(payload: CreateWorkflowRequest, store: MemoryStore = Depends(get_store),
+async def create_workflow(
+    payload: CreateWorkflowRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
     from voiceai.platform.models import WorkflowDoc as _WorkflowDoc
@@ -1157,7 +1507,8 @@ async def create_workflow(payload: CreateWorkflowRequest, store: MemoryStore = D
 
 
 @workflows_router.get("")
-async def list_workflows(store: MemoryStore = Depends(get_store),
+async def list_workflows(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     workflows = await store.list_workflows()
@@ -1165,7 +1516,9 @@ async def list_workflows(store: MemoryStore = Depends(get_store),
 
 
 @workflows_router.get("/{workflow_id}")
-async def get_workflow(workflow_id: str, store: MemoryStore = Depends(get_store),
+async def get_workflow(
+    workflow_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     workflow = await _load_workflow(store, workflow_id)
@@ -1174,7 +1527,9 @@ async def get_workflow(workflow_id: str, store: MemoryStore = Depends(get_store)
 
 @workflows_router.put("/{workflow_id}")
 async def update_workflow(
-    workflow_id: str, payload: UpdateWorkflowRequest, store: MemoryStore = Depends(get_store),
+    workflow_id: str,
+    payload: UpdateWorkflowRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
     workflow = await _load_workflow(store, workflow_id)
@@ -1189,7 +1544,9 @@ async def update_workflow(
 
 
 @workflows_router.delete("/{workflow_id}", response_model=DeletedResponse)
-async def delete_workflow(workflow_id: str, store: MemoryStore = Depends(get_store),
+async def delete_workflow(
+    workflow_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> DeletedResponse:
     if not await store.delete_workflow(workflow_id):
@@ -1198,7 +1555,9 @@ async def delete_workflow(workflow_id: str, store: MemoryStore = Depends(get_sto
 
 
 @workflows_router.get("/{workflow_id}/versions")
-async def list_workflow_versions(workflow_id: str, store: MemoryStore = Depends(get_store),
+async def list_workflow_versions(
+    workflow_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     await _load_workflow(store, workflow_id)
@@ -1208,7 +1567,9 @@ async def list_workflow_versions(workflow_id: str, store: MemoryStore = Depends(
 
 @workflows_router.post("/{workflow_id}/restore/{version_number}")
 async def restore_workflow_version(
-    workflow_id: str, version_number: int, store: MemoryStore = Depends(get_store),
+    workflow_id: str,
+    version_number: int,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
     workflow = await _load_workflow(store, workflow_id)
@@ -1225,7 +1586,9 @@ async def restore_workflow_version(
 
 
 @workflows_router.post("/{workflow_id}/validate", response_model=ValidationResult)
-async def validate_workflow_route(workflow_id: str, store: MemoryStore = Depends(get_store),
+async def validate_workflow_route(
+    workflow_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> ValidationResult:
     workflow = await _load_workflow(store, workflow_id)
@@ -1234,7 +1597,9 @@ async def validate_workflow_route(workflow_id: str, store: MemoryStore = Depends
 
 @workflows_router.post("/{workflow_id}/test-run")
 async def test_run_workflow(
-    workflow_id: str, payload: TestRunRequest, store: MemoryStore = Depends(get_store),
+    workflow_id: str,
+    payload: TestRunRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
     workflow = await _load_workflow(store, workflow_id)
@@ -1250,7 +1615,9 @@ async def test_run_workflow(
 
 
 @runs_router.get("/{run_id}")
-async def get_workflow_run(run_id: str, store: MemoryStore = Depends(get_store),
+async def get_workflow_run(
+    run_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     run = await store.get_workflow_run(run_id)
@@ -1260,18 +1627,31 @@ async def get_workflow_run(run_id: str, store: MemoryStore = Depends(get_store),
 
 
 @campaigns_router.post("", status_code=201)
-async def create_campaign(payload: CreateCampaignRequest, store: MemoryStore = Depends(get_store),
+async def create_campaign(
+    payload: CreateCampaignRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
+    from voiceai.errors import InvalidRequestError
+    from voiceai.platform.models import CAMPAIGN_MAX_ENTRIES
     from voiceai.platform.models import WorkflowCampaign as _WorkflowCampaign
 
     if await store.get_workflow(payload.workflow_id) is None:
         raise _not_found("Workflow", payload.workflow_id)
+    try:
+        import os as _os
+
+        _limit = max(1, int(_os.getenv("CAMPAIGN_MAX_ENTRIES", str(CAMPAIGN_MAX_ENTRIES))))
+    except ValueError:
+        _limit = CAMPAIGN_MAX_ENTRIES
+    if len(payload.entries) > _limit:
+        raise InvalidRequestError(f"Campaign exceeds max entries ({_limit})")
     campaign = _WorkflowCampaign(
         campaign_id=new_id("wcamp"),
         workflow_id=payload.workflow_id,
         name=payload.name,
         entries=[CampaignEntry(to_number=e.to_number, variables=dict(e.variables)) for e in payload.entries],
+        calling_hours=payload.calling_hours,
     )
     campaign.stats.total = len(campaign.entries)
     campaign.stats.queued = len(campaign.entries)
@@ -1280,7 +1660,8 @@ async def create_campaign(payload: CreateCampaignRequest, store: MemoryStore = D
 
 
 @campaigns_router.get("")
-async def list_campaigns(store: MemoryStore = Depends(get_store),
+async def list_campaigns(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     campaigns = await store.list_campaigns()
@@ -1288,7 +1669,9 @@ async def list_campaigns(store: MemoryStore = Depends(get_store),
 
 
 @campaigns_router.get("/{campaign_id}")
-async def get_campaign(campaign_id: str, store: MemoryStore = Depends(get_store),
+async def get_campaign(
+    campaign_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     campaign = await store.get_campaign(campaign_id)
@@ -1298,16 +1681,25 @@ async def get_campaign(campaign_id: str, store: MemoryStore = Depends(get_store)
 
 
 @campaigns_router.post("/{campaign_id}/start")
-async def start_campaign(campaign_id: str, store: MemoryStore = Depends(get_store),
+async def start_campaign(
+    campaign_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
+    from voiceai.errors import ConflictError
     from voiceai.platform.models import WorkflowCampaignStatus as _Status
+    from voiceai.platform.simulation import is_within_calling_hours as _within_hours
 
     campaign = await store.get_campaign(campaign_id)
     if campaign is None:
         raise _not_found("Campaign", campaign_id)
     if campaign.status not in (_Status.DRAFT, _Status.SCHEDULED):
-        raise HTTPException(status_code=409, detail=f"Campaign {campaign_id} is {campaign.status.value}")
+        raise ConflictError(f"Campaign {campaign_id} is {campaign.status.value}")
+    if getattr(campaign, "calling_hours", None) is not None and not _within_hours(
+        utcnow(),
+        campaign.calling_hours,  # type: ignore[arg-type]
+    ):
+        raise ConflictError(f"Campaign {campaign_id} is outside its calling hours")
     updated = await run_campaign(store, campaign_id, delay_scale=0)
     assert updated is not None
     _ANALYTICS_CACHE.clear()
@@ -1315,7 +1707,9 @@ async def start_campaign(campaign_id: str, store: MemoryStore = Depends(get_stor
 
 
 @campaigns_router.post("/{campaign_id}/stop")
-async def stop_campaign(campaign_id: str, store: MemoryStore = Depends(get_store),
+async def stop_campaign(
+    campaign_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:write")),
 ) -> JSONResponse:
     from voiceai.platform.models import WorkflowCampaignStatus as _Status
@@ -1331,7 +1725,9 @@ async def stop_campaign(campaign_id: str, store: MemoryStore = Depends(get_store
 
 
 @campaigns_router.get("/{campaign_id}/runs")
-async def get_campaign_runs(campaign_id: str, store: MemoryStore = Depends(get_store),
+async def get_campaign_runs(
+    campaign_id: str,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("platform:read")),
 ) -> JSONResponse:
     if await store.get_campaign(campaign_id) is None:
@@ -1354,7 +1750,8 @@ keys_router = APIRouter(prefix="/api-keys", tags=["API Keys"])
 
 
 @org_router.get("", response_model=Organization)
-async def get_organization(store: MemoryStore = Depends(get_store),
+async def get_organization(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_principal),
 ) -> Organization:
     return await store.get_organization()
@@ -1362,7 +1759,8 @@ async def get_organization(store: MemoryStore = Depends(get_store),
 
 @org_router.put("", response_model=Organization)
 async def update_organization(
-    payload: UpdateOrganizationRequest, store: MemoryStore = Depends(get_store),
+    payload: UpdateOrganizationRequest,
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("admin")),
 ) -> Organization:
     org = await store.get_organization()
@@ -1379,7 +1777,8 @@ async def update_organization(
 
 
 @org_router.post("/reset", response_model=ResetResponse)
-async def reset_workspace(store: MemoryStore = Depends(get_store),
+async def reset_workspace(
+    store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_role("owner")),
 ) -> ResetResponse:
     cleared = await store.reset_platform()
@@ -1415,7 +1814,9 @@ async def create_api_key(
             created_by=principal.user_id,
         )
     )
-    await audit(store, "key_created", principal.user_id, principal.email, f"{payload.name} [{','.join(payload.scopes)}]")
+    await audit(
+        store, "key_created", principal.user_id, principal.email, f"{payload.name} [{','.join(payload.scopes)}]"
+    )
     logger.info(f"API key {key_id} created")
     return CreateApiKeyResponse(key_id=key_id, name=payload.name, prefix=prefix, key=full_key)
 
@@ -1424,7 +1825,8 @@ async def create_api_key(
 async def list_api_keys(
     _: Principal = Depends(require_role("admin")), store: MemoryStore = Depends(get_store)
 ) -> ApiKeyListResponse:
-    return ApiKeyListResponse(api_keys=await store.list_api_keys())
+    # Never leak key_hash (SHA-256 of a 256-bit secret); full secret was shown once at creation.
+    return ApiKeyListResponse(api_keys=[key.public() for key in await store.list_api_keys()])
 
 
 @keys_router.delete("/{key_id}", response_model=DeletedResponse)

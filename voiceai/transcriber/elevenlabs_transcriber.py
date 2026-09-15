@@ -224,11 +224,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                 self.current_turn_interim_details
             )
 
-            self.turn_latencies.append(
+            self._upsert_turn_latency(
                 {
                     "turn_id": self.current_turn_id,
                     "sequence_id": self.current_turn_id,
-                    "interim_details": self.current_turn_interim_details,
+                    "interim_details": list(self.current_turn_interim_details),
                     "first_interim_to_final_ms": first_interim_to_final_ms,
                     "last_interim_to_final_ms": last_interim_to_final_ms,
                     "force_finalized": True,
@@ -469,11 +469,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
 
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "asr_start_epoch_ms": self.speech_start_time,
@@ -519,11 +519,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
 
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "words": words,

@@ -173,6 +173,147 @@ def _check_llm_agent(cfg: Any, path: str, reg: dict, issues: List[ConfigIssue]) 
         issues.append(ConfigIssue(where, f"unknown LLM provider '{provider}'"))
 
 
+_ALLOWED_API_METHODS = frozenset({"GET", "POST"})
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _check_api_tools(cfg: Any, path: str, issues: List[ConfigIssue]) -> None:
+    """Validate api_tools URLs and param templates with precise paths.
+
+    Checks scheme/host presence (SSRF DNS validation runs at call time in trigger_api),
+    HTTP method allowlist, and that legacy %(field)s templates are well-formed JSON templates.
+    $var markers are the preferred type-safe form and always pass template checks.
+    """
+    if cfg is None:
+        return
+    if not isinstance(cfg, Mapping):
+        issues.append(ConfigIssue(path, "must be an object"))
+        return
+    params = cfg.get("tools_params")
+    if params is None:
+        return
+    if not isinstance(params, Mapping):
+        issues.append(ConfigIssue(f"{path}.tools_params", "must be an object of tool-name -> API params"))
+        return
+    for tool_name, entry in params.items():
+        entry_path = f"{path}.tools_params.{tool_name}"
+        if not isinstance(entry, Mapping):
+            issues.append(ConfigIssue(entry_path, "must be an object"))
+            continue
+        url = entry.get("url")
+        if url is not None:
+            if not isinstance(url, str) or not url.strip():
+                issues.append(ConfigIssue(f"{entry_path}.url", "must be a non-empty URL string"))
+            else:
+                from urllib.parse import urlsplit as _split
+
+                try:
+                    parsed = _split(url.strip())
+                except Exception:
+                    issues.append(ConfigIssue(f"{entry_path}.url", "must be a valid URL"))
+                    continue
+                if (parsed.scheme or "").lower() not in _ALLOWED_URL_SCHEMES:
+                    issues.append(
+                        ConfigIssue(
+                            f"{entry_path}.url", f"unsupported scheme {parsed.scheme!r}; only http/https allowed"
+                        )
+                    )
+                elif not parsed.hostname:
+                    issues.append(ConfigIssue(f"{entry_path}.url", "URL must include a host"))
+                elif parsed.hostname.lower() in ("169.254.169.254", "127.0.0.1", "0.0.0.0"):
+                    issues.append(ConfigIssue(f"{entry_path}.url", "URL targets a non-public address"))
+        method = entry.get("method")
+        if method is not None:
+            if not isinstance(method, str) or method.upper() not in _ALLOWED_API_METHODS:
+                issues.append(
+                    ConfigIssue(f"{entry_path}.method", f"unsupported method {method!r}; only GET/POST are supported")
+                )
+        param = entry.get("param")
+        if isinstance(param, str) and "%(" in param:
+            # Legacy template: must contain a closing )s and render to JSON with dummy values.
+            if ")s" not in param:
+                issues.append(ConfigIssue(f"{entry_path}.param", "legacy %(field)s template is malformed"))
+        pre_url = entry.get("pre_call_webhook_url")
+        if pre_url is not None and isinstance(pre_url, str) and pre_url.strip():
+            from urllib.parse import urlsplit as _split2
+
+            try:
+                p2 = _split2(pre_url.strip())
+                if (p2.scheme or "").lower() not in _ALLOWED_URL_SCHEMES or not p2.hostname:
+                    issues.append(ConfigIssue(f"{entry_path}.pre_call_webhook_url", "must be a valid http(s) URL"))
+            except Exception:
+                issues.append(ConfigIssue(f"{entry_path}.pre_call_webhook_url", "must be a valid http(s) URL"))
+
+
+def _check_task_config(cfg: Any, path: str, issues: List[ConfigIssue]) -> None:
+    if cfg is None:
+        return
+    if not isinstance(cfg, Mapping):
+        issues.append(ConfigIssue(path, "must be an object"))
+        return
+    hangup = cfg.get("hangup_after_silence")
+    if hangup is not None and not isinstance(hangup, (int, float)):
+        issues.append(ConfigIssue(f"{path}.hangup_after_silence", "must be a number of seconds"))
+    terminate = cfg.get("call_terminate")
+    if terminate is not None and not isinstance(terminate, (int, float)):
+        issues.append(ConfigIssue(f"{path}.call_terminate", "must be a number of seconds"))
+
+
+def _check_rag_block(llm_agent: Any, path: str, issues: List[ConfigIssue]) -> None:
+    """Validate rag_config vector-store identifiers wherever they appear (global or per-node)."""
+    if not isinstance(llm_agent, Mapping):
+        return
+    llm_config = llm_agent.get("llm_config")
+    if not isinstance(llm_config, Mapping):
+        return
+    for scope_path, rag in ((f"{path}.llm_config.rag_config", llm_config.get("rag_config")),):
+        if rag is None:
+            continue
+        if not isinstance(rag, Mapping):
+            issues.append(ConfigIssue(scope_path, "must be an object"))
+            continue
+        store = rag.get("vector_store")
+        if store is None:
+            continue
+        if not isinstance(store, Mapping):
+            issues.append(ConfigIssue(f"{scope_path}.vector_store", "must be an object"))
+            continue
+        provider = store.get("provider")
+        if provider is None:
+            issues.append(ConfigIssue(f"{scope_path}.vector_store.provider", "provider is required"))
+        cfg = store.get("provider_config")
+        if cfg is not None and not isinstance(cfg, Mapping):
+            issues.append(ConfigIssue(f"{scope_path}.vector_store.provider_config", "must be an object"))
+    nodes = llm_config.get("nodes")
+    if isinstance(nodes, list):
+        for idx, node in enumerate(nodes):
+            if not isinstance(node, Mapping):
+                continue
+            rag = node.get("rag_config")
+            if rag is None:
+                continue
+            npath = f"{path}.llm_config.nodes[{idx}].rag_config"
+            if not isinstance(rag, Mapping):
+                issues.append(ConfigIssue(npath, "must be an object"))
+                continue
+            store = rag.get("vector_store")
+            if store is not None and not isinstance(store, Mapping):
+                issues.append(ConfigIssue(f"{npath}.vector_store", "must be an object"))
+
+
+def _check_welcome(raw: Mapping[str, Any], issues: List[ConfigIssue]) -> None:
+    msg = raw.get("agent_welcome_message")
+    if msg is None:
+        return
+    if not isinstance(msg, (str, dict)):
+        issues.append(ConfigIssue("agent_welcome_message", "must be a string or per-language map"))
+        return
+    if isinstance(msg, dict):
+        for lang, text in msg.items():
+            if not isinstance(text, str) or not text.strip():
+                issues.append(ConfigIssue(f"agent_welcome_message.{lang}", "must be a non-empty string"))
+
+
 def _check_task(task: Any, path: str, reg: dict, issues: List[ConfigIssue]) -> None:
     if not isinstance(task, Mapping):
         issues.append(ConfigIssue(path, "must be an object"))
@@ -242,6 +383,9 @@ def _check_task(task: Any, path: str, reg: dict, issues: List[ConfigIssue]) -> N
             issues.append(
                 ConfigIssue(f"{path}.tools_config.s2s.provider", f"unknown s2s provider '{s2s.get('provider')}'")
             )
+    _check_api_tools(tools.get("api_tools"), f"{path}.tools_config.api_tools", issues)
+    _check_task_config(task.get("task_config"), f"{path}.task_config", issues)
+    _check_rag_block(tools.get("llm_agent"), f"{path}.tools_config.llm_agent", issues)
 
 
 def semantic_issues(raw: Mapping[str, Any]) -> List[ConfigIssue]:
@@ -251,6 +395,7 @@ def semantic_issues(raw: Mapping[str, Any]) -> List[ConfigIssue]:
     if not isinstance(tasks, list) or not tasks:
         issues.append(ConfigIssue("tasks", "at least one task is required"))
         return issues
+    _check_welcome(raw, issues)
     reg = _registries()
     for index, task in enumerate(tasks):
         _check_task(task, f"tasks[{index}]", reg, issues)

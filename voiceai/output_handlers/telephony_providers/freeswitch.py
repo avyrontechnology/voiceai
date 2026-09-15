@@ -8,6 +8,7 @@ import uuid
 from voiceai.output_handlers.default import DefaultOutputHandler
 from voiceai.output_handlers.socket_errors import is_socket_closed_error
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import safe_task
 from voiceai.helpers.utils import wav_bytes_to_pcm
 
 logger = configure_logger(__name__)
@@ -66,8 +67,10 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
             self._final_mark_id = None
             if self._finish_task and not self._finish_task.done():
                 self._finish_task.cancel()  # real playback clock supersedes the estimator
-            self._finish_task = asyncio.create_task(
-                self._complete_after_playout(self.playback_settle_s, list(self._finish_marks))
+            self._finish_task = safe_task(
+                self._complete_after_playout(self.playback_settle_s, list(self._finish_marks)),
+                name="freeswitch_finish",
+                logger=logger,
             )
 
     def on_playout_done_event(self):
@@ -254,7 +257,9 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
                 self._response_bytes = 0
                 self._response_first_send = None
                 self._finish_marks = list(marks)
-                self._finish_task = asyncio.create_task(self._complete_after_playout(remaining, marks))
+                self._finish_task = safe_task(
+                    self._complete_after_playout(remaining, marks), name="freeswitch_finish", logger=logger
+                )
         except Exception as e:
             # only a dead websocket should silence the handler permanently; a send timeout or
             # a bad chunk is dropped (logged once per error type) and later audio keeps flowing

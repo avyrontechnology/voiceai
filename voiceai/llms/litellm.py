@@ -10,6 +10,7 @@ from voiceai.constants import DEFAULT_LANGUAGE_CODE, llm_failure_spoken_message
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
 from .llm import BaseLLM
+from .openai_base import _strip_server_injected_params
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import LLMStreamChunk, LatencyData, redact_secrets
 from .message_models import strip_internal_keys
@@ -78,6 +79,7 @@ class LiteLLM(BaseLLM):
         if self.trigger_function_call:
             _tools = tools if tools is not None else self.tools
             _tools = json.loads(_tools) if isinstance(_tools, str) else _tools
+            _tools = _strip_server_injected_params(_tools)
             if _tools:  # omit tools when none are visible this turn (an empty array is a 400)
                 model_args["tools"] = _tools
                 model_args["tool_choice"] = tool_choice or "auto"
@@ -144,7 +146,7 @@ class LiteLLM(BaseLLM):
                 first_token_time = now
                 self.started_streaming = True
                 latency_data = LatencyData(
-                    sequence_id=meta_info.get("sequence_id"),
+                    sequence_id=meta_info.get("sequence_id") if meta_info else None,
                     first_token_latency_ms=first_token_time - start_time,
                 )
 

@@ -701,6 +701,19 @@ class OpenAiLLM(OpenAICompatibleLLM):
         except asyncio.CancelledError:
             raise
         except Exception as e:
+            # Guarded fallback: if speech (or a tool call) already started, an HTTP retry would
+            # re-speak the turn. Only fall back when nothing was produced yet.
+            if answer or func_call_args or gave_pre_call_msg:
+                logger.error(f"WS streaming error after output started, not retrying (no re-speak): {e}")
+                self.invalidate_response_chain()
+                if latency_data:
+                    latency_data.total_stream_duration_ms = now_ms() - start_time
+                if synthesize:
+                    yield LLMStreamChunk(data=buffer, end_of_stream=True, latency=latency_data)
+                else:
+                    yield LLMStreamChunk(data=answer, end_of_stream=True, latency=latency_data)
+                self.started_streaming = False
+                return
             logger.error(f"WS streaming error: {e}, falling back to HTTP SSE")
             self.invalidate_response_chain()
             async for chunk in self._generate_stream_responses(

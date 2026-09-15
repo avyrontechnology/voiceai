@@ -176,10 +176,17 @@ class TranscriberPool:
         produced turn_3 from the new instance before turn_1/turn_2 from the old one),
         which mis-pairs the user transcript with the wrong agent turn downstream. Sort by
         ASR start time so the latency dict always reflects the real conversation order.
+
+        Returns deep copies: callers (task_manager latency dict, CSV writers) mutate
+        entries in place, and aliasing the live per-transcriber dicts would corrupt
+        subsequent turns and cross-call telemetry.
         """
+        import copy as _copy
+
         all_latencies = []
         for t in self.transcribers.values():
-            all_latencies.extend(t.turn_latencies)
+            for entry in getattr(t, "turn_latencies", None) or []:
+                all_latencies.append(_copy.deepcopy(entry))
 
         # Order by ASR start (same-scale ms within a call). Relative keys exist only
         def _order_key(d):
@@ -249,6 +256,94 @@ class TranscriberPool:
         reset = getattr(transcriber, "reset_connection_state", None)
         if callable(reset):
             reset()
+
+    async def _flush_old_for_switch(self, old_transcriber) -> None:
+        """Flush the outgoing transcriber's pending turn, then reset it.
+
+        Ordering: the old turn is pushed to the shared output_queue BEFORE active_label
+        flips, so downstream sees ... old-final, new-interims ... in call order even
+        though both sockets write to the same queue. Resetting afterwards suppresses
+        the old socket's late provider commit for the same turn (the shared-queue
+        duplicate the TOCTOU guard alone cannot catch across instances).
+        """
+        try:
+            flush = getattr(old_transcriber, "_flush_pending_final", None)
+            if callable(flush):
+                try:
+                    packet = flush()
+                    if packet is not None:
+                        push = getattr(old_transcriber, "push_to_transcriber_queue", None)
+                        if callable(push):
+                            await push(packet)
+                        else:
+                            await self.output_queue.put(packet)
+                except Exception as e:
+                    log_ignored(logger, "TranscriberPool: flush old pending final", e)
+            else:
+                force = getattr(old_transcriber, "_force_finalize_utterance", None)
+                has_pending = bool(
+                    getattr(old_transcriber, "final_transcript", "")
+                    and str(getattr(old_transcriber, "final_transcript", "")).strip()
+                ) or bool(getattr(old_transcriber, "current_turn_interim_details", None))
+                not_sent = not bool(getattr(old_transcriber, "is_transcript_sent_for_processing", True))
+                if callable(force) and has_pending and not_sent:
+                    try:
+                        await force()
+                    except Exception as e:
+                        log_ignored(logger, "TranscriberPool: force-finalize old pending", e)
+        finally:
+            try:
+                reset = getattr(old_transcriber, "_reset_turn_state", None)
+                if callable(reset):
+                    reset()
+            except Exception as e:
+                log_ignored(logger, "TranscriberPool: reset old turn state", e)
+
+    def _clear_target_stale(self, target) -> None:
+        """Clear the incoming transcriber's stale standby state.
+
+        Standby keepalive silence accumulates in its private input_queue and primes
+        its resampler/VAD on silence; without draining, the first real frames after
+        a switch decode against a silence-primed filter and a phantom turn is already
+        open. Turn state itself is cleared (the counter is re-inherited afterwards).
+        """
+        try:
+            q = getattr(target, "input_queue", None)
+            if q is not None:
+                drained = 0
+                try:
+                    while True:
+                        q.get_nowait()
+                        drained += 1
+                except Exception:
+                    pass
+                if drained:
+                    logger.info(f"TranscriberPool: drained {drained} stale standby packet(s) on switch target")
+        except Exception as e:
+            log_ignored(logger, "TranscriberPool: drain switch target queue", e)
+        try:
+            if hasattr(target, "_resample_state"):
+                target._resample_state = None
+        except Exception as e:
+            log_ignored(logger, "TranscriberPool: reset target resample state", e)
+        try:
+            reset = getattr(target, "_reset_turn_state", None)
+            if callable(reset):
+                # Preserve the counter across the reset; the caller re-inherits it
+                # explicitly afterwards, but a reset that touches it must not lose it.
+                saved_counter = getattr(target, "turn_counter", None)
+                reset()
+                if saved_counter is not None and hasattr(target, "turn_counter"):
+                    try:
+                        # _reset_turn_state must not touch turn_counter, but a provider
+                        # that does (pixa pre-creates turn_{counter+1}) would otherwise
+                        # advance the sequence on every switch.
+                        if getattr(target, "turn_counter", None) != saved_counter:
+                            target.turn_counter = saved_counter
+                    except Exception:
+                        pass
+        except Exception as e:
+            log_ignored(logger, "TranscriberPool: reset switch target turn state", e)
 
     def _loop_guard(self, name):
         return iteration_guard(
@@ -662,10 +757,21 @@ class TranscriberPool:
                 await target.run()
                 self.reconnect_count += 1
 
+            old_transcriber = self.transcribers[old]
+            # Flush the old turn before handing off: its pending partial must reach the
+            # shared output_queue BEFORE any transcript from the new target, or the
+            # turn order interleaves and the same words can be emitted twice (once by
+            # a late commit on the old socket after the switch). Then reset old so its
+            # late provider commits are suppressed, and clear the target's stale
+            # standby state (keepalive silence + resample filter primed on silence).
+            await self._flush_old_for_switch(old_transcriber)
+            self._clear_target_stale(target)
+
             # Carry turn_counter forward so the incoming transcriber continues
             # the turn sequence rather than restarting from 0. The next speech
             # event on the new transcriber will increment the counter normally.
-            old_transcriber = self.transcribers[old]
+            # Read AFTER the old reset: a flushed turn must not be inherited — the
+            # next turn gets counter+1, not a reuse of the emitted turn's id.
             inherited_turn_counter = getattr(old_transcriber, "turn_counter", 0)
             if hasattr(target, "turn_counter"):
                 target.turn_counter = inherited_turn_counter

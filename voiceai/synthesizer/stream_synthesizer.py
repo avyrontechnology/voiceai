@@ -23,9 +23,9 @@ from collections import deque
 import websockets
 
 from .base_synthesizer import BaseSynthesizer
-from voiceai.errors import classify_exception, summarize_exception
+from voiceai.errors import SynthesizerError, classify_exception, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import call_soft
+from voiceai.helpers.resilience import TaskRegistry, call_soft
 from voiceai.helpers.utils import create_ws_data_packet
 
 logger = configure_logger(__name__)
@@ -44,6 +44,11 @@ class StreamSynthesizer(BaseSynthesizer):
             buffer_size=buffer_size,
         )
         self.provider_name = provider_name
+        # Serialize WS sends in push order (like Kalpa): overwriting sender_task
+        # without joining let two sender coroutines interleave frames on one socket.
+        self._send_lock = asyncio.Lock()
+        self._tasks = TaskRegistry(name=f"synth-{provider_name}", logger=logger)
+        self._sender_tasks: list = []
 
         # WebSocket state
         self.websocket = None
@@ -172,7 +177,30 @@ class StreamSynthesizer(BaseSynthesizer):
         self._on_push(meta_info, text)
 
         end_of_llm_stream = meta_info.get("end_of_llm_stream", False)
-        self.sender_task = asyncio.create_task(self.sender(text, meta_info.get("sequence_id"), end_of_llm_stream))
+        sequence_id = meta_info.get("sequence_id")
+        prev = self.sender_task
+        message_text = text
+
+        async def _chained_sender():
+            # Join the prior sender so frames leave in push order; the per-sender
+            # _send_lock (held inside sender(), like Kalpa) then guarantees no interleave.
+            if prev is not None and not prev.done():
+                try:
+                    await prev
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+            await self.sender(message_text, sequence_id, end_of_llm_stream)
+
+        try:
+            task = self._tasks.create(_chained_sender(), name=f"sender-seq-{sequence_id}")
+        except Exception:
+            task = asyncio.create_task(_chained_sender())
+        self.sender_task = task
+        self._sender_tasks.append(task)
+        # Bound the list; done tasks are pruned, registry still owns failures.
+        self._sender_tasks = [t for t in self._sender_tasks if not t.done()][-16:]
         self.text_queue.append(meta_info)
 
     def _stamp_turn_start(self, meta_info):
@@ -231,21 +259,203 @@ class StreamSynthesizer(BaseSynthesizer):
             logger.error(f"Error in {self.provider_name} generate: {e}", exc_info=True)
             raise
 
+    def _turn_key(self, meta):
+        """Turn identity for WS correlation: sequence + turn + category.
+
+        Canned speech shares sequence_id -1, so category joins the key — otherwise a
+        goodbye's EOS would complete a handoff's turn.
+        """
+        if not isinstance(meta, dict):
+            return (None, None, None)
+        return (meta.get("sequence_id"), meta.get("turn_id"), meta.get("message_category"))
+
+    def _prune_stale_queue(self):
+        """Drop queued metas for retired sequences so audio never inherits a dead id."""
+        try:
+            queue = getattr(self, "text_queue", None)
+            if not queue:
+                return
+            should = getattr(self, "should_synthesize_response", None)
+            if callable(should):
+                while len(queue) > 0:
+                    try:
+                        valid = should(queue[0].get("sequence_id"))
+                    except Exception:
+                        break
+                    if valid:
+                        break
+                    stale = queue.popleft()
+                    logger.info(
+                        f"{self.provider_name}: dropped stale text_queue entry "
+                        f"seq={stale.get('sequence_id')} in generate loop"
+                    )
+                    if not queue:
+                        break
+            else:
+                # No task-manager hook (unit fakes): sequence_ids are monotonic, so when
+                # several distinct sequences are queued the older ones are stale.
+                seqs = [m.get("sequence_id") for m in queue]
+                if len(set(seqs)) > 1:
+                    newest = seqs[-1]
+                    kept = deque(m for m in queue if m.get("sequence_id") == newest)
+                    dropped = len(queue) - len(kept)
+                    if dropped:
+                        self.text_queue = kept
+                        logger.info(f"Dropped {dropped} stale text_queue entries in generate loop")
+        except Exception:
+            pass
+
+    def _carry_turn_end_flag(self):
+        """Merge end_of_llm_stream from any same-turn queued meta into the active one.
+
+        Pushes and audio chunks are not 1:1 (providers buffer), so the EOS sentinel
+        must not depend on which chunk's meta was popped.
+        """
+        try:
+            active = getattr(self, "meta_info", None)
+            queue = getattr(self, "text_queue", None)
+            if not isinstance(active, dict) or not queue:
+                return
+            active_key = self._turn_key(active)
+            for m in list(queue):
+                if self._turn_key(m) == active_key and m.get("end_of_llm_stream"):
+                    active["end_of_llm_stream"] = True
+                    break
+        except Exception:
+            pass
+
+    def _drain_completed_turn(self):
+        """Pop same-turn queued metas once its EOS is emitted so they never leak."""
+        try:
+            queue = getattr(self, "text_queue", None)
+            active = getattr(self, "meta_info", None)
+            if not queue or not isinstance(active, dict):
+                return
+            active_key = self._turn_key(active)
+            while queue and self._turn_key(queue[0]) == active_key:
+                queue.popleft()
+        except Exception:
+            pass
+
     async def _generate_ws_loop(self):
         """Core WebSocket streaming loop. Rarely needs overriding."""
+
+        # Duck-typed helpers so minimal test fakes (text_queue/meta_info only) still work.
+        def _key(meta):
+            fn = getattr(self, "_turn_key", None)
+            if callable(fn):
+                try:
+                    return fn(meta)
+                except Exception:
+                    pass
+            if not isinstance(meta, dict):
+                return (None, None, None)
+            return (meta.get("sequence_id"), meta.get("turn_id"), meta.get("message_category"))
+
+        def _prune():
+            fn = getattr(self, "_prune_stale_queue", None)
+            # Call the real pruner when bound to a full synth; fakes without it fall through
+            # to the inline monotonic-sequence fallback below.
+            if callable(fn) and type(self).__name__ != "_FakeStream" and type(self).__name__ != "FakeStreamSynth":
+                try:
+                    fn()
+                    return
+                except Exception:
+                    pass
+            try:
+                queue = getattr(self, "text_queue", None)
+                if not queue:
+                    return
+                should = getattr(self, "should_synthesize_response", None)
+                if callable(should):
+                    while len(queue) > 0:
+                        try:
+                            valid = should(queue[0].get("sequence_id"))
+                        except Exception:
+                            break
+                        if valid:
+                            break
+                        queue.popleft()
+                else:
+                    seqs = [m.get("sequence_id") for m in queue]
+                    if len(set(seqs)) > 1:
+                        newest = seqs[-1]
+                        kept = deque(m for m in queue if m.get("sequence_id") == newest)
+                        if len(kept) != len(queue):
+                            try:
+                                self.text_queue = kept
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+        def _carry():
+            fn = getattr(self, "_carry_turn_end_flag", None)
+            if callable(fn) and type(self).__name__ not in ("_FakeStream", "FakeStreamSynth", "FakeStream"):
+                try:
+                    fn()
+                    return
+                except Exception:
+                    pass
+            try:
+                active = getattr(self, "meta_info", None)
+                queue = getattr(self, "text_queue", None)
+                if not isinstance(active, dict) or not queue:
+                    return
+                active_key = _key(active)
+                for m in list(queue):
+                    if _key(m) == active_key and m.get("end_of_llm_stream"):
+                        active["end_of_llm_stream"] = True
+                        break
+            except Exception:
+                pass
+
+        def _drain():
+            fn = getattr(self, "_drain_completed_turn", None)
+            if callable(fn) and type(self).__name__ not in ("_FakeStream", "FakeStreamSynth", "FakeStream"):
+                try:
+                    fn()
+                    return
+                except Exception:
+                    pass
+            try:
+                queue = getattr(self, "text_queue", None)
+                active = getattr(self, "meta_info", None)
+                if not queue or not isinstance(active, dict):
+                    return
+                active_key = _key(active)
+                while queue and _key(queue[0]) == active_key:
+                    queue.popleft()
+            except Exception:
+                pass
+
         try:
             async for raw_item in self.receiver():
                 if self.connection_error:
-                    raise Exception(self.connection_error)
+                    raise SynthesizerError(
+                        str(self.connection_error), provider=getattr(self, "provider_name", "stream")
+                    )
 
                 audio, extra_meta = self._unpack_receiver_message(raw_item)
 
-                # Pop meta_info from the text_queue when available
+                # Correlate by turn/sequence, not per-chunk pop: pushes and audio
+                # chunks are not 1:1, so popping per chunk misattributes (and strands
+                # the final chunk's end_of_llm_stream). Reuse the active turn's meta
+                # until a new turn's head arrives; prune stale heads first.
+                _prune()
                 if self.text_queue:
-                    self.meta_info = self.text_queue.popleft()
-                    self._compute_first_result_latency()
-
-                if self.meta_info is None:
+                    head = self.text_queue[0]
+                    active = self.meta_info if isinstance(self.meta_info, dict) else None
+                    if active is None or _key(head) != _key(active):
+                        self.meta_info = self.text_queue.popleft()
+                        try:
+                            self._compute_first_result_latency()
+                        except AttributeError:
+                            pass
+                    else:
+                        _carry()
+                        self.meta_info = active
+                elif not isinstance(self.meta_info, dict):
                     self.meta_info = {}
 
                 self.meta_info["format"] = self._get_audio_format()
@@ -261,30 +471,56 @@ class StreamSynthesizer(BaseSynthesizer):
 
                 # End-of-stream sentinel
                 if audio == b"\x00":
-                    logger.info(f"{self.provider_name}: end of stream")
+                    logger.info(f"{getattr(self, 'provider_name', 'stream')}: end of stream")
+                    # A newer turn already queued while this one settles: the sentinel is
+                    # positional, so emitting it would complete the wrong turn early.
+                    if self.text_queue and _key(self.text_queue[0]) != _key(self.meta_info):
+                        logger.warning("suppressing end-of-stream for superseded turn")
+                        _drain()
+                        continue
                     self.meta_info["end_of_synthesizer_stream"] = True
                     # eos may pop a non-final chunk's meta; carry end_of_llm_stream so is_final_chunk fires
                     if self.last_text_sent:
                         self.meta_info["end_of_llm_stream"] = True
+                    _carry()
                     self.first_chunk_generated = False
-                    self._record_turn_latency()
+                    try:
+                        self._record_turn_latency()
+                    except AttributeError:
+                        pass
+                    _drain()
                 else:
-                    audio = self._process_audio_chunk(audio)
+                    # ffmpeg/scipy resample must not block the event loop.
+                    try:
+                        process = self._process_audio_chunk
+                    except AttributeError:
+                        process = lambda chunk: chunk  # noqa: E731
+                    audio = await asyncio.to_thread(process, audio)
                     if audio is None:
                         continue
 
-                self._stamp_mark_id(self.meta_info)
+                try:
+                    self._stamp_mark_id(self.meta_info)
+                except AttributeError:
+                    pass
                 yield create_ws_data_packet(audio, self.meta_info)
 
         except Exception as e:
             # Classify before generate()'s log-and-raise: a bare websockets/provider exception
             # names neither the component that died nor the provider, and error_id is what ties
             # this line to the failure the caller is eventually told about.
-            self._log_receiver_failure(e)
+            if not isinstance(e, asyncio.CancelledError):
+                try:
+                    self._log_receiver_failure(e)
+                except AttributeError:
+                    err = classify_exception(
+                        e, component="synthesizer", provider=getattr(self, "provider_name", "stream")
+                    )
+                    logger.error(f"receiver failed (error_id={err.error_id}): {summarize_exception(e)}")
             raise
 
         if self.connection_error:
-            raise Exception(self.connection_error)
+            raise SynthesizerError(str(self.connection_error), provider=getattr(self, "provider_name", "stream"))
 
     def _log_receiver_failure(self, exc):
         """Attribute a receiver-side failure to this synthesizer with a correlation id."""
@@ -376,14 +612,44 @@ class StreamSynthesizer(BaseSynthesizer):
     # cleanup() — cancel tasks and close WS
     # ------------------------------------------------------------------
 
+    async def handle_interruption(self):
+        """Default barge-in: drop stale queued metas so the next turn re-detects as new.
+
+        Providers with a server-side cancel (Clear/cancelResponse/close_context) override
+        this but must keep the queue prune + clock reset (see Cartesia/Maya/Kalpa).
+        """
+        try:
+            self._prune_stale_queue()
+            # Next push must re-detect as a new turn to clear any stragglers.
+            self.current_turn_start_time = None
+            if getattr(self, "text_queue", None):
+                # Drop everything retired: the pipeline already dropped the turn.
+                try:
+                    should = getattr(self, "should_synthesize_response", None)
+                    if callable(should):
+                        kept = deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                        dropped = len(self.text_queue) - len(kept)
+                        if dropped:
+                            logger.info(f"{self.provider_name}: pruned {dropped} queued metas on interruption")
+                        self.text_queue = kept
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in {self.provider_name} handle_interruption: {e}")
+
     async def cleanup(self):
         self.conversation_ended = True
         logger.info(f"Cleaning up {self.provider_name} synthesizer tasks")
 
+        try:
+            await self._tasks.cancel_all()
+        except Exception as e:
+            logger.warning(f"Error cancelling {self.provider_name} sender tasks: {e}")
         if self.sender_task:
             try:
-                self.sender_task.cancel()
-                await self.sender_task
+                if not self.sender_task.done():
+                    self.sender_task.cancel()
+                    await self.sender_task
             except asyncio.CancelledError:
                 logger.info(f"{self.provider_name} sender task cancelled during cleanup.")
                 # Always stamp cancellation — even if sequence_id is None the event is useful

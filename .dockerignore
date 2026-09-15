@@ -20,3 +20,19 @@ agent_data/
 
 # Tests aren't needed inside the runtime image
 tests/
+
+# A12: audio fixtures bloat the image (~21MB wavs) and invalidate the app layer on every
+# `COPY . ./` before `pip install --no-deps .` — exclude them (runtime downloads/clones instead).
+*.wav
+*.mp3
+*.ogg
+local_setup/presets/ambient_noise/
+tests/manual/
+*.wav.bak
+
+# Virtualenvs / tooling never belong in the image
+.venv/
+.poetry/
+*.egg-info/
+dist/
+build/

@@ -10,10 +10,16 @@ Every error is a ``voiceai.errors.VoiceAIError`` rendered by the shared envelope
 Env
     TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER
     VOICE_STREAM_SECRET          signs the stream URL the engine verifies (required for real calls)
-    TELEPHONY_API_KEY            X-API-Key required on POST /call once set
-    CARRIER_VALIDATE_SIGNATURES  1 = verify X-Twilio-Signature on /twilio_connect
-    NGROK_API_URL                ngrok agent API (default http://ngrok:4040/api/tunnels)
+    TELEPHONY_API_KEY            X-API-Key required on POST /call (open from localhost only until set;
+                                 set ALLOW_OPEN_DIAL=1 to allow open non-localhost dial explicitly)
+    CARRIER_VALIDATE_SIGNATURES  1 = verify X-Twilio-Signature on /twilio_connect (required in prod;
+                                 unsigned callbacks allowed from localhost only unless
+                                 ALLOW_UNSIGNED_CARRIER_CALLBACK=1)
     TELEPHONY_PUBLIC_URL / VOICEAI_PUBLIC_WS_URL  explicit public URLs, used instead of ngrok when set
+                                 (TELEPHONY_PUBLIC_URL is also the trusted base for signature checks)
+    TRUSTED_PROXIES              comma-separated IPs/CIDRs whose X-Forwarded-* is trusted
+                                 (default loopback + 10/8,172.16/12,192.168/16)
+    NGROK_API_URL                ngrok agent API (default http://ngrok:4040/api/tunnels)
 """
 
 import os
@@ -27,14 +33,22 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
-from voiceai.errors import AuthorizationError, ConfigurationError, DependencyUnavailableError, TelephonyError, classify_exception
+from voiceai.errors import (
+    AuthorizationError,
+    ConfigurationError,
+    DependencyUnavailableError,
+    TelephonyError,
+    classify_exception,
+)
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.carrier_auth import (
     public_url_for,
     require_telephony_api_key,
     signature_validation_enabled,
+    unsigned_callback_allowed_for,
     verify_twilio_signature,
     warn_if_dial_endpoints_open,
+    warn_if_signatures_disabled,
 )
 from voiceai.platform.stream_token import stream_url
 from voiceai.responses import ErrorEnvelope, register_exception_handlers
@@ -70,6 +84,7 @@ def twilio_client():
 @app.on_event("startup")
 async def _startup() -> None:
     warn_if_dial_endpoints_open("twilio-app")
+    warn_if_signatures_disabled("twilio-app")
 
 
 async def resolve_public_urls() -> Tuple[str, str]:
@@ -100,7 +115,9 @@ async def resolve_public_urls() -> Tuple[str, str]:
 
 class CallDetails(BaseModel):
     agent_id: str = Field(..., min_length=1, description="The ID of the agent to handle the call.")
-    recipient_phone_number: str = Field(..., min_length=3, description="The phone number to call in E.164 format (e.g., +1234567890).")
+    recipient_phone_number: str = Field(
+        ..., min_length=3, description="The phone number to call in E.164 format (e.g., +1234567890)."
+    )
 
 
 class CallInitiated(BaseModel):
@@ -126,7 +143,9 @@ async def make_call(call_details: CallDetails, _auth: None = Depends(require_tel
     if not twilio_phone_number:
         raise ConfigurationError("TWILIO_PHONE_NUMBER is not set", path="TWILIO_PHONE_NUMBER")
     telephony_host, voiceai_host = await resolve_public_urls()
-    logger.info("dialing %s for agent %s via %s", call_details.recipient_phone_number, call_details.agent_id, telephony_host)
+    logger.info(
+        "dialing %s for agent %s via %s", call_details.recipient_phone_number, call_details.agent_id, telephony_host
+    )
 
     client = twilio_client()
     try:
@@ -164,8 +183,15 @@ async def twilio_connect(
         # not depend on the optional python-multipart package.
         body = (await request.body()).decode("utf-8", "ignore")
         form = {key: values[-1] for key, values in parse_qs(body, keep_blank_values=True).items()}
-        if not verify_twilio_signature(public_url_for(request), form, request.headers.get("X-Twilio-Signature"), twilio_auth_token):
+        if not verify_twilio_signature(
+            public_url_for(request), form, request.headers.get("X-Twilio-Signature"), twilio_auth_token
+        ):
             raise AuthorizationError("Twilio request signature is missing or invalid")
+    elif not unsigned_callback_allowed_for(request):
+        raise AuthorizationError(
+            "Twilio callback requires a valid signature for non-localhost requests "
+            "(set CARRIER_VALIDATE_SIGNATURES=1 in prod, or ALLOW_UNSIGNED_CARRIER_CALLBACK=1 to allow)"
+        )
 
     # The engine only accepts carrier legs whose stream URL carries a valid signed token.
     websocket_url = stream_url(voiceai_host, agent_id, ttl_s=STREAM_TOKEN_TTL_S)

@@ -125,9 +125,7 @@ async def test_new_asr_turn_appends_new_history_row():
     tm.conversation_history = ConversationHistory()
 
     with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
-        await tm._handle_transcriber_output(
-            "llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"}
-        )
+        await tm._handle_transcriber_output("llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"})
         await tm._handle_transcriber_output(
             "llm", "phone number batao", {"sequence_id": 4, "turn_id": 2, "asr_turn_id": "turn_2"}
         )
@@ -155,12 +153,8 @@ async def test_overlapped_turn_forwards_only_new_words():
     tm._TaskManager__cleanup_downstream_tasks = AsyncMock()
 
     with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
-        await tm._handle_transcriber_output(
-            "llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"}
-        )
-        await tm._handle_transcriber_output(
-            "llm", "अप्रैल।", {"sequence_id": 4, "turn_id": 2, "asr_turn_id": "turn_2"}
-        )
+        await tm._handle_transcriber_output("llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"})
+        await tm._handle_transcriber_output("llm", "अप्रैल।", {"sequence_id": 4, "turn_id": 2, "asr_turn_id": "turn_2"})
 
     forwarded = [c.args[0]["data"] for c in tm.tools["output"].handle.await_args_list]
     assert forwarded[-1] == "अप्रैल।"

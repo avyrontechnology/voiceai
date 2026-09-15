@@ -14,7 +14,9 @@ from collections import deque
 
 from voiceai.helpers.ssl_context import get_ssl_context
 from .base_synthesizer import BaseSynthesizer
+from voiceai.errors import SynthesizerError
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import TaskRegistry
 from voiceai.helpers.utils import create_ws_data_packet
 
 logger = configure_logger(__name__)
@@ -36,22 +38,31 @@ class PixaSynthesizer(BaseSynthesizer):
         caching=False,
         **kwargs,
     ):
-        super().__init__(kwargs.get("task_manager_instance", None), stream)
+        super().__init__(kwargs.get("task_manager_instance", None), stream, buffer_size)
         self.api_key = os.environ.get("PIXA_API_KEY") if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.voice = voice
         self.model = model
         self.language = language
         self.stream = True
+        self.buffer_size = buffer_size
         self.native_sampling_rate = 32000
-        self.target_sampling_rate = 8000
-        self.sampling_rate = sampling_rate
+        # Respect transport rate: telephony 8k mu-law, web keeps configured PCM rate.
+        self.use_mulaw = kwargs.get("use_mulaw", True)
+        try:
+            configured_rate = int(sampling_rate)
+        except (TypeError, ValueError):
+            configured_rate = 8000
+        self.target_sampling_rate = 8000 if self.use_mulaw else configured_rate
+        self.sampling_rate = str(self.target_sampling_rate)
         self.top_p = top_p
         self.repetition_penalty = repetition_penalty
+        self._send_lock = asyncio.Lock()
+        self._tasks = TaskRegistry(name="synth-pixa", logger=logger)
+        self._sender_tasks: list = []
 
         self.websocket_holder = {"websocket": None}
         self.connection_open = False
-        self.use_mulaw = True  # For telephony compatibility
         self.first_chunk_generated = False
         self.last_text_sent = False
         self.text_queue = deque()
@@ -82,23 +93,25 @@ class PixaSynthesizer(BaseSynthesizer):
         return 0.01
 
     def resample_audio(self, audio_bytes):
-        """Resample PCM16 audio from 32kHz to 8kHz and convert to mulaw for telephony."""
+        """Resample native PCM16 to the target rate and convert to mulaw for telephony."""
         try:
-            # Resample from 32kHz to 8kHz
-            resampled, _ = audioop.ratecv(
-                audio_bytes,
-                2,  # 2 bytes per sample (16-bit PCM)
-                1,  # mono
-                self.native_sampling_rate,
-                self.target_sampling_rate,
-                None,
-            )
+            if self.native_sampling_rate != self.target_sampling_rate:
+                resampled, _ = audioop.ratecv(
+                    audio_bytes,
+                    2,  # 2 bytes per sample (16-bit PCM)
+                    1,  # mono
+                    self.native_sampling_rate,
+                    self.target_sampling_rate,
+                    None,
+                )
+            else:
+                resampled = audio_bytes
             # Convert to mulaw for telephony if enabled
             if self.use_mulaw:
                 resampled = audioop.lin2ulaw(resampled, 2)
             return resampled
         except Exception as e:
-            logger.error(f"Error resampling audio: {e}")
+            logger.error(f"pixa: error resampling audio: {e}")
             return audio_bytes
 
     async def handle_interruption(self):
@@ -113,6 +126,18 @@ class PixaSynthesizer(BaseSynthesizer):
                 ):
                     await self.websocket_holder["websocket"].send(json.dumps(interrupt_message))
                 self.context_id = None
+            # Next turn must re-detect as new to prune stale queue entries.
+            self.current_turn_start_time = None
+            try:
+                should = getattr(self, "should_synthesize_response", None)
+                if callable(should) and getattr(self, "text_queue", None):
+                    kept = deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                    dropped = len(self.text_queue) - len(kept)
+                    if dropped:
+                        logger.info(f"pixa: pruned {dropped} queued metas on interruption")
+                    self.text_queue = kept
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error in handle_interruption: {e}")
 
@@ -124,44 +149,47 @@ class PixaSynthesizer(BaseSynthesizer):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
 
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(
-                    f"Not synthesizing text as the sequence_id ({sequence_id}) is not in the list of sequence_ids present in the task manager."
-                )
-                return
-
-            while (
-                self.websocket_holder["websocket"] is None
-                or self.websocket_holder["websocket"].state != websockets.protocol.State.OPEN
-            ):
-                if self.conversation_ended or self.connection_error:
+                if not self.should_synthesize_response(sequence_id):
                     logger.info(
-                        f"Aborting pixa sender wait: conversation_ended={self.conversation_ended} connection_error={self.connection_error}"
+                        f"Not synthesizing text as the sequence_id ({sequence_id}) is not in the list "
+                        "of sequence_ids present in the task manager."
                     )
                     return
-                logger.info("Waiting for Pixa WebSocket connection to be established...")
-                await asyncio.sleep(0.5)
 
-            if text != "":
-                try:
-                    input_message = self.form_payload(text, is_final=False)
-                    await self.websocket_holder["websocket"].send(json.dumps(input_message))
-                except Exception as e:
-                    logger.error(f"Error sending chunk: {e}")
-                    self.connection_error = str(e)
-                    return
+                while (
+                    self.websocket_holder["websocket"] is None
+                    or self.websocket_holder["websocket"].state != websockets.protocol.State.OPEN
+                ):
+                    if self.conversation_ended or self.connection_error:
+                        logger.info(
+                            f"Aborting pixa sender wait: conversation_ended={self.conversation_ended} "
+                            f"connection_error={self.connection_error}"
+                        )
+                        return
+                    logger.info("Waiting for Pixa WebSocket connection to be established...")
+                    await asyncio.sleep(0.5)
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                try:
-                    input_message = self.form_payload("", is_final=True)
-                    await self.websocket_holder["websocket"].send(json.dumps(input_message))
-                except Exception as e:
-                    logger.error(f"Error sending end-of-stream signal: {e}")
-                    self.connection_error = str(e)
+                if text != "":
+                    try:
+                        input_message = self.form_payload(text, is_final=False)
+                        await self.websocket_holder["websocket"].send(json.dumps(input_message))
+                    except Exception as e:
+                        logger.error(f"Error sending chunk: {e}")
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    try:
+                        input_message = self.form_payload("", is_final=True)
+                        await self.websocket_holder["websocket"].send(json.dumps(input_message))
+                    except Exception as e:
+                        logger.error(f"Error sending end-of-stream signal: {e}")
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
@@ -196,10 +224,10 @@ class PixaSynthesizer(BaseSynthesizer):
 
                 response = await self.websocket_holder["websocket"].recv()
 
-                # Handle binary audio data (PCM16 at 32kHz)
+                # Handle binary audio data (native PCM16)
                 if isinstance(response, bytes):
-                    # Resample from 32kHz to 8kHz
-                    resampled_audio = self.resample_audio(response)
+                    # audioop resample must not block the event loop.
+                    resampled_audio = await asyncio.to_thread(self.resample_audio, response)
                     yield resampled_audio
                 else:
                     # Handle JSON status messages
@@ -250,11 +278,16 @@ class PixaSynthesizer(BaseSynthesizer):
                     # Skip WAV header (44 bytes) to get raw PCM
                     pcm_audio = wav_audio[44:] if len(wav_audio) > 44 else wav_audio
 
-                    # Resample from 32kHz to 8kHz
-                    resampled, _ = audioop.ratecv(
-                        pcm_audio, 2, 1, self.native_sampling_rate, self.target_sampling_rate, None
-                    )
-                    return resampled
+                    # audioop resample must not block the event loop.
+                    def _resample():
+                        if self.native_sampling_rate == self.target_sampling_rate:
+                            return pcm_audio
+                        out, _ = audioop.ratecv(
+                            pcm_audio, 2, 1, self.native_sampling_rate, self.target_sampling_rate, None
+                        )
+                        return out
+
+                    return await asyncio.to_thread(_resample)
 
         except Exception as e:
             logger.error(f"Error in synthesize: {e}")
@@ -264,23 +297,37 @@ class PixaSynthesizer(BaseSynthesizer):
     def get_synthesized_characters(self):
         return self.synthesized_characters
 
+    def _turn_key(self, meta):
+        if not isinstance(meta, dict):
+            return (None, None)
+        return (meta.get("sequence_id"), meta.get("turn_id"))
+
     async def generate(self):
         try:
             async for message in self.receiver():
                 if self.connection_error:
-                    raise Exception(self.connection_error)
+                    raise SynthesizerError(str(self.connection_error), provider="pixa")
+                # Correlate by turn/sequence, not per-chunk pop.
                 if len(self.text_queue) > 0:
-                    self.meta_info = self.text_queue.popleft()
-                    try:
-                        if self.current_turn_start_time is not None:
-                            first_result_latency = time.perf_counter() - self.current_turn_start_time
-                            self.meta_info["synthesizer_latency"] = first_result_latency
-                    except Exception:
-                        pass
-
-                # Defensive check for meta_info
-                if self.meta_info is None:
-                    self.meta_info = {}
+                    head = self.text_queue[0]
+                    active = self.meta_info if isinstance(self.meta_info, dict) else None
+                    if active is None or self._turn_key(head) != self._turn_key(active):
+                        self.meta_info = self.text_queue.popleft()
+                        try:
+                            if self.current_turn_start_time is not None:
+                                first_result_latency = time.perf_counter() - self.current_turn_start_time
+                                self.meta_info["synthesizer_latency"] = first_result_latency
+                        except Exception:
+                            pass
+                    else:
+                        for m in list(self.text_queue):
+                            if self._turn_key(m) == self._turn_key(active) and m.get("end_of_llm_stream"):
+                                active["end_of_llm_stream"] = True
+                                break
+                        self.meta_info = active
+                else:
+                    if self.meta_info is None:
+                        self.meta_info = {}
 
                 self.meta_info["format"] = "mulaw" if self.use_mulaw else "pcm"
                 self.meta_info["sample_rate"] = self.target_sampling_rate
@@ -298,7 +345,22 @@ class PixaSynthesizer(BaseSynthesizer):
 
                 if message == b"\x00":
                     logger.info("Received end of stream marker")
+                    if len(self.text_queue) > 0 and self._turn_key(self.text_queue[0]) != self._turn_key(
+                        self.meta_info
+                    ):
+                        logger.warning("pixa: suppressing end-of-stream for superseded turn")
+                        while len(self.text_queue) > 0 and self._turn_key(self.text_queue[0]) == self._turn_key(
+                            self.meta_info
+                        ):
+                            self.text_queue.popleft()
+                        continue
                     self.meta_info["end_of_synthesizer_stream"] = True
+                    if self.last_text_sent:
+                        self.meta_info["end_of_llm_stream"] = True
+                    for m in list(self.text_queue):
+                        if self._turn_key(m) == self._turn_key(self.meta_info) and m.get("end_of_llm_stream"):
+                            self.meta_info["end_of_llm_stream"] = True
+                            break
                     self.first_chunk_generated = False
                     try:
                         if self.current_turn_start_time is not None:
@@ -320,10 +382,14 @@ class PixaSynthesizer(BaseSynthesizer):
                             self.current_tts_start_ms = None
                     except Exception:
                         pass
+                    while len(self.text_queue) > 0 and self._turn_key(self.text_queue[0]) == self._turn_key(
+                        self.meta_info
+                    ):
+                        self.text_queue.popleft()
 
                 yield create_ws_data_packet(audio, self.meta_info)
             if self.connection_error:
-                raise Exception(self.connection_error)
+                raise SynthesizerError(str(self.connection_error), provider="pixa")
 
         except Exception as e:
             traceback.print_exc()
@@ -379,7 +445,7 @@ class PixaSynthesizer(BaseSynthesizer):
         consecutive_failures = 0
         max_failures = 3
 
-        while consecutive_failures < max_failures:
+        while consecutive_failures < max_failures and not self.conversation_ended:
             if (
                 self.websocket_holder["websocket"] is None
                 or self.websocket_holder["websocket"].state != websockets.protocol.State.OPEN
@@ -412,15 +478,43 @@ class PixaSynthesizer(BaseSynthesizer):
             if not self.context_id:
                 self.update_context(meta_info)
 
+            # First-push-only clock: re-stamping per chunk breaks TTFB and defeats
+            # stale-queue pruning on the next turn.
             try:
-                self.current_turn_start_time = time.perf_counter()
-                self.current_turn_id = meta_info.get("turn_id")
-                self.current_sequence_id = meta_info.get("sequence_id")
-                self.current_tts_start_ms = meta_info.get("tts_start_ms")
+                if self.current_turn_start_time is None:
+                    if self.text_queue and any(
+                        m.get("sequence_id") != meta_info.get("sequence_id") for m in self.text_queue
+                    ):
+                        kept = deque(m for m in self.text_queue if m.get("sequence_id") == meta_info.get("sequence_id"))
+                        dropped = len(self.text_queue) - len(kept)
+                        self.text_queue = kept
+                        logger.info(f"Dropped {dropped} stale text_queue entries on new turn start")
+                    self.current_turn_start_time = time.perf_counter()
+                    self.current_turn_id = meta_info.get("turn_id")
+                    self.current_sequence_id = meta_info.get("sequence_id")
+                    self.current_tts_start_ms = meta_info.get("tts_start_ms")
             except Exception:
                 pass
 
-            self.sender_task = asyncio.create_task(self.sender(text, meta_info.get("sequence_id"), end_of_llm_stream))
+            prev = self.sender_task
+
+            async def _chained_sender():
+                if prev is not None and not prev.done():
+                    try:
+                        await prev
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
+                await self.sender(text, meta_info.get("sequence_id"), end_of_llm_stream)
+
+            try:
+                task = self._tasks.create(_chained_sender(), name=f"pixa-sender-{meta_info.get('sequence_id')}")
+            except Exception:
+                task = asyncio.create_task(_chained_sender())
+            self.sender_task = task
+            self._sender_tasks.append(task)
+            self._sender_tasks = [t for t in self._sender_tasks if not t.done()][-16:]
             self.text_queue.append(meta_info)
         else:
             self.internal_queue.put_nowait(message)
@@ -429,10 +523,15 @@ class PixaSynthesizer(BaseSynthesizer):
         self.conversation_ended = True
         logger.info("Cleaning up Pixa synthesizer tasks")
 
+        try:
+            await self._tasks.cancel_all()
+        except Exception as e:
+            logger.warning(f"Error cancelling Pixa sender tasks: {e}")
         if self.sender_task:
             try:
-                self.sender_task.cancel()
-                await self.sender_task
+                if not self.sender_task.done():
+                    self.sender_task.cancel()
+                    await self.sender_task
             except asyncio.CancelledError:
                 logger.info("Sender task was successfully cancelled during WebSocket cleanup.")
             except Exception as e:

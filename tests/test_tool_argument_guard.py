@@ -10,9 +10,10 @@ a token of their choosing. Every path that applies arguments must go through
 
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from voiceai.llms.gemini_llm import GeminiLLM
 from voiceai.llms.openai_llm import OpenAiLLM
@@ -254,3 +255,232 @@ def test_redact_secrets_walks_nested_bags_and_json_headers():
 def test_redact_secrets_accepts_pydantic_models():
     payload = FunctionCallPayload(url=CONFIGURED_URL, api_token=CONFIGURED_TOKEN)
     assert redact_secrets(payload)["api_token"] == "***"
+
+
+# ---------------------------------------------------------------------------
+# S2S: model args must never collide with trigger_api's own kwargs
+# ---------------------------------------------------------------------------
+
+
+def _make_s2s_tm(tool_params: dict[str, Any]) -> Any:
+    """Minimal TaskManager stub for _s2s_call_api_tool (no media loops, no auth)."""
+    from voiceai.agent_manager.task_manager import TaskManager
+
+    tm = TaskManager.__new__(TaskManager)
+    tm.run_id = "run-1"
+    tm.function_tool_api_call_details = []
+    return tm
+
+
+async def test_s2s_strips_reserved_args_before_trigger_api() -> None:
+    """Hostile url/api_token in S2S args must not collide with trigger_api kwargs."""
+    from voiceai.s2s import events as s2s_events
+
+    tm = _make_s2s_tm({"book": {"url": CONFIGURED_URL}})
+    hostile = {"customer_id": "42", "url": "http://169.254.169.254/", "api_token": "x"}
+    hostile.update({"headers_data": {}, "run_id": "evil", "return_response_metadata": True})
+    event = s2s_events.FunctionCall(name="book", call_id="c1", arguments=json.dumps(hostile))
+    params = {"url": CONFIGURED_URL, "method": "POST", "api_token": CONFIGURED_TOKEN, "param": None}
+
+    with patch(
+        "voiceai.agent_manager.task_manager.trigger_api",
+        new=AsyncMock(return_value={"body": '{"ok":1}', "status_code": 200}),
+    ) as api:
+        result = await tm._s2s_call_api_tool(event, hostile, params, {"request_id": "q"})
+
+    assert result == '{"ok":1}'
+    assert api.await_args.kwargs["url"] == CONFIGURED_URL
+    # Reserved keys never reach the splat, so trigger_api sees no duplicate kwarg.
+    assert api.await_args.kwargs["customer_id"] == "42"
+    # The configured request wins; hostile values are dropped, not forwarded.
+    assert api.await_args.kwargs["api_token"] == CONFIGURED_TOKEN
+    assert api.await_args.kwargs["headers_data"] is None
+    assert api.await_args.kwargs["run_id"] == "run-1"
+    assert api.await_args.kwargs["return_response_metadata"] is True
+
+
+async def test_s2s_non_dict_args_do_not_collide() -> None:
+    """A non-object S2S arguments payload must not break the tool call."""
+    from voiceai.s2s import events as s2s_events
+
+    tm = _make_s2s_tm({"book": {"url": CONFIGURED_URL}})
+    event = s2s_events.FunctionCall(name="book", call_id="c1", arguments="[]")
+    params = {"url": CONFIGURED_URL, "method": "POST", "api_token": CONFIGURED_TOKEN, "param": None}
+
+    with patch(
+        "voiceai.agent_manager.task_manager.trigger_api",
+        new=AsyncMock(return_value={"body": '{"ok":1}', "status_code": 200}),
+    ) as api:
+        result = await tm._s2s_call_api_tool(event, ["not", "an", "object"], params, {"request_id": "q"})
+
+    assert result == '{"ok":1}'
+    assert api.await_args.kwargs["url"] == CONFIGURED_URL
+
+
+# ---------------------------------------------------------------------------
+# Server-owned ids must never reach the model (all providers)
+# ---------------------------------------------------------------------------
+
+
+def _server_id_tool(name: str = "book") -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "d",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_id": {"type": "string"},
+                    "call_sid": {"type": "string"},
+                    "stream_sid": {"type": "string"},
+                },
+                "required": ["customer_id", "call_sid"],
+            },
+        },
+    }
+
+
+def _tool_names(tools: Any) -> list[str]:
+    return [(t.get("function") or {}).get("name") for t in tools]
+
+
+async def test_litellm_strips_server_injected_params() -> None:
+    """LiteLLM must drop call_sid/stream_sid from the tools sent on the wire."""
+    from voiceai.llms.litellm import LiteLLM
+
+    llm = LiteLLM(
+        model="gpt-4o-mini",
+        api_tools={"tools": [_server_id_tool()], "tools_params": {"book": {"url": CONFIGURED_URL}}},
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise _SentinelForGuard()
+
+    class _SentinelForGuard(Exception):
+        pass
+
+    with patch("voiceai.llms.litellm.acompletion", fake_acompletion):
+        with pytest.raises(_SentinelForGuard):
+            async for _ in llm.generate_stream([{"role": "user", "content": "hi"}]):
+                pass
+    props = captured["tools"][0]["function"]["parameters"]["properties"]
+    assert "call_sid" not in props and "stream_sid" not in props
+    assert "customer_id" in props
+    assert "call_sid" not in captured["tools"][0]["function"]["parameters"].get("required", [])
+
+
+async def test_litellm_per_turn_tools_override_is_stripped() -> None:
+    """A per-node tools= override on LiteLLM must be stripped the same way."""
+    from voiceai.llms.litellm import LiteLLM
+
+    llm = LiteLLM(
+        model="gpt-4o-mini",
+        api_tools={"tools": [_server_id_tool("a")], "tools_params": {"a": {"url": CONFIGURED_URL}}},
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise _SentinelOverride()
+
+    class _SentinelOverride(Exception):
+        pass
+
+    with patch("voiceai.llms.litellm.acompletion", fake_acompletion):
+        with pytest.raises(_SentinelOverride):
+            async for _ in llm.generate_stream([{"role": "user", "content": "hi"}], tools=[_server_id_tool("b")]):
+                pass
+    assert _tool_names(captured["tools"]) == ["b"]
+    assert "call_sid" not in captured["tools"][0]["function"]["parameters"]["properties"]
+
+
+def test_gemini_init_strips_server_injected_params() -> None:
+    """Gemini declarations built at init must not expose call_sid/stream_sid."""
+    llm = GeminiLLM(
+        model="gemini-2.5-flash",
+        llm_key="test-key",
+        run_id="run-1",
+        api_tools={"tools_params": {"book": {"url": CONFIGURED_URL}}, "tools": [_server_id_tool()]},
+    )
+    assert llm.gemini_tools is not None
+    decl = llm.gemini_tools[0].function_declarations[0]
+    params = decl.parameters.model_dump() if hasattr(decl.parameters, "model_dump") else decl.parameters
+    props = (params or {}).get("properties", {})
+    assert "call_sid" not in props and "stream_sid" not in props
+    assert "customer_id" in props
+
+
+def test_gemini_build_config_respects_per_node_tools_override() -> None:
+    """A per-node tools= subset must reach the Gemini request, stripped."""
+    llm = GeminiLLM(
+        model="gemini-2.5-flash",
+        llm_key="test-key",
+        run_id="run-1",
+        api_tools={
+            "tools_params": {"a": {"url": CONFIGURED_URL}, "b": {"url": CONFIGURED_URL}},
+            "tools": [_server_id_tool("a"), _server_id_tool("b")],
+        },
+    )
+    config = llm._build_config("sys", tools=[_server_id_tool("b")])
+    assert config.tools is not None
+    assert [d.name for d in config.tools[0].function_declarations] == ["b"]
+    decl = config.tools[0].function_declarations[0]
+    params = decl.parameters.model_dump() if hasattr(decl.parameters, "model_dump") else decl.parameters
+    assert "call_sid" not in (params or {}).get("properties", {})
+
+
+def test_gemini_build_config_empty_tools_omits_tools() -> None:
+    """An empty per-call tools list (all tools scoped away) must omit tools entirely."""
+    llm = GeminiLLM(
+        model="gemini-2.5-flash",
+        llm_key="test-key",
+        run_id="run-1",
+        api_tools={
+            "tools_params": {"a": {"url": CONFIGURED_URL}},
+            "tools": [_server_id_tool("a")],
+        },
+    )
+    config = llm._build_config("sys", tools=[])
+    assert config.tools is None
+
+
+def test_gemini_build_config_forced_tool_choice_sets_tool_config() -> None:
+    """A forced tool_choice must pin the Gemini request to that function (ANY mode)."""
+    from google.genai.types import FunctionCallingConfigMode
+
+    llm = GeminiLLM(
+        model="gemini-2.5-flash",
+        llm_key="test-key",
+        run_id="run-1",
+        api_tools={
+            "tools_params": {"book": {"url": CONFIGURED_URL}},
+            "tools": [_server_id_tool("book")],
+        },
+    )
+    config = llm._build_config(
+        "sys",
+        tools=[_server_id_tool("book")],
+        tool_choice={"type": "function", "function": {"name": "book"}},
+    )
+    assert config.tool_config is not None
+    fcc = config.tool_config.function_calling_config
+    assert fcc is not None
+    assert fcc.mode == FunctionCallingConfigMode.ANY
+    assert list(fcc.allowed_function_names or []) == ["book"]
+
+
+def test_gemini_build_config_no_force_leaves_tool_config_unset() -> None:
+    """Without a forced tool_choice the Gemini request must not pin a function."""
+    llm = GeminiLLM(
+        model="gemini-2.5-flash",
+        llm_key="test-key",
+        run_id="run-1",
+        api_tools={
+            "tools_params": {"book": {"url": CONFIGURED_URL}},
+            "tools": [_server_id_tool("book")],
+        },
+    )
+    assert llm._build_config("sys").tool_config is None

@@ -107,3 +107,53 @@ def test_short_or_blank_secret_is_rejected():
 def test_empty_agent_id_is_rejected():
     with pytest.raises(ConfigurationError):
         mint_stream_token("", secret=SECRET)
+
+
+# --- A1 AUTH GATE: wildcard / never-expiring tokens warn; CLI defaults are scoped (Red) ---
+
+
+def test_wildcard_mint_logs_warning(caplog):
+    import logging
+
+    from voiceai.platform import stream_token as stream_token_mod
+
+    with caplog.at_level(logging.WARNING, logger=stream_token_mod.logger.name):
+        token = mint_stream_token(WILDCARD_AGENT, ttl_s=60, secret=SECRET)
+    assert verify_stream_token(token, "agent-1", secret=SECRET) is True
+    assert any("wildcard" in r.message.lower() for r in caplog.records)
+
+
+def test_never_expiring_mint_logs_warning(caplog):
+    import logging
+
+    from voiceai.platform import stream_token as stream_token_mod
+
+    with caplog.at_level(logging.WARNING, logger=stream_token_mod.logger.name):
+        token = mint_stream_token("agent-1", ttl_s=0, secret=SECRET)
+    ten_years_on = time.time() + 10 * 365 * 86400
+    assert verify_stream_token(token, "agent-1", secret=SECRET, now=ten_years_on) is True
+    assert any("ttl" in r.message.lower() or "expir" in r.message.lower() for r in caplog.records)
+
+
+def test_scoped_short_lived_mint_does_not_warn(caplog):
+    import logging
+
+    from voiceai.platform import stream_token as stream_token_mod
+
+    with caplog.at_level(logging.WARNING, logger=stream_token_mod.logger.name):
+        token = mint_stream_token("agent-1", ttl_s=300, secret=SECRET)
+    assert verify_stream_token(token, "agent-1", secret=SECRET) is True
+    assert not any("wildcard" in r.message.lower() for r in caplog.records)
+
+
+def test_cli_defaults_are_scoped_not_wildcard_never_expiring():
+    import pytest
+
+    from voiceai.platform.stream_token import DEFAULT_TTL_S, build_cli_parser
+
+    parser = build_cli_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([])  # --agent is required: no implicit wildcard relay token
+    scoped = parser.parse_args(["--agent", "agent-1"])
+    assert scoped.ttl == DEFAULT_TTL_S and scoped.ttl != 0
+    assert scoped.agent == "agent-1" and scoped.agent != WILDCARD_AGENT

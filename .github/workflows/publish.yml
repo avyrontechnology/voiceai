@@ -1,6 +1,7 @@
 name: Publish to PyPI
 
-# TEMPORARILY DISABLED — re-enable by restoring the push trigger.
+# Intentionally manual-only: publish runs via workflow_dispatch after a version
+# bump lands on master. Do not add push/pull_request triggers without release review.
 on:
   workflow_dispatch: {}
 

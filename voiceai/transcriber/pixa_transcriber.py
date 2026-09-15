@@ -97,13 +97,11 @@ class PixaTranscriber(BaseTranscriber):
 
     def _configure_audio_params(self):
         """Configure audio parameters based on telephony provider."""
-        if self.telephony_provider == "twilio":
-            self.encoding = "mulaw"
-            self.input_sampling_rate = 8000
-            self.sampling_rate = 8000
-            self.audio_frame_duration = 0.2
-        elif self.telephony_provider in ("plivo", "exotel"):
-            self.encoding = "linear16"
+        from voiceai.enums import TelephonyProvider as _TP
+
+        if self.telephony_provider in _TP.telephony_values():
+            is_mulaw = self.telephony_provider in _TP.mulaw_values()
+            self.encoding = "mulaw" if is_mulaw else "linear16"
             self.input_sampling_rate = 8000
             self.sampling_rate = 8000
             self.audio_frame_duration = 0.2
@@ -112,6 +110,16 @@ class PixaTranscriber(BaseTranscriber):
             self.sampling_rate = 16000
             self.input_sampling_rate = 16000
             self.audio_frame_duration = 0.256
+        elif self.telephony_provider == _TP.FREESWITCH.value:
+            self.encoding = "linear16"
+            self.sampling_rate = 16000
+            self.input_sampling_rate = 16000
+            self.audio_frame_duration = 0.2
+        elif self.telephony_provider == "playground":
+            self.encoding = "linear16"
+            self.input_sampling_rate = 8000
+            self.sampling_rate = 8000
+            self.audio_frame_duration = 0.0
         else:
             # Default configuration
             self.encoding = self.encoding or "linear16"
@@ -179,6 +187,28 @@ class PixaTranscriber(BaseTranscriber):
 
         raise ConnectionError(f"Failed to connect to Pixa after {retries} attempts: {last_err}")
 
+    @staticmethod
+    def _is_silence_frame(data) -> bool:
+        """True for standby-keepalive silence or empty frames (see SmallestTranscriber)."""
+        if not data:
+            return True
+        if isinstance(data, bytes) and len(data) > 0 and len(set(data)) == 1 and data[0] in (0x00, 0xFF):
+            return True
+        return False
+
+    def _ensure_turn_started(self) -> bool:
+        """Start a turn on first real content (receiver-side, like Sarvam START_SPEECH)."""
+        if self.current_turn_id is not None:
+            return False
+        self.current_turn_start_time = timestamp_ms()
+        self.turn_counter += 1
+        self.current_turn_id = f"turn_{self.turn_counter}"
+        self.turn_first_result_latency = None
+        self.final_transcript = ""
+        self.is_transcript_sent_for_processing = False
+        logger.info(f"Pixa starting new turn {self.current_turn_id} on content")
+        return True
+
     async def sender_stream(self, ws: ClientConnection):
         """Send audio frames to Pixa WebSocket."""
         try:
@@ -193,12 +223,9 @@ class PixaTranscriber(BaseTranscriber):
                     self.audio_submission_time = time.time()
                     self.current_request_id = self.generate_request_id()
                     self.meta_info["request_id"] = self.current_request_id
-
-                    # Start turn tracking
-                    if not self.current_turn_start_time:
-                        self.current_turn_start_time = timestamp_ms()
-                        self.turn_counter += 1
-                        self.current_turn_id = f"turn_{self.turn_counter}"
+                    # No turn yet — turns start on first transcript content in
+                    # receiver() (VAD/content gating like Sarvam START_SPEECH), so
+                    # standby keepalive silence never creates a phantom turn.
 
                 # Check for end of stream
                 if ws_data_packet.get("meta_info", {}).get("eos") is True:
@@ -276,6 +303,10 @@ class PixaTranscriber(BaseTranscriber):
                                 transcript = data.get("transcript", "")
 
                             if transcript and transcript.strip():
+                                # Gate turn start on content (VAD/content like Sarvam
+                                # START_SPEECH): standby silence never yields transcripts.
+                                if self._ensure_turn_started():
+                                    yield create_ws_data_packet("speech_started", self.meta_info)
                                 now_timestamp = time.time()
 
                                 # Track first result latency
@@ -309,6 +340,8 @@ class PixaTranscriber(BaseTranscriber):
 
                                     # Build turn latency info
                                     if self.current_turn_start_time:
+                                        import copy as _copy
+
                                         total_duration_ms = round(timestamp_ms() - self.current_turn_start_time)
                                         turn_info = {
                                             "turn_id": self.current_turn_id,
@@ -319,8 +352,8 @@ class PixaTranscriber(BaseTranscriber):
                                             "asr_finalized_epoch_ms": timestamp_ms(),
                                             "final_transcript": self.final_transcript,
                                         }
-                                        self.turn_latencies.append(turn_info)
-                                        self.meta_info["turn_latencies"] = self.turn_latencies
+                                        self._upsert_turn_latency(turn_info)
+                                        self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
 
                                     # Yield final transcript
                                     yield create_ws_data_packet(
@@ -349,10 +382,14 @@ class PixaTranscriber(BaseTranscriber):
             traceback.print_exc()
 
     def _reset_turn_state(self):
-        """Reset turn state after finalizing a transcript."""
-        self.current_turn_start_time = timestamp_ms()
-        self.current_turn_id = f"turn_{self.turn_counter + 1}"
-        self.turn_counter += 1
+        """Reset turn state after finalizing a transcript.
+
+        Clears to None (lazy next-turn on content) instead of pre-creating
+        turn_{counter+1}: pre-creation counted a turn for standby silence and
+        stamped the next turn's start during the previous turn's silence gap.
+        """
+        self.current_turn_start_time = None
+        self.current_turn_id = None
         self.turn_first_result_latency = None
         self.final_transcript = ""
         self.is_transcript_sent_for_processing = True
@@ -399,6 +436,8 @@ class PixaTranscriber(BaseTranscriber):
 
         # Build turn latencies
         if self.current_turn_start_time:
+            import copy as _copy
+
             total_duration_ms = round(timestamp_ms() - self.current_turn_start_time)
             turn_info = {
                 "turn_id": self.current_turn_id,
@@ -410,8 +449,8 @@ class PixaTranscriber(BaseTranscriber):
                 "asr_finalized_epoch_ms": timestamp_ms(),
                 "final_transcript": transcript_to_send,
             }
-            self.turn_latencies.append(turn_info)
-            self.meta_info["turn_latencies"] = self.turn_latencies
+            self._upsert_turn_latency(turn_info)
+            self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
 
         data = {
             "type": "transcript",

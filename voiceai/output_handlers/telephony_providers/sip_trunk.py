@@ -30,6 +30,7 @@ import uuid
 from collections import deque
 from voiceai.output_handlers.telephony import TelephonyOutputHandler, lin16_to_mulaw
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import log_ignored, safe_task
 from dotenv import load_dotenv
 
 logger = configure_logger(__name__)
@@ -122,8 +123,8 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
             tasks = self.agent_config.get("tasks") or []
             if tasks and isinstance(tasks[0], dict):
                 return tasks[0].get("tools_config", {}).get("output") or {}
-        except Exception:
-            pass
+        except Exception as exc:
+            log_ignored(logger, "sip-trunk output config", exc, level=10)
         return {}
 
     # ------------------------------------------------------------------
@@ -161,7 +162,9 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
         remaining = self._response_audio_duration - elapsed
         delay = max(remaining, 0) + PLAYBACK_SETTLE_S
 
-        self._settle_task = asyncio.create_task(self._settle_and_finish(generation, delay))
+        self._settle_task = safe_task(
+            self._settle_and_finish(generation, delay), name="sip_settle_finish", logger=logger
+        )
         logger.info(
             f"sip-trunk: playback finish in {delay:.2f}s "
             f"(audio={self._response_audio_duration:.2f}s, elapsed={elapsed:.2f}s)"
@@ -527,7 +530,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
     def set_hangup_sent(self):
         super().set_hangup_sent()
         try:
-            asyncio.create_task(self.send_hangup())
+            safe_task(self.send_hangup(), name="sip_send_hangup", logger=logger)
         except Exception as e:
             logger.error(f"sip-trunk send_hangup: {e}")
 

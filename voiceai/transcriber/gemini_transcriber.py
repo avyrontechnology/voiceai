@@ -102,6 +102,9 @@ class GeminiTranscriber(BaseTranscriber):
         self.current_turn_interim_details = []
         self.turn_counter = 0
         self.last_interim_time = None
+        # Stateful resampler for the 8k→16k telephony upsample: audioop.ratecv filter
+        # state carried across frames so boundaries stay continuous (stateless clicks).
+        self._resample_state = None
 
     def _resolve_audio_params(self):
         """Set encoding and sample rate from the telephony/web I/O provider (task_manager also
@@ -182,9 +185,17 @@ class GeminiTranscriber(BaseTranscriber):
 
     def _to_gemini_pcm(self, data):
         """Telephony audio to the 16 kHz PCM-16 the Live API requires: decode mulaw, then upsample."""
+        import audioop
+
         pcm = ulaw_to_pcm(data) if self.encoding == "mulaw" else data
         if self.sampling_rate != GEMINI_INPUT_SAMPLE_RATE:
-            pcm = resample(pcm, GEMINI_INPUT_SAMPLE_RATE, format="pcm", original_sample_rate=self.sampling_rate)
+            try:
+                pcm, self._resample_state = audioop.ratecv(
+                    pcm, 2, 1, self.sampling_rate, GEMINI_INPUT_SAMPLE_RATE, self._resample_state
+                )
+            except Exception:
+                pcm = resample(pcm, GEMINI_INPUT_SAMPLE_RATE, format="pcm", original_sample_rate=self.sampling_rate)
+                self._resample_state = None
         return pcm
 
     async def sender_stream(self, ws):
@@ -251,7 +262,7 @@ class GeminiTranscriber(BaseTranscriber):
         self.final_transcript = ""
         self.running_interim = ""
         self.is_transcript_sent_for_processing = False
-        self.turn_latencies.append(
+        self._upsert_turn_latency(
             {
                 "turn_id": self.current_turn_id,
                 "asr_start_epoch_ms": self.current_turn_start_time,
@@ -445,6 +456,7 @@ class GeminiTranscriber(BaseTranscriber):
     async def transcribe(self):
         """Stream until eos or shutdown, reopening a fresh session across the Live API's ~10 min cap."""
         start_time = timestamp_ms()
+        self._resample_state = None
         self.utterance_timeout_task = asyncio.create_task(self.monitor_utterance_timeout())
         try:
             while self.connection_on and not self._eos_received:

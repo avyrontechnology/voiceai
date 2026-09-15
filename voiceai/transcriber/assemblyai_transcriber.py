@@ -433,14 +433,14 @@ class AssemblyAITranscriber(BaseTranscriber):
                                             ((self.meta_info or {}).get("transcriber_first_result_latency", 0)) * 1000
                                         ),
                                         "total_stream_duration_ms": round(total_stream_duration * 1000),
-                                        "interim_details": self.current_turn_interim_details,
+                                        "interim_details": list(self.current_turn_interim_details),
                                         "first_interim_to_final_ms": first_interim_to_final_ms,
                                         "last_interim_to_final_ms": last_interim_to_final_ms,
                                         "asr_start_epoch_ms": self._turn_start_epoch_ms,
                                         "asr_finalized_epoch_ms": timestamp_ms(),
                                         "final_transcript": transcript,
                                     }
-                                    self.turn_latencies.append(turn_info)
+                                    self._upsert_turn_latency(turn_info)
 
                                     self.current_turn_start_time = None
                                     self._turn_start_epoch_ms = None

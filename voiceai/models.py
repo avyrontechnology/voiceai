@@ -145,7 +145,9 @@ class Transcriber(BaseModel):
     stream: bool = Field(False, description="Whether to stream audio data to the transcriber.")
     sampling_rate: Optional[int] = Field(16000, description="Audio sampling rate in Hz.")
     encoding: Optional[str] = Field("linear16", description="Audio encoding format.")
-    endpointing: Optional[int] = Field(500, description="Duration of silence in ms to trigger endpointing (utterance completion).")
+    endpointing: Optional[int] = Field(
+        500, description="Duration of silence in ms to trigger endpointing (utterance completion)."
+    )
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to boost transcription accuracy.")
     task: Optional[str] = Field("transcribe", description="Task type, usually 'transcribe'.")
     provider: Optional[str] = Field("deepgram", description="The speech-to-text provider to use.")
@@ -157,9 +159,13 @@ class Transcriber(BaseModel):
     eot_timeout_ms: Optional[int] = Field(None, description="End-of-turn timeout in milliseconds.")
     language_hints: Optional[List[str]] = Field(None, description="List of probable languages to hint the transcriber.")
     delay: Optional[str] = Field("medium", description="Delay configuration ('low', 'medium', 'high').")
-    noise_reduction: Optional[bool] = Field(False, description="Whether to apply noise reduction to the incoming audio.")
+    noise_reduction: Optional[bool] = Field(
+        False, description="Whether to apply noise reduction to the incoming audio."
+    )
     vad_threshold: Optional[float] = Field(0.5, description="Voice Activity Detection (VAD) confidence threshold.")
-    vad_prefix_padding_ms: Optional[int] = Field(300, description="Padding in milliseconds applied before VAD triggers.")
+    vad_prefix_padding_ms: Optional[int] = Field(
+        300, description="Padding in milliseconds applied before VAD triggers."
+    )
 
     @field_validator("provider")
     def validate_model(cls, value):
@@ -167,7 +173,9 @@ class Transcriber(BaseModel):
 
 
 class Synthesizer(BaseModel):
-    provider: str = Field(..., description="The text-to-speech provider to use (e.g., 'elevenlabs', 'polly', 'deepgram').")
+    provider: str = Field(
+        ..., description="The text-to-speech provider to use (e.g., 'elevenlabs', 'polly', 'deepgram')."
+    )
     provider_config: Union[
         PollyConfig,
         ElevenLabsConfig,
@@ -183,7 +191,9 @@ class Synthesizer(BaseModel):
         KalpaConfig,
     ] = Field(..., description="Provider-specific configuration details.", union_mode="smart")
     stream: bool = Field(False, description="Whether to stream synthesized audio back to the client.")
-    buffer_size: Optional[int] = Field(40, description="Buffer size in characters before sending text to the synthesizer.")
+    buffer_size: Optional[int] = Field(
+        40, description="Buffer size in characters before sending text to the synthesizer."
+    )
     audio_format: Optional[str] = Field("pcm", description="Audio format for the synthesized output.")
     caching: Optional[bool] = Field(True, description="Enable caching of frequently synthesized phrases.")
 
@@ -345,7 +355,9 @@ class Llm(BaseModel):
     presence_penalty: Optional[float] = Field(0.0, description="Penalty for new tokens based on presence.")
     provider: Optional[str] = Field("openai", description="The LLM provider (e.g., openai, azure, groq).")
     base_url: Optional[str] = Field(None, description="Custom base URL for the LLM API.")
-    reasoning_effort: Optional[ReasoningEffort] = Field(None, description="Reasoning effort configuration for reasoning models (e.g., o1).")
+    reasoning_effort: Optional[ReasoningEffort] = Field(
+        None, description="Reasoning effort configuration for reasoning models (e.g., o1)."
+    )
     verbosity: Optional[Verbosity] = Field(None, description="Verbosity level of the LLM responses.")
     use_responses_api: Optional[bool] = Field(False, description="Whether to use a specific responses API.")
     compact_threshold: Optional[int] = Field(None, description="Threshold for compacting message history context.")
@@ -392,7 +404,9 @@ class ExpressionCondition(BaseModel):
 
 
 class ExpressionGroup(BaseModel):
-    logic: ExpressionLogic = Field(ExpressionLogic.AND, description="Logical operator (AND/OR) to combine multiple conditions.")
+    logic: ExpressionLogic = Field(
+        ExpressionLogic.AND, description="Logical operator (AND/OR) to combine multiple conditions."
+    )
     conditions: List[ExpressionCondition] = Field(default_factory=list, description="List of conditions to evaluate.")
 
 
@@ -414,17 +428,29 @@ class GraphEdge(BaseModel):
     to_node_id: str = Field(..., description="Target node ID to transition to.")
     condition: str = Field("", description="Human-readable description of when to transition.")
     label: Optional[str] = Field(None, description="Optional label for the edge.")
-    condition_type: Optional[EdgeConditionType] = Field(None, description="Type of condition triggering the transition. None maps to 'llm'.")
-    expression: Optional[ExpressionGroup] = Field(None, description="Expression to evaluate if condition_type is 'expression'.")
+    condition_type: Optional[EdgeConditionType] = Field(
+        None, description="Type of condition triggering the transition. None maps to 'llm'."
+    )
+    expression: Optional[ExpressionGroup] = Field(
+        None, description="Expression to evaluate if condition_type is 'expression'."
+    )
     event_name: Optional[str] = Field(None, description="Event name to match if condition_type is 'event'.")
     # Function definition for LLM to call (auto-generated if not provided)
-    function_name: Optional[str] = Field(None, description="Name of the function the LLM must call to transition, e.g. 'go_to_city_question'.")
-    function_description: Optional[str] = Field(None, description="Detailed description of the transition function for the LLM.")
+    function_name: Optional[str] = Field(
+        None, description="Name of the function the LLM must call to transition, e.g. 'go_to_city_question'."
+    )
+    function_description: Optional[str] = Field(
+        None, description="Detailed description of the transition function for the LLM."
+    )
     # Optional parameters to collect during transition
-    parameters: Optional[Dict[str, str]] = Field(None, description="Optional parameters to collect during transition, mapping names to types.")
+    parameters: Optional[Dict[str, str]] = Field(
+        None, description="Optional parameters to collect during transition, mapping names to types."
+    )
     # lower = evaluated first within a tier (expression/intent/unconditional); does not rank across tiers.
     # Defaults: expression/unconditional=0, llm=100
-    priority: Optional[int] = Field(None, description="Evaluation priority within the same condition type tier. Lower is evaluated first.")
+    priority: Optional[int] = Field(
+        None, description="Evaluation priority within the same condition type tier. Lower is evaluated first."
+    )
 
 
 class GraphNode(BaseModel):
@@ -432,9 +458,15 @@ class GraphNode(BaseModel):
     description: Optional[str] = Field(None, description="Human-readable description of the node.")
     node_type: NodeType = Field(NodeType.LLM, description="Type of the node (LLM or ROUTER).")
     prompt: str = Field("", description="The system prompt for the LLM when in this node.")
-    static_message: Optional[LocalizedText] = Field(None, description="Static text to synthesize and play instead of using the LLM for response generation.")
-    repeat_after_silence_seconds: Optional[float] = Field(None, description="Seconds of silence before repeating the static message.")
-    examples: Optional[Dict[str, str]] = Field(None, description="Optional examples of inputs and responses for few-shot prompting.")
+    static_message: Optional[LocalizedText] = Field(
+        None, description="Static text to synthesize and play instead of using the LLM for response generation."
+    )
+    repeat_after_silence_seconds: Optional[float] = Field(
+        None, description="Seconds of silence before repeating the static message."
+    )
+    examples: Optional[Dict[str, str]] = Field(
+        None, description="Optional examples of inputs and responses for few-shot prompting."
+    )
     edges: List[GraphEdge] = Field(default_factory=list, description="List of outgoing edges from this node.")
     function_call: Optional[str] = Field(None, description="Specific function call to force the LLM to execute.")
     completion_check: Optional[Callable[[List[dict]], bool]] = Field(None, exclude=True)
@@ -467,18 +499,28 @@ class GraphNode(BaseModel):
 class GraphAgentConfig(Llm):
     agent_information: str = Field(..., description="General system prompt/context for the overall agent.")
     nodes: List[GraphNode] = Field(..., description="List of nodes defining the conversation graph.")
-    current_node_id: str = Field(..., description="The ID of the node where the conversation begins or is currently at.")
+    current_node_id: str = Field(
+        ..., description="The ID of the node where the conversation begins or is currently at."
+    )
     context_data: Optional[dict] = Field(None, description="Optional extra data passed into the context.")
     # Variable path -> declared type, used to coerce expression-routing comparisons into
     # the right domain. Keys match the condition's variable exactly (e.g. "recipient_data.age").
-    variable_types: Optional[Dict[str, VariableType]] = Field(None, description="Mapping of variable keys to their data types for condition evaluation.")
+    variable_types: Optional[Dict[str, VariableType]] = Field(
+        None, description="Mapping of variable keys to their data types for condition evaluation."
+    )
     # Global knowledge base. Nodes without their own rag_config fall back to this at retrieval time.
     rag_config: Optional[RagConfig] = Field(None, description="Global RAG configuration for the entire graph.")
     # Routing configuration
-    routing_model: Optional[str] = Field(None, description="Model used specifically for evaluating LLM routing condition decisions.")
-    routing_provider: Optional[str] = Field(None, description="Provider used for routing evaluations (e.g., groq for speed).")
+    routing_model: Optional[str] = Field(
+        None, description="Model used specifically for evaluating LLM routing condition decisions."
+    )
+    routing_provider: Optional[str] = Field(
+        None, description="Provider used for routing evaluations (e.g., groq for speed)."
+    )
     routing_instructions: Optional[str] = Field(None, description="Custom instructions for the routing LLM.")
-    routing_reasoning_effort: Optional[ReasoningEffort] = Field(None, description="GPT-5 reasoning effort for routing (minimal, low, medium, high).")
+    routing_reasoning_effort: Optional[ReasoningEffort] = Field(
+        None, description="GPT-5 reasoning effort for routing (minimal, low, medium, high)."
+    )
     routing_max_tokens: Optional[int] = Field(None, description="Maximum tokens allowed for the routing response.")
 
     @model_validator(mode="after")
@@ -529,7 +571,9 @@ class GraphAgentConfig(Llm):
 
 
 class KnowledgeAgentConfig(Llm):
-    agent_information: Optional[str] = Field("Knowledge-based AI assistant", description="System prompt and instructions for the agent.")
+    agent_information: Optional[str] = Field(
+        "Knowledge-based AI assistant", description="System prompt and instructions for the agent."
+    )
     prompt: Optional[str] = Field(None, description="Additional context or base prompt.")
     rag_config: Optional[Dict] = Field(None, description="Configuration for RAG knowledge retrieval.")
     llm_provider: Optional[str] = Field("openai", description="The LLM provider to use.")
@@ -543,9 +587,13 @@ class AgentRouteConfig(BaseModel):
 
 class MultiAgent(BaseModel):
     agent_map: Dict[str, Union[Llm]] = Field(..., description="Map of agent names to their LLM configurations.")
-    agent_routing_config: Dict[str, AgentRouteConfig] = Field(..., description="Routing logic configuration mapped by agent name.")
+    agent_routing_config: Dict[str, AgentRouteConfig] = Field(
+        ..., description="Routing logic configuration mapped by agent name."
+    )
     default_agent: str = Field(..., description="The name of the agent to route to by default.")
-    embedding_model: Optional[str] = Field("Snowflake/snowflake-arctic-embed-l", description="Embedding model to use for intent routing matching.")
+    embedding_model: Optional[str] = Field(
+        "Snowflake/snowflake-arctic-embed-l", description="Embedding model to use for intent routing matching."
+    )
 
 
 class KnowledgebaseAgent(Llm):
@@ -556,10 +604,12 @@ class KnowledgebaseAgent(Llm):
 
 class LlmAgent(BaseModel):
     agent_flow_type: str = Field(..., description="The flow type, such as 'preprocessed'.")
-    agent_type: str = Field(..., description="The type of the agent: 'simple_llm_agent', 'graph_agent', 'multiagent', etc.")
+    agent_type: str = Field(
+        ..., description="The type of the agent: 'simple_llm_agent', 'graph_agent', 'multiagent', etc."
+    )
     llm_config: Union[
         KnowledgebaseAgent, LlmAgentGraph, MultiAgent, SimpleLlmAgent, GraphAgentConfig, KnowledgeAgentConfig
-    ] = Field(..., description="The detailed configuration specific to the agent_type.")
+    ] = Field(..., description="The detailed configuration specific to the agent_type.", union_mode="left_to_right")
 
     @field_validator("llm_config", mode="before")
     def validate_llm_config(cls, value, info):
@@ -578,6 +628,11 @@ class LlmAgent(BaseModel):
 
         expected_type = valid_config_types[agent_type]
 
+        # Accept model instances (Assistant/examples pass SimpleLlmAgent directly) as well as dicts.
+        if isinstance(value, BaseModel):
+            if isinstance(value, expected_type):
+                return value
+            value = value.model_dump()
         if not isinstance(value, dict):
             raise ValueError(f"llm_config must be a dict, got {type(value)}")
 
@@ -609,8 +664,12 @@ from voiceai.llms.types import APIParams  # noqa: E402 — canonical definition 
 
 
 class ToolModel(BaseModel):
-    tools: Optional[Union[str, List[Union[ToolDescription, ToolDescriptionLegacy]]]] = Field(None, description="List of tool definitions or a string reference to tools.")
-    tools_params: Dict[str, APIParams] = Field(..., description="Configuration mapping for API endpoints these tools might call.")
+    tools: Optional[Union[str, List[Union[ToolDescription, ToolDescriptionLegacy]]]] = Field(
+        None, description="List of tool definitions or a string reference to tools."
+    )
+    tools_params: Dict[str, APIParams] = Field(
+        ..., description="Configuration mapping for API endpoints these tools might call."
+    )
 
 
 class OpenAIRealtimeConfig(BaseModel):
@@ -621,16 +680,22 @@ class OpenAIRealtimeConfig(BaseModel):
     # semantic_vad scores whether the caller has actually finished from what they said, so
     # it waits longer on a trailing "ummm" than on a finished sentence. That is the job the
     # llm pipeline does with a word count and a phrase list, done by a model instead.
-    turn_detection_type: str = Field("semantic_vad", description="Type of turn detection: 'semantic_vad' or 'server_vad'.")
+    turn_detection_type: str = Field(
+        "semantic_vad", description="Type of turn detection: 'semantic_vad' or 'server_vad'."
+    )
     # auto | low | medium | high. Lower gives the caller longer before the model takes over.
     eagerness: Optional[str] = Field("auto", description="How eagerly the model responds (auto, low, medium, high).")
     # server_vad only; ignored under semantic_vad.
     vad_threshold: Optional[float] = Field(0.5, description="VAD threshold (for server_vad only).")
     vad_silence_duration_ms: Optional[int] = Field(500, description="Silence duration in ms before triggering VAD.")
     vad_prefix_padding_ms: Optional[int] = Field(300, description="Prefix padding for VAD in ms.")
-    reasoning_effort: Optional[ReasoningEffort] = Field(None, description="Reasoning effort level (if supported by model).")
+    reasoning_effort: Optional[ReasoningEffort] = Field(
+        None, description="Reasoning effort level (if supported by model)."
+    )
     max_output_tokens: Optional[int] = Field(None, description="Maximum output tokens for generation.")
-    transcription_model: Optional[str] = Field("gpt-4o-mini-transcribe", description="Model used for transcribing input audio.")
+    transcription_model: Optional[str] = Field(
+        "gpt-4o-mini-transcribe", description="Model used for transcribing input audio."
+    )
     language: Optional[str] = Field(None, description="Language constraint for the session.")
 
     @model_validator(mode="after")
@@ -654,8 +719,12 @@ class GeminiLiveConfig(BaseModel):
     vad_silence_duration_ms: Optional[int] = Field(600, description="VAD silence duration in ms.")
     vad_prefix_padding_ms: Optional[int] = Field(None, description="Prefix padding for VAD.")
     # Gemini closes an audio session at ~15 minutes, so both stay on unless explicitly disabled.
-    enable_session_resumption: bool = Field(True, description="Whether to resume the session gracefully if it closes automatically.")
-    enable_context_compression: bool = Field(True, description="Whether to compress context to save tokens over long sessions.")
+    enable_session_resumption: bool = Field(
+        True, description="Whether to resume the session gracefully if it closes automatically."
+    )
+    enable_context_compression: bool = Field(
+        True, description="Whether to compress context to save tokens over long sessions."
+    )
 
 
 S2S_PROVIDER_CONFIGS = {
@@ -666,9 +735,14 @@ S2S_PROVIDER_CONFIGS = {
 
 class S2SConfig(BaseModel):
     provider: str = Field(..., description="The S2S multimodal provider, e.g. 'openai_realtime' or 'gemini_live'.")
-    provider_config: Union[OpenAIRealtimeConfig, GeminiLiveConfig] = Field(..., description="Configuration specific to the chosen S2S provider.")
+    provider_config: Union[OpenAIRealtimeConfig, GeminiLiveConfig] = Field(
+        ..., description="Configuration specific to the chosen S2S provider.", union_mode="left_to_right"
+    )
     # Suppresses inbound audio while the agent opens, so its own greeting cannot trip provider VAD.
-    welcome_audio_gate_ms: int = Field(1500, description="Milliseconds to suppress inbound audio at connection start to avoid VAD tripping on the agent's greeting.")
+    welcome_audio_gate_ms: int = Field(
+        1500,
+        description="Milliseconds to suppress inbound audio at connection start to avoid VAD tripping on the agent's greeting.",
+    )
 
     @model_validator(mode="before")
     def preprocess(cls, values):
@@ -685,45 +759,134 @@ class S2SConfig(BaseModel):
 
 
 class ToolsConfig(BaseModel):
-    llm_agent: Optional[Union[LlmAgent, SimpleLlmAgent]] = Field(None, description="Configuration for the LLM agent responsible for understanding and responding to user intent.")
-    synthesizer: Optional[Synthesizer] = Field(None, description="Configuration for the Text-To-Speech (TTS) synthesizer.")
-    transcriber: Optional[Transcriber] = Field(None, description="Configuration for the Speech-To-Text (STT) transcriber.")
+    # union_mode left_to_right mirrors VectorStore: LlmAgent (discriminated by agent_type) first,
+    # SimpleLlmAgent fallback. The before-validator below is the explicit discriminator.
+    llm_agent: Optional[Union[LlmAgent, SimpleLlmAgent]] = Field(
+        None,
+        description="Configuration for the LLM agent responsible for understanding and responding to user intent.",
+        union_mode="left_to_right",
+    )
+    synthesizer: Optional[Synthesizer] = Field(
+        None, description="Configuration for the Text-To-Speech (TTS) synthesizer."
+    )
+    transcriber: Optional[Transcriber] = Field(
+        None, description="Configuration for the Speech-To-Text (STT) transcriber."
+    )
     input: Optional[IOModel] = Field(None, description="Configuration for processing incoming audio streams.")
     output: Optional[IOModel] = Field(None, description="Configuration for processing outgoing audio streams.")
-    api_tools: Optional[ToolModel] = Field(None, description="External API tools that the LLM agent can call during the conversation.")
-    s2s: Optional[S2SConfig] = Field(None, description="Configuration for server-to-server (S2S) multimodal audio providers (like OpenAI Realtime).")
-    switch_tool_description: Optional[str] = Field(None, description="Description used when handing off to another agent in a multi-agent scenario.")
-    switch_handoff_messages: Optional[Dict[str, str]] = Field(None, description="Messages played to the user during agent handoffs, mapped by language/intent.")
-    agent_names: Optional[Dict[str, str]] = Field(None, description="Mapping of agent names for multi-agent dispatching.")
+    api_tools: Optional[ToolModel] = Field(
+        None, description="External API tools that the LLM agent can call during the conversation."
+    )
+    s2s: Optional[S2SConfig] = Field(
+        None, description="Configuration for server-to-server (S2S) multimodal audio providers (like OpenAI Realtime)."
+    )
+    switch_tool_description: Optional[str] = Field(
+        None, description="Description used when handing off to another agent in a multi-agent scenario."
+    )
+    switch_handoff_messages: Optional[Dict[str, str]] = Field(
+        None, description="Messages played to the user during agent handoffs, mapped by language/intent."
+    )
+    agent_names: Optional[Dict[str, str]] = Field(
+        None, description="Mapping of agent names for multi-agent dispatching."
+    )
+
+    @model_validator(mode="before")
+    def dispatch_llm_agent(cls, values):
+        """Explicit discriminator for the llm_agent union (mirrors LlmAgent.validate_llm_config).
+
+        Presence of ``agent_type`` selects LlmAgent; its absence selects SimpleLlmAgent.
+        Accepts model instances as well as plain dicts so Assistant/examples can pass either.
+        union_mode left_to_right is the pydantic-level backstop; this validator is authoritative.
+        """
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        agent = values.get("llm_agent")
+        if isinstance(agent, BaseModel):
+            return values
+        if isinstance(agent, dict):
+            if "agent_type" in agent:
+                try:
+                    values["llm_agent"] = LlmAgent(**agent)
+                except Exception:
+                    pass
+            else:
+                try:
+                    values["llm_agent"] = SimpleLlmAgent(**agent)
+                except Exception:
+                    pass
+        return values
 
 
 class ToolsChainModel(BaseModel):
-    execution: str = Field(..., pattern="^(parallel|sequential)$", description="Execution mode: 'parallel' or 'sequential'.")
-    pipelines: List[List[str]] = Field(..., description="A list of lists, where each sublist is a pipeline of tool names to execute.")
+    execution: str = Field(
+        ..., pattern="^(parallel|sequential)$", description="Execution mode: 'parallel' or 'sequential'."
+    )
+    pipelines: List[List[str]] = Field(
+        ..., description="A list of lists, where each sublist is a pipeline of tool names to execute."
+    )
 
 
 class ConversationConfig(BaseModel):
-    optimize_latency: Optional[bool] = Field(True, description="Whether to aggressively optimize for lower latency across the pipeline.")
-    hangup_after_silence: Optional[int] = Field(20, description="Time in seconds of silence before the system automatically hangs up the call.")
-    incremental_delay: Optional[int] = Field(900, description="Incremental delay in milliseconds used to handle long pauses in conversation.")
-    number_of_words_for_interruption: Optional[int] = Field(1, description="Minimum number of words detected before triggering a barge-in/interruption.")
-    interruption_backoff_period: Optional[int] = Field(100, description="Time in milliseconds to ignore further audio immediately after an interruption.")
-    hangup_after_LLMCall: Optional[bool] = Field(False, description="Whether to automatically hang up after the LLM agent completes its primary goal.")
-    call_cancellation_prompt: Optional[str] = Field(None, description="Prompt/instruction used to detect if the user wants to cancel or end the call.")
-    backchanneling: Optional[bool] = Field(False, description="Enable active listening/backchanneling (e.g., saying 'mm-hmm' while the user speaks).")
-    backchanneling_message_gap: Optional[int] = Field(5, description="Minimum gap in seconds between consecutive backchanneling messages.")
-    backchanneling_start_delay: Optional[int] = Field(5, description="Delay in seconds before initiating backchanneling behavior.")
-    ambient_noise: Optional[bool] = Field(False, description="Whether to play synthetic ambient noise in the background.")
-    call_terminate: Optional[int] = Field(90, description="Maximum total call duration in seconds before forced termination.")
-    use_fillers: Optional[bool] = Field(False, description="Whether to use filler words ('uh', 'um') before LLM responses to reduce perceived latency.")
-    trigger_user_online_message_after: Optional[int] = Field(10, description="Time in seconds of inactivity before prompting the user to see if they are still there.")
-    check_user_online_message: Optional[Union[str, Dict[str, str]]] = Field("Hey, are you still there", description="The message played when checking if the user is still online.")
-    check_if_user_online: Optional[bool] = Field(True, description="Enable proactive checks to see if the user is still on the line.")
+    optimize_latency: Optional[bool] = Field(
+        True, description="Whether to aggressively optimize for lower latency across the pipeline."
+    )
+    hangup_after_silence: Optional[int] = Field(
+        20, description="Time in seconds of silence before the system automatically hangs up the call."
+    )
+    incremental_delay: Optional[int] = Field(
+        900, description="Incremental delay in milliseconds used to handle long pauses in conversation."
+    )
+    number_of_words_for_interruption: Optional[int] = Field(
+        1, description="Minimum number of words detected before triggering a barge-in/interruption."
+    )
+    interruption_backoff_period: Optional[int] = Field(
+        100, description="Time in milliseconds to ignore further audio immediately after an interruption."
+    )
+    hangup_after_LLMCall: Optional[bool] = Field(
+        False, description="Whether to automatically hang up after the LLM agent completes its primary goal."
+    )
+    call_cancellation_prompt: Optional[str] = Field(
+        None, description="Prompt/instruction used to detect if the user wants to cancel or end the call."
+    )
+    backchanneling: Optional[bool] = Field(
+        False, description="Enable active listening/backchanneling (e.g., saying 'mm-hmm' while the user speaks)."
+    )
+    backchanneling_message_gap: Optional[int] = Field(
+        5, description="Minimum gap in seconds between consecutive backchanneling messages."
+    )
+    backchanneling_start_delay: Optional[int] = Field(
+        5, description="Delay in seconds before initiating backchanneling behavior."
+    )
+    ambient_noise: Optional[bool] = Field(
+        False, description="Whether to play synthetic ambient noise in the background."
+    )
+    call_terminate: Optional[int] = Field(
+        90, description="Maximum total call duration in seconds before forced termination."
+    )
+    use_fillers: Optional[bool] = Field(
+        False, description="Whether to use filler words ('uh', 'um') before LLM responses to reduce perceived latency."
+    )
+    trigger_user_online_message_after: Optional[int] = Field(
+        10, description="Time in seconds of inactivity before prompting the user to see if they are still there."
+    )
+    check_user_online_message: Optional[Union[str, Dict[str, str]]] = Field(
+        "Hey, are you still there", description="The message played when checking if the user is still online."
+    )
+    check_if_user_online: Optional[bool] = Field(
+        True, description="Enable proactive checks to see if the user is still on the line."
+    )
     dtmf_enabled: Optional[bool] = Field(False, description="Whether to enable processing of DTMF (keypad) tones.")
     voicemail: Optional[bool] = Field(False, description="Whether to enable voicemail detection.")
-    voicemail_detection_duration: Optional[float] = Field(30.0, description="Time window in seconds to detect voicemail signals.")
-    voicemail_check_interval: Optional[float] = Field(7.0, description="Minimum time in seconds between interim voicemail checks.")
-    voicemail_min_transcript_length: Optional[int] = Field(7, description="Minimum number of transcribed words to trigger an interim voicemail check.")
+    voicemail_detection_duration: Optional[float] = Field(
+        30.0, description="Time window in seconds to detect voicemail signals."
+    )
+    voicemail_check_interval: Optional[float] = Field(
+        7.0, description="Minimum time in seconds between interim voicemail checks."
+    )
+    voicemail_min_transcript_length: Optional[int] = Field(
+        7, description="Minimum number of transcribed words to trigger an interim voicemail check."
+    )
 
     @field_validator("hangup_after_silence", mode="before")
     def set_hangup_after_silence(cls, v):
@@ -731,14 +894,29 @@ class ConversationConfig(BaseModel):
 
 
 class Task(BaseModel):
-    tools_config: ToolsConfig = Field(..., description="Configuration mapping for tools, STT, TTS, and the LLM agent used in this task.")
-    toolchain: ToolsChainModel = Field(..., description="Execution pipeline and chain for the tasks (e.g., parallel vs sequential).")
-    task_type: Optional[str] = Field("conversation", description="Type of the task. E.g., 'conversation', 'extraction', 'summarization'.")
-    task_config: ConversationConfig = Field(default_factory=dict, description="Conversation settings, including latency optimizations and termination logic.")
+    tools_config: ToolsConfig = Field(
+        ..., description="Configuration mapping for tools, STT, TTS, and the LLM agent used in this task."
+    )
+    toolchain: ToolsChainModel = Field(
+        ..., description="Execution pipeline and chain for the tasks (e.g., parallel vs sequential)."
+    )
+    task_type: Optional[str] = Field(
+        "conversation", description="Type of the task. E.g., 'conversation', 'extraction', 'summarization'."
+    )
+    task_config: ConversationConfig = Field(
+        default_factory=ConversationConfig,
+        description="Conversation settings, including latency optimizations and termination logic.",
+    )
 
 
 class AgentModel(BaseModel):
     agent_name: str = Field(..., description="A recognizable name for this agent.")
-    agent_type: str = Field("other", description="Type of agent architecture. E.g., 'other', 'graph_agent', 'llm_agent'.")
-    tasks: List[Task] = Field(..., description="List of tasks to execute in order. Can include conversations, extractions, etc.")
-    agent_welcome_message: Optional[str] = Field(AGENT_WELCOME_MESSAGE, description="First message spoken by the agent upon connecting the call.")
+    agent_type: str = Field(
+        "other", description="Type of agent architecture. E.g., 'other', 'graph_agent', 'llm_agent'."
+    )
+    tasks: List[Task] = Field(
+        ..., description="List of tasks to execute in order. Can include conversations, extractions, etc."
+    )
+    agent_welcome_message: Optional[str] = Field(
+        AGENT_WELCOME_MESSAGE, description="First message spoken by the agent upon connecting the call."
+    )

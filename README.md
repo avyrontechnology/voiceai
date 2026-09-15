@@ -25,6 +25,15 @@
 > [!NOTE]
 > We are actively looking for maintainers.
 
+> [!NOTE]
+> Fork note (A11 hygiene, 2026-09-12): this repo is a fork of
+> [bolna-ai/bolna](https://github.com/bolna-ai/bolna). The `bolna` name appears
+> ~17 times in docs, links, and historical references — that is intentional and
+> preserved so upstream URLs, hosted docs (`docs.bolna.ai`), and git history keep
+> working. Do not bulk-rename `bolna` → `voiceai`. Git history is immutable; use
+> the `voiceai` package/module name for all new code and document the `bolna`
+> references as legacy/upstream pointers going forward.
+
 ## Introduction
 
 **[Bolna](https://bolna.ai)** is the end-to-end open source production ready framework for quickly building LLM based voice driven conversational applications.

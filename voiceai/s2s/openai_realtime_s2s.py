@@ -7,6 +7,7 @@ from typing import AsyncGenerator, List, Optional
 import websockets
 
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.helpers.resilience import log_ignored
 from .base_s2s import MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_S, BaseS2SProvider
 from .events import (
     AudioDelta,
@@ -95,13 +96,34 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
     # Common full-name → ISO 639-1 mappings so agent configs with human-readable
     # language names ("hindi", "english") don't crash the OpenAI Realtime API.
     _LANG_NAME_TO_CODE = {
-        "hindi": "hi", "english": "en", "spanish": "es", "french": "fr",
-        "german": "de", "italian": "it", "portuguese": "pt", "japanese": "ja",
-        "korean": "ko", "chinese": "zh", "arabic": "ar", "russian": "ru",
-        "dutch": "nl", "turkish": "tr", "polish": "pl", "swedish": "sv",
-        "thai": "th", "vietnamese": "vi", "indonesian": "id", "urdu": "ur",
-        "tamil": "ta", "marathi": "mr", "kannada": "kn", "telugu": "te",
-        "bengali": "bn", "gujarati": "gu", "malayalam": "ml", "punjabi": "pa",
+        "hindi": "hi",
+        "english": "en",
+        "spanish": "es",
+        "french": "fr",
+        "german": "de",
+        "italian": "it",
+        "portuguese": "pt",
+        "japanese": "ja",
+        "korean": "ko",
+        "chinese": "zh",
+        "arabic": "ar",
+        "russian": "ru",
+        "dutch": "nl",
+        "turkish": "tr",
+        "polish": "pl",
+        "swedish": "sv",
+        "thai": "th",
+        "vietnamese": "vi",
+        "indonesian": "id",
+        "urdu": "ur",
+        "tamil": "ta",
+        "marathi": "mr",
+        "kannada": "kn",
+        "telugu": "te",
+        "bengali": "bn",
+        "gujarati": "gu",
+        "malayalam": "ml",
+        "punjabi": "pa",
     }
 
     @classmethod
@@ -273,8 +295,8 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         if self._ws:
             try:
                 await self._ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_ignored(logger, "s2s ws close", exc)
             self._ws = None
         # OpenAI has no resumption handle like Gemini's, so state is restored by rebuilding
         # the session config, whose instructions carry the transcript so far.
@@ -381,8 +403,8 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         """
         try:
             await self._send({"type": "response.cancel"})
-        except Exception:
-            pass
+        except Exception as exc:
+            log_ignored(logger, "s2s cancel idle session", exc)
         await self._send(
             {
                 "type": "conversation.item.create",

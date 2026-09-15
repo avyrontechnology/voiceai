@@ -72,14 +72,14 @@ class SarvamTranscriber(BaseTranscriber):
         super().__init__(input_queue)
 
         self.telephony_provider = telephony_provider
-        
+
         # Backward compatibility: map deprecated saarika models to saaras:v3
         if model and model.startswith("saarika"):
             logger.info(f"Mapping deprecated model {model} to saaras:v3")
             self.model = "saaras:v3"
         else:
             self.model = model
-            
+
         self.language = language
         self.target_language = target_language
         self.stream = stream
@@ -124,6 +124,9 @@ class SarvamTranscriber(BaseTranscriber):
         self.curr_message = ""
         self.finalized_transcript = ""
         self.interruption_signalled = False
+        # Stateful resampler: audioop.ratecv keeps filter state across chunks; passing
+        # None per chunk (stateless) clicks at every boundary. Mirrors lid/sarvam.py.
+        self._resample_state = None
 
         self.api_url = None
         self.ws_url = None
@@ -234,7 +237,9 @@ class SarvamTranscriber(BaseTranscriber):
             try:
                 current_rate = getattr(self, "input_sampling_rate", self.sampling_rate)
                 if current_rate != self.sampling_rate:
-                    audio_bytes, _ = audioop.ratecv(audio_bytes, 2, 1, current_rate, self.sampling_rate, None)
+                    audio_bytes, self._resample_state = audioop.ratecv(
+                        audio_bytes, 2, 1, current_rate, self.sampling_rate, self._resample_state
+                    )
             except Exception:
                 audio_bytes = self.normalize_to_16k(audio_bytes, current_rate)
 
@@ -407,9 +412,7 @@ class SarvamTranscriber(BaseTranscriber):
                             # turn_latencies (observability/eval). Each Sarvam "data" message
                             # is a finalized segment; overlap-merge (not join) — segments
                             # re-emit the previous tail and naive joining doubles digits.
-                            self.final_transcript = merge_transcript_segments(
-                                self.final_transcript, transcript.strip()
-                            )
+                            self.final_transcript = merge_transcript_segments(self.final_transcript, transcript.strip())
                             # Segments can arrive AFTER END_SPEECH closed the turn (short
                             # utterances) — backfill the closed entry, else it stores null text.
                             if (
@@ -472,7 +475,9 @@ class SarvamTranscriber(BaseTranscriber):
                                 # Via the base helper so meta_info["asr_turn_id"] is published —
                                 # a raw append left user messages unjoinable (asr_turn_id null).
                                 self._upsert_turn_latency(turn_info)
-                                self.meta_info["turn_latencies"] = self.turn_latencies
+                                import copy as _copy
+
+                                self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
 
                                 # Reset turn tracking
                                 self.current_turn_start_time = None
@@ -642,6 +647,7 @@ class SarvamTranscriber(BaseTranscriber):
             pass
 
     async def transcribe(self):
+        self._resample_state = None
         try:
             start_time = time.perf_counter()
             try:

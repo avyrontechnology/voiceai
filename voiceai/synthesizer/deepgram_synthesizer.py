@@ -9,6 +9,7 @@ from collections import deque
 import aiohttp
 import websockets
 from dotenv import load_dotenv
+from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
 from voiceai.helpers.logger_config import configure_logger
@@ -49,8 +50,12 @@ class DeepgramSynthesizer(StreamSynthesizer):
         self.api_key = kwargs.get("transcriber_key", os.getenv("DEEPGRAM_AUTH_TOKEN"))
 
         self.use_mulaw = kwargs.get("use_mulaw", False)
-        if self.use_mulaw or audio_format in ("pcm", "wav"):
+        # mu-law is only valid at 8 kHz telephony; web (24 kHz) must stay PCM even
+        # when the caller leaves audio_format at its pcm/wav default.
+        if self.use_mulaw and str(sampling_rate) == "8000":
             self.format = "mulaw"
+        elif audio_format in ("pcm", "wav"):
+            self.format = "pcm"
         else:
             self.format = audio_format
 
@@ -78,7 +83,9 @@ class DeepgramSynthesizer(StreamSynthesizer):
     # ------------------------------------------------------------------
 
     def _get_audio_format(self):
-        return "mulaw" if self.use_mulaw else self.format
+        if self.use_mulaw and str(self.sample_rate) == "8000":
+            return "mulaw"
+        return self.format
 
     # ------------------------------------------------------------------
     # Interruption
@@ -90,6 +97,18 @@ class DeepgramSynthesizer(StreamSynthesizer):
             if ws is not None and ws.state is websockets.protocol.State.OPEN:
                 await ws.send(json.dumps({"type": "Clear"}))
                 logger.info("Sent Clear message to Deepgram TTS WebSocket")
+            # The cleared turn never forwards its EOS, so the next turn must re-detect
+            # as new to prune stale queue entries (vs cartesia:110/maya:180).
+            self.current_turn_start_time = None
+            try:
+                should = getattr(self, "should_synthesize_response", None)
+                if callable(should) and getattr(self, "text_queue", None):
+                    from collections import deque as _deque
+
+                    kept = _deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                    self.text_queue = kept
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error handling interruption: {e}")
 
@@ -99,38 +118,39 @@ class DeepgramSynthesizer(StreamSynthesizer):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                await self.flush_synthesizer_stream()
-                return
-
-            await self._wait_for_ws()
-
-            if text != "":
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
                 if not self.should_synthesize_response(sequence_id):
-                    logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
                     await self.flush_synthesizer_stream()
                     return
-                try:
-                    if self.ws_send_time is None:
-                        self.ws_send_time = time.perf_counter()
-                        logger.info("Deepgram WS send first_text_sent")
-                    await self._send_json({"type": "Speak", "text": text})
-                except Exception as e:
-                    logger.error(f"Error sending chunk to Deepgram: {e}")
-                    self.connection_error = str(e)
-                    return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                try:
-                    await self._send_json({"type": "Flush"})
-                    logger.info("Sent Flush message to Deepgram TTS WebSocket")
-                except Exception as e:
-                    logger.error(f"Error sending Flush to Deepgram: {e}")
-                    self.connection_error = str(e)
+                await self._wait_for_ws()
+
+                if text != "":
+                    if not self.should_synthesize_response(sequence_id):
+                        logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                        await self.flush_synthesizer_stream()
+                        return
+                    try:
+                        if self.ws_send_time is None:
+                            self.ws_send_time = time.perf_counter()
+                            logger.info("Deepgram WS send first_text_sent")
+                        await self._send_json({"type": "Speak", "text": text})
+                    except Exception as e:
+                        logger.error(f"Error sending chunk to Deepgram: {e}")
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    try:
+                        await self._send_json({"type": "Flush"})
+                        logger.info("Sent Flush message to Deepgram TTS WebSocket")
+                    except Exception as e:
+                        logger.error(f"Error sending Flush to Deepgram: {e}")
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Deepgram sender task was cancelled.")
@@ -217,13 +237,12 @@ class DeepgramSynthesizer(StreamSynthesizer):
         except asyncio.TimeoutError:
             logger.error("Timeout while connecting to Deepgram TTS WebSocket")
             return None
-        except websockets.exceptions.InvalidStatusCode as e:
-            if e.status_code == 401:
-                logger.error("Deepgram authentication failed: Invalid API key")
-            elif e.status_code == 403:
-                logger.error("Deepgram authentication failed: Access forbidden")
+        except InvalidHandshake as e:
+            error_msg = str(e)
+            if "401" in error_msg or "403" in error_msg:
+                logger.error(f"Deepgram authentication failed: Invalid API key - {e}")
             else:
-                logger.error(f"Deepgram WebSocket connection failed with status {e.status_code}: {e}")
+                logger.error(f"Deepgram WebSocket handshake failed: {e}")
             self.connection_error = str(e)
             return None
         except Exception as e:

@@ -138,9 +138,7 @@ async def main() -> None:
             agent_flow_type="streaming",
             llm_config=SimpleLlmAgent(provider="google", model=GEMINI_MODEL, temperature=0.2, max_tokens=150),
         ),
-        transcriber=Transcriber(
-            provider="sarvam", model=SARVAM_STT_MODEL, language=SARVAM_STT_LANGUAGE, stream=True
-        ),
+        transcriber=Transcriber(provider="sarvam", model=SARVAM_STT_MODEL, language=SARVAM_STT_LANGUAGE, stream=True),
         synthesizer=Synthesizer(
             provider="sarvam",
             provider_config=SarvamConfig(

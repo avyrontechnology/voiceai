@@ -156,12 +156,24 @@ async def test_engine_hook_web_leg_never_carries_numbers():
 async def test_history_api_returns_caller_fields_and_web_stays_null():
     store = MemoryStore()
     await record_engine_execution(
-        store, agent_id="a1", run_id="pstn-row", history=[], task_outputs=[],
-        to_number="+91111", from_number="+91804", direction="outbound", is_web_based_call=False,
+        store,
+        agent_id="a1",
+        run_id="pstn-row",
+        history=[],
+        task_outputs=[],
+        to_number="+91111",
+        from_number="+91804",
+        direction="outbound",
+        is_web_based_call=False,
     )
     await record_engine_execution(
-        store, agent_id="a1", run_id="web-row", history=[], task_outputs=[],
-        direction="inbound", is_web_based_call=True,
+        store,
+        agent_id="a1",
+        run_id="web-row",
+        history=[],
+        task_outputs=[],
+        direction="inbound",
+        is_web_based_call=True,
     )
     app = create_platform_app(store)
     transport = ASGITransport(app=app)

@@ -133,8 +133,12 @@ class LanguageSwitcher:
         return {"role": "system", "content": [block]}
 
     def _tally_usage(self, usage):
-        """Count every completed response; a hedge loser cancelled mid-request never reaches
-        here, so tokens the provider billed for it are not client-visible and go uncounted."""
+        """Tally the winning response only; hedged losers never reach here.
+
+        Both hedge attempts run attempt() without tallying; only the winner's usage is counted
+        once in _hedged_generate. A loser cancelled mid-request has no client-visible usage, and
+        a loser that finished just after the winner is deliberately not double-counted.
+        """
         self.usage_totals["requests"] += 1
         if self.model not in self.models_used:
             self.models_used.append(self.model)
@@ -163,7 +167,14 @@ class LanguageSwitcher:
             except Exception as e:
                 logger.debug(f"LanguageSwitcher: prewarm skipped: {e}")
 
-        return asyncio.create_task(_warm())
+        try:
+            from voiceai.helpers.resilience import safe_task as _safe_task
+
+            return _safe_task(_warm(), name="language_switcher_prewarm", logger=logger)
+        except RuntimeError:
+            task = asyncio.get_event_loop().create_task(_warm())
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            return task
 
     async def decide(
         self,
@@ -276,31 +287,37 @@ class LanguageSwitcher:
         self.last_generate_errored = False
 
         async def attempt():
+            # No tally here: only the winner's usage is counted once below (winner-only).
             text, usage = await self._llm.generate(messages, ret_metadata=True)
-            self._tally_usage(usage)
-            return self._parse_json(text)
+            return self._parse_json(text), usage
 
         # Tasks created inside the try: cancellation of decide() itself must not strand a
-        # running attempt unowned (finally covers every await window).
+        # running attempt unowned (finally covers every await window). These are awaited,
+        # not fire-forget, so plain create_task is correct (tracked to completion below).
         first = None
         second = None
         try:
-            first = asyncio.create_task(attempt())
+            first = asyncio.create_task(attempt(), name="switcher-decide-first")
             if hedge_after_s <= 0:
-                return await first
+                parsed, usage = await first
+                self._tally_usage(usage)
+                return parsed
 
             await asyncio.wait({first}, timeout=hedge_after_s)
             if first.done() and first.exception() is None:
-                return first.result()
+                parsed, usage = first.result()
+                self._tally_usage(usage)
+                return parsed
             # Hedge on a SLOW first attempt and on a FAST-FAILED one alike: a 429 at 200ms is the
             # case where a retry is cheapest, and returning its exception threw the decide away.
             if first.done():
                 logger.info(f"LanguageSwitcher: first attempt failed ({first.exception()}) — retrying")
             else:
                 logger.info(f"LanguageSwitcher: no decision in {hedge_after_s}s — hedging a second request")
-            second = asyncio.create_task(attempt())
+            second = asyncio.create_task(attempt(), name="switcher-decide-hedge")
             pending = {first, second}
             # First SUCCESSFUL reply wins; a failing straggler must not lose the other's answer.
+            # Only the winner's usage is tallied (winner-only) so hedged decides cost one request.
             while pending:
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 winner = None
@@ -314,7 +331,9 @@ class LanguageSwitcher:
                         winner = task
                 if winner is not None:
                     self.hedge_won = winner is second
-                    return winner.result()
+                    parsed, usage = winner.result()
+                    self._tally_usage(usage)
+                    return parsed
             self.last_generate_errored = True
             return None
         finally:

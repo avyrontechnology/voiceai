@@ -124,14 +124,10 @@ class SmallestTranscriber(BaseTranscriber):
 
     def _configure_audio_params(self):
         """Configure audio parameters based on telephony provider."""
-        if self.provider in TelephonyProvider.mulaw_values():
-            # Twilio and SIP-trunk send mulaw at 8kHz
-            self.encoding = "mulaw"
-            self.sampling_rate = 8000
-            self.audio_frame_duration = 0.2
-        elif self.provider in ("exotel", "plivo"):
-            # Exotel and Plivo send linear16 at 8kHz
-            self.encoding = "linear16"
+        if self.provider in TelephonyProvider.telephony_values():
+            # All telephony legs stream 8kHz: mulaw (twilio/sip-trunk/talko) or linear16 (exotel/plivo/vobiz).
+            is_mulaw = self.provider in TelephonyProvider.mulaw_values()
+            self.encoding = "mulaw" if is_mulaw else "linear16"
             self.sampling_rate = 8000
             self.audio_frame_duration = 0.2
         elif self.provider == "web_based_call":
@@ -270,6 +266,39 @@ class SmallestTranscriber(BaseTranscriber):
             logger.error(f"Error in send_heartbeat: {e}")
             raise
 
+    @staticmethod
+    def _is_silence_frame(data) -> bool:
+        """True for standby-keepalive silence (320B of 0x00/0xFF) or empty frames.
+
+        The pool feeds standby transcribers periodic silence so provider sockets stay
+        alive. Treating that as speech starts a phantom turn (counter + speech_started
+        with no content), which then leaks into turn_latencies. Real caller audio is
+        never a full frame of a single byte value.
+        """
+        if not data:
+            return True
+        if isinstance(data, bytes) and len(data) > 0 and len(set(data)) == 1 and data[0] in (0x00, 0xFF):
+            return True
+        return False
+
+    def _ensure_turn_started(self):
+        """Start a turn on first real content (receiver-side, like Sarvam START_SPEECH).
+
+        Returns True when a new turn was started (caller must emit speech_started).
+        """
+        if self.current_turn_id is not None:
+            return False
+        self.turn_counter += 1
+        self.current_turn_id = self.turn_counter
+        now = timestamp_ms()
+        self.speech_start_time = now
+        if not self.current_turn_start_time:
+            self.current_turn_start_time = now
+        self.current_turn_interim_details = []
+        self.is_transcript_sent_for_processing = False
+        logger.info(f"Starting new turn with turn_id: {self.current_turn_id}")
+        return True
+
     def _reset_turn_state(self):
         """Reset turn state after finalizing a transcript."""
         self.speech_start_time = None
@@ -301,11 +330,11 @@ class SmallestTranscriber(BaseTranscriber):
                 self.current_turn_interim_details
             )
 
-            self.turn_latencies.append(
+            self._upsert_turn_latency(
                 {
                     "turn_id": self.current_turn_id,
                     "sequence_id": self.current_turn_id,
-                    "interim_details": self.current_turn_interim_details,
+                    "interim_details": list(self.current_turn_interim_details),
                     "first_interim_to_final_ms": first_interim_to_final_ms,
                     "last_interim_to_final_ms": last_interim_to_final_ms,
                     "force_finalized": True,
@@ -451,31 +480,15 @@ class SmallestTranscriber(BaseTranscriber):
                 if ws_data_packet is None:
                     continue
 
-                # Initialize on first audio packet
+                # Initialize on first audio packet (no turn yet — turns start on
+                # first transcript content in receiver(), like Sarvam START_SPEECH.
+                # Starting one here fires a phantom turn for standby keepalive silence.)
                 if not self.audio_submitted:
                     self.meta_info = ws_data_packet.get("meta_info", {}) or {}
                     self.audio_submitted = True
                     self.audio_submission_time = time.time()
                     self.current_request_id = self.generate_request_id()
                     self.meta_info["request_id"] = self.current_request_id
-
-                    # Start new turn tracking
-                    try:
-                        if not self.current_turn_start_time:
-                            self.current_turn_start_time = timestamp_ms()
-                            self.current_turn_id = self.meta_info.get("turn_id") or self.meta_info.get("request_id")
-                    except Exception:
-                        pass
-
-                    # Signal speech started (Smallest doesn't have VAD events)
-                    self.turn_counter += 1
-                    self.current_turn_id = self.turn_counter
-                    self.speech_start_time = timestamp_ms()
-                    self.current_turn_interim_details = []
-                    self.is_transcript_sent_for_processing = False
-
-                    logger.info(f"Starting new turn with turn_id: {self.current_turn_id}")
-                    await self.push_to_transcriber_queue(create_ws_data_packet("speech_started", self.meta_info))
 
                 # Check for end of stream
                 end_of_stream = await self._check_and_process_end_of_stream(ws_data_packet, ws)
@@ -548,6 +561,10 @@ class SmallestTranscriber(BaseTranscriber):
                 detected_language = data.get("language")
 
                 if transcript:
+                    # Gate turn start on content (VAD/content like Sarvam START_SPEECH):
+                    # standby keepalive silence never yields transcripts, so no phantom turn.
+                    if self._ensure_turn_started():
+                        yield create_ws_data_packet("speech_started", self.meta_info)
                     now_timestamp = time.time()
 
                     # Calculate latency
@@ -609,11 +626,11 @@ class SmallestTranscriber(BaseTranscriber):
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
 
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "asr_start_epoch_ms": self.speech_start_time,

@@ -1,3 +1,6 @@
+# Prod auth gates (fail-closed): set in .env — TELEPHONY_API_KEY (dial 401), CARRIER_VALIDATE_SIGNATURES=1
+# (connect 403), TELEPHONY_PUBLIC_URL (trusted sig base). Empty TELEPHONY_API_KEY = localhost-only dial;
+# unsigned callbacks = localhost-only unless ALLOW_UNSIGNED_CARRIER_CALLBACK=1 (never in prod).
 services:
 
   voiceai-app:
@@ -10,6 +13,9 @@ services:
       - .env
     volumes:
       - ./agent_data:/voiceai/agent_data
+      # Optional host-only credential share (local dev): missing ~/.aws must not break `compose up`
+      # (compose skips absent bind sources only with explicit handling — create empty dirs first).
+      # Never mount production secrets this way; use env_file/.env or a secret manager in prod.
       - $HOME/.aws/credentials:/root/.aws/credentials:ro
       - $HOME/.aws/config:/root/.aws/config:ro
     depends_on:
@@ -80,6 +86,9 @@ services:
     container_name: voiceai-ngrok
     image: ngrok/ngrok:latest
     restart: unless-stopped
+    # NGROK_AUTHTOKEN comes from .env (see .env.sample); never commit the token.
+    env_file:
+      - .env
     command:
       - "start"
       - "--all"

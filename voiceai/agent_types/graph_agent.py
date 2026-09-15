@@ -22,7 +22,7 @@ from voiceai.helpers.utils import (
 )
 from voiceai.helpers.expression_evaluator import evaluate_edge_expression, describe_edge_expression
 from voiceai.enums import EdgeConditionType, NodeType, ToolScope
-from voiceai.llms.types import LLMStreamChunk, LatencyData
+from voiceai.llms.types import LLMStreamChunk, LatencyData, repair_tool_history
 from voiceai.llms import OpenAiLLM
 from voiceai.llms.azure_llm import should_overflow
 from voiceai.llms.http_client_pool import get_shared_sync_http_client
@@ -36,7 +36,7 @@ from voiceai.constants import (
     llm_failure_spoken_message,
 )
 from voiceai.errors import classify_exception, summarize_exception
-from voiceai.helpers.resilience import log_ignored
+from voiceai.helpers.resilience import log_ignored, with_timeout
 
 from typing import List, Tuple, AsyncGenerator, Optional, Dict, Any
 
@@ -108,6 +108,7 @@ class GraphAgent(BaseAgent):
         self._hold_until_first_delivery = not self.config.get("turn_based_conversation", False)
         self._last_deterministic_eval = None
         self._frozen_time_vars: Optional[Dict[str, Any]] = None
+        self._last_rag_fingerprint: Optional[str] = None
         self.rag_configs = self.initialize_rag_configs()
         self.global_rag_config = self._initialize_global_rag_config()
         self.rag_server_url = os.getenv("RAG_SERVER_URL", "http://localhost:8000")
@@ -131,62 +132,105 @@ class GraphAgent(BaseAgent):
         # Initialize main LLM for response generation (supports api_tools/function calling + real streaming)
         self.llm = self._initialize_llm()
 
-        # Hangup/voicemail run on OpenAiLLM, which has no Azure support, so an Azure conversation LLM
-        # cannot serve them and they fall back to the platform OpenAI key.
-        aux_provider = self.config.get("aux_provider") or self.config.get("provider") or "openai"
-        aux_model = (self.config.get("aux_model") or self.llm_model or "").split("/", 1)[-1]
-        llm_kwargs = {}
-        if aux_provider == "azure" and os.getenv("OPENAI_API_KEY"):
-            llm_kwargs["llm_key"] = os.getenv("OPENAI_API_KEY")
-        else:
-            # No platform key to fall back to, so keep the agent's own creds rather than fail construction.
-            if self.llm_key:
-                llm_kwargs["llm_key"] = self.llm_key
-            if self.base_url:
-                llm_kwargs["base_url"] = self.base_url
-        self.conversation_completion_llm = OpenAiLLM(
-            model=os.getenv("CHECK_FOR_COMPLETION_LLM", aux_model or "gpt-4o-mini"), **llm_kwargs
+        self.conversation_completion_llm = self._create_aux_llm(
+            os.getenv("CHECK_FOR_COMPLETION_LLM", (self.config.get("aux_model") or self.llm_model or "gpt-4o-mini"))
         )
-        self.voicemail_llm = OpenAiLLM(model=os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"), **llm_kwargs)
+        self.voicemail_llm = self._create_aux_llm(os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
+
+    def _create_aux_llm(self, model: str):
+        """Aux (hangup/voicemail) LLM on the correct backend: Azure stays on Azure, custom keeps its base_url.
+
+        The old code always built OpenAiLLM, so an Azure agent without a platform OpenAI key kept the Azure
+        endpoint on an OpenAI client (auth failure), and a custom agent lost its endpoint on fallback.
+        Azure without any Azure creds still falls back to the platform OpenAI key (without the Azure endpoint).
+        """
+        raw_provider = self.config.get("aux_provider") or self.config.get("provider") or "openai"
+        provider = str(raw_provider).lower()
+        if provider == "azure-openai":
+            provider = "azure"
+        aux_model = (model or "").split("/", 1)[-1] if isinstance(model, str) and "/" in str(model) else model
+        if provider == "azure":
+            azure_key = self.config.get("llm_key") or os.getenv("AZURE_OPENAI_API_KEY")
+            azure_endpoint = self.config.get("base_url") or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if azure_key and azure_endpoint:
+                from voiceai.llms.azure_llm import AzureLLM
+
+                return AzureLLM(
+                    model=aux_model or "gpt-4o-mini",
+                    llm_key=azure_key,
+                    base_url=azure_endpoint,
+                    api_version=self.config.get("api_version")
+                    or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+                )
+            platform_key = os.getenv("OPENAI_API_KEY")
+            if platform_key:
+                logger.info("Azure aux LLM falling back to platform OpenAI key (no Azure endpoint)")
+                return OpenAiLLM(model=aux_model or "gpt-4o-mini", llm_key=platform_key)
+            # No platform key: keep agent creds but never mix an Azure endpoint into an OpenAI client.
+            kwargs: Dict[str, Any] = {}
+            if self.llm_key:
+                kwargs["llm_key"] = self.llm_key
+            return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
+        if provider == "custom":
+            kwargs = {}
+            if self.config.get("llm_key") or self.llm_key:
+                kwargs["llm_key"] = self.config.get("llm_key") or self.llm_key
+            if self.config.get("base_url") or self.base_url:
+                kwargs["base_url"] = self.config.get("base_url") or self.base_url
+                kwargs["provider"] = "custom"
+            return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
+        # OpenAI (+ EU base_url routing): keep the agent's endpoint only when it is an OpenAI one.
+        kwargs = {}
+        openai_key = self.config.get("llm_key") or os.getenv("OPENAI_API_KEY") or self.llm_key
+        if openai_key:
+            kwargs["llm_key"] = openai_key
+        base_url = self.config.get("base_url") or self.base_url
+        if base_url and "azure" not in str(base_url).lower():
+            kwargs["base_url"] = base_url
+        return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
 
     def _initialize_llm(self):
         """Initialize LLM with api_tools support (same pattern as KnowledgeBaseAgent)."""
+        from voiceai.errors import ConfigurationError as _ConfigurationError
+
+        provider = self.config.get("provider") or self.config.get("llm_provider", "openai")
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            raise _ConfigurationError(
+                f"Unsupported LLM provider '{provider}' for graph agent",
+                path="tools_config.llm_agent.llm_config.provider",
+            )
+
+        llm_kwargs = {
+            "model": self.llm_model,
+            "temperature": self.config.get("temperature", 0.7),
+            "max_tokens": self.config.get("max_tokens", 150),
+            "provider": provider,
+        }
+
+        for key in [
+            "llm_key",
+            "base_url",
+            "api_version",
+            "language",
+            "api_tools",
+            "buffer_size",
+            "reasoning_effort",
+            "verbosity",
+            "reasoning_summary",
+            "service_tier",
+            "use_responses_api",
+            "compact_threshold",
+            "overflow_llm",
+        ]:
+            if self.config.get(key, None):
+                llm_kwargs[key] = self.config[key]
+
+        llm_class = SUPPORTED_LLM_PROVIDERS[provider]
         try:
-            provider = self.config.get("provider") or self.config.get("llm_provider", "openai")
-            if provider not in SUPPORTED_LLM_PROVIDERS:
-                logger.warning(f"Unknown provider: {provider}, using openai")
-                provider = "openai"
-
-            llm_kwargs = {
-                "model": self.llm_model,
-                "temperature": self.config.get("temperature", 0.7),
-                "max_tokens": self.config.get("max_tokens", 150),
-                "provider": provider,
-            }
-
-            for key in [
-                "llm_key",
-                "base_url",
-                "api_version",
-                "language",
-                "api_tools",
-                "buffer_size",
-                "reasoning_effort",
-                "verbosity",
-                "reasoning_summary",
-                "service_tier",
-                "use_responses_api",
-                "compact_threshold",
-                "overflow_llm",
-            ]:
-                if self.config.get(key, None):
-                    llm_kwargs[key] = self.config[key]
-
-            llm_class = SUPPORTED_LLM_PROVIDERS[provider]
             return llm_class(**llm_kwargs)
         except Exception as e:
-            logger.error(f"Failed to create LLM: {e}, falling back to default OpenAiLLM")
-            return OpenAiLLM(model=self.llm_model or "gpt-4o-mini", llm_key=self.llm_key or os.getenv("OPENAI_API_KEY"))
+            logger.error(f"Failed to create {provider} LLM for graph agent: {summarize_exception(e)}")
+            raise classify_exception(e, component="llm", provider=provider, model=self.llm_model)
 
     @staticmethod
     def _extract_rag_collections(rag_config: Dict) -> List[str]:
@@ -301,9 +345,10 @@ class GraphAgent(BaseAgent):
             if conv_model:
                 self.routing_model = conv_model.split("/", 1)[-1]
 
+        conv_provider = str(self.config.get("provider") or self.config.get("llm_provider") or "openai").lower()
         if self.routing_provider == "groq":
             if groq_available:
-                self.routing_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+                self.routing_client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=10.0)
                 # Default to llama-3.3-70b-versatile (best for multilingual routing)
                 if not self.routing_model:
                     self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_GROQ", "llama-3.3-70b-versatile")
@@ -316,7 +361,17 @@ class GraphAgent(BaseAgent):
                 self.routing_provider = "openai"
                 self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_OPENAI", "gpt-4.1-mini")
         elif self.routing_provider == "azure":
-            azure_endpoint = self.base_url or os.getenv("AZURE_OPENAI_ENDPOINT")
+            # Routing creds come from the Azure env (or matching conversation creds when explicitly
+            # routed to the conversation backend) — never the conversation's OpenAI/custom key.
+            routed_to_conv = bool(self.config.get("route_routing_to_conversation")) and conv_provider == "azure"
+            if routed_to_conv:
+                azure_endpoint = self.base_url or os.getenv("AZURE_OPENAI_ENDPOINT")
+                azure_key = self.llm_key or os.getenv("AZURE_OPENAI_API_KEY")
+            else:
+                azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or (
+                    self.base_url if conv_provider == "azure" else None
+                )
+                azure_key = os.getenv("AZURE_OPENAI_API_KEY") or (self.llm_key if conv_provider == "azure" else None)
             api_version = self.config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
             overflow = self.config.get("overflow_llm") or {}
             # Built on first use: overflowing is rare, and an unused client still holds a pool.
@@ -327,8 +382,9 @@ class GraphAgent(BaseAgent):
             # Same trade as the conversation client, on a hop the caller is already waiting through.
             self.routing_client = AzureOpenAI(
                 azure_endpoint=azure_endpoint,
-                api_key=self.llm_key,
+                api_key=azure_key,
                 api_version=api_version,
+                timeout=10.0,
                 **({"max_retries": 0} if self._routing_overflow_cfg else {}),
             )
             if self.routing_model:
@@ -854,16 +910,9 @@ class GraphAgent(BaseAgent):
             option_edges.append(default_edge)
         tools = self._build_transition_tools_for_edges(option_edges, allow_stay=default_edge is None)
 
-        # Build compact context for routing
-        context_section = ""
-        if self.context_data:
-            context_items = [
-                f"{k}={v}"
-                for k, v in self.context_data.items()
-                if v is not None and not isinstance(v, dict) and k != "detected_language"
-            ]
-            if context_items:
-                context_section = f"\nContext: {', '.join(context_items)}"
+        # Compact routing context, sanitized: context_data can carry untrusted caller text, so values are
+        # flattened to one line and capped — a raw newline would let a caller inject fake routing directives.
+        context_section = self._routing_context_section()
 
         if default_edge is not None:
             default_instructions = (
@@ -898,6 +947,9 @@ class GraphAgent(BaseAgent):
         node_history = (
             history[self.current_node_entry_index :] if self.current_node_entry_index < len(history) else history
         )
+        # Gemini thinking turns store _gemini_thought pseudo-tool-calls for history rebuild; they are
+        # reasoning, not tool calls, and must never reach the routing LLM (thought leak).
+        node_history = self._filter_thought_tool_calls(node_history)
         has_tool_context = any(msg.get("role") == "assistant" and msg.get("tool_calls") for msg in node_history)
 
         if has_tool_context:
@@ -905,7 +957,12 @@ class GraphAgent(BaseAgent):
                 role = msg.get("role")
                 if role == "assistant":
                     if msg.get("tool_calls"):
-                        messages.append({"role": "assistant", "content": None, "tool_calls": msg["tool_calls"]})
+                        calls = [tc for tc in (msg.get("tool_calls") or []) if tc.get("type") != "_gemini_thought"]
+                        if not calls:
+                            if msg.get("content"):
+                                messages.append({"role": "assistant", "content": msg["content"]})
+                            continue
+                        messages.append({"role": "assistant", "content": None, "tool_calls": calls})
                     elif msg.get("content"):
                         messages.append({"role": "assistant", "content": msg["content"]})
                 elif role == "tool":
@@ -951,7 +1008,30 @@ class GraphAgent(BaseAgent):
 
             self._routing_reasoning_effort_used = routing_kwargs.get("reasoning_effort")
 
-            response, routing_overflowed = await asyncio.to_thread(self._routing_create, routing_kwargs)
+            # Bounded routing hop: 10s timeout + one retry, then fall through to the catch-all/stay path
+            # instead of stalling the turn. asyncio.to_thread has no timeout of its own.
+            response = None
+            routing_overflowed = False
+            last_routing_error: Optional[Exception] = None
+            for _attempt in range(2):
+                try:
+                    response, routing_overflowed = await with_timeout(
+                        asyncio.to_thread(self._routing_create, routing_kwargs),
+                        10.0,
+                        name="graph_routing",
+                        component="llm",
+                        provider=str(self.routing_provider),
+                        model=str(self.routing_model),
+                    )
+                    last_routing_error = None
+                    break
+                except Exception as e:
+                    last_routing_error = e
+                    logger.warning(f"Routing hop attempt failed, retrying once: {e}")
+            if response is None:
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                logger.error(f"Routing error after retries: {last_routing_error} (latency: {latency_ms:.1f}ms)")
+                return None, None, latency_ms, messages, tools, None, None, None
             latency_ms = (time.perf_counter() - start_time) * 1000
 
             # Extract token usage from routing LLM call
@@ -1264,6 +1344,56 @@ class GraphAgent(BaseAgent):
             return self.context_data
         return {**self.context_data, "recipient_data": {**recipient, **self._frozen_time_vars}}
 
+    @staticmethod
+    def _repair_tool_history(messages: List[dict]) -> List[dict]:
+        """Drop orphaned tool turns left by the 50-message window (shared helper)."""
+        return repair_tool_history(messages)
+
+    @staticmethod
+    def _filter_thought_tool_calls(history: List[dict]) -> List[dict]:
+        """Strip Gemini `_gemini_thought` pseudo-tool-calls; they rebuild history, never the router."""
+        filtered: List[dict] = []
+        for msg in history:
+            if not isinstance(msg, dict):
+                filtered.append(msg)
+                continue
+            tcs = msg.get("tool_calls")
+            if msg.get("role") == "assistant" and tcs:
+                kept = [tc for tc in (tcs or []) if isinstance(tc, dict) and tc.get("type") != "_gemini_thought"]
+                if len(kept) != len(tcs):
+                    if not kept:
+                        if msg.get("content"):
+                            filtered.append({k: v for k, v in msg.items() if k != "tool_calls"})
+                        continue
+                    msg = {**msg, "tool_calls": kept}
+            filtered.append(msg)
+        return filtered
+
+    @staticmethod
+    def _sanitize_routing_value(value: Any, cap: int = 200) -> str:
+        """Flatten one routing context value to a single safe line for the routing prompt."""
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > cap:
+            text = text[:cap] + "…"
+        return text
+
+    def _routing_context_section(self, cap: int = 200, max_chars: int = 1500) -> str:
+        """Sanitized `Context: k=v, ...` line for the routing system prompt."""
+        if not self.context_data:
+            return ""
+        items = []
+        for k, v in self.context_data.items():
+            if v is None or isinstance(v, dict) or k == "detected_language":
+                continue
+            items.append(f"{k}={self._sanitize_routing_value(v, cap)}")
+        if not items:
+            return ""
+        section = f"\nContext: {', '.join(items)}"
+        if len(section) > max_chars:
+            section = section[:max_chars] + "…"
+        return section
+
     async def _build_messages(self, history: List[dict], meta_info: Optional[dict] = None) -> List[dict]:
         """Build messages array: system prompt + conversation history (+ optional trailing RAG)."""
         current_node = self.get_node_by_id(self.current_node_id)
@@ -1323,11 +1453,18 @@ class GraphAgent(BaseAgent):
         max_history = 50
         history_subset = history[-max_history:] if len(history) > max_history else history
 
-        # Pass conversation history as-is to preserve tool_calls/tool_call_id fields
-        conversation = [msg for msg in history_subset if msg.get("role") != "system"]
+        # Pass conversation history as-is to preserve tool_calls/tool_call_id fields; repair a slice
+        # that cut between an assistant tool_calls turn and its tool outputs (else the request 400s).
+        conversation = self._repair_tool_history([msg for msg in history_subset if msg.get("role") != "system"])
         messages = [{"role": "system", "content": prompt}] + conversation
         if rag_message:
             messages.append(rag_message)
+            # Fresh RAG each turn would otherwise linger server-side under Responses chaining
+            # (old contexts accumulate as residual). Invalidate when the context changed.
+            fingerprint = get_md5_hash(rag_message["content"])
+            if fingerprint != self._last_rag_fingerprint:
+                self._invalidate_llm_response_chain()
+                self._last_rag_fingerprint = fingerprint
         return messages
 
     def _static_message_chunk(self, current_node: Optional[dict]) -> Optional[dict]:
@@ -1408,7 +1545,9 @@ class GraphAgent(BaseAgent):
                     return
 
                 messages = await self._build_messages(message, meta_info=meta_info)
-                # Inject ephemeral event hint (NOT persisted in conversation_history)
+                # Inject ephemeral event hint (NOT persisted in conversation_history). It must not linger
+                # server-side either: invalidate before so the hint rides a full-history turn, and again
+                # after so the next chained turn does not inherit it as residual context.
                 event_name = self.context_data.get("_last_event", "")
                 messages.append(
                     {
@@ -1416,6 +1555,7 @@ class GraphAgent(BaseAgent):
                         "content": f"[Event: {event_name}. Respond proactively — speak first, do not wait for the user.]",
                     }
                 )
+                self._invalidate_llm_response_chain()
                 yield {"messages": messages}
                 tool_choice = self._get_tool_choice_for_node(history=message)
                 forced_name = tool_choice["function"]["name"] if tool_choice else None
@@ -1424,6 +1564,7 @@ class GraphAgent(BaseAgent):
                     messages, synthesize=synthesize, meta_info=meta_info, tool_choice=tool_choice, tools=node_tools
                 ):
                     yield chunk
+                self._invalidate_llm_response_chain()
                 return
 
             is_silence_trigger = bool(message and message[-1].get("content", "").startswith("[silence]"))

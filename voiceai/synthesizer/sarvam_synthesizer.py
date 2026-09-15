@@ -7,6 +7,7 @@ import traceback
 import uuid
 
 import websockets
+from collections import deque
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
@@ -104,7 +105,7 @@ class SarvamSynthesizer(StreamSynthesizer):
                     original_sample_rate=header_rate,
                 )
             except Exception as e:
-                logger.error(f"Error in resampling audio: {e}")
+                logger.error(f"sarvam: error resampling audio: {e}")
                 return None
             return wav_bytes_to_pcm(resampled_audio)
 
@@ -116,7 +117,7 @@ class SarvamSynthesizer(StreamSynthesizer):
                 original_sample_rate=self.original_sampling_rate,
             )
         except Exception as e:
-            logger.error(f"Error in resampling audio: {e}")
+            logger.error(f"sarvam: error resampling audio: {e}")
             return None
 
         return resampled_audio
@@ -125,33 +126,61 @@ class SarvamSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
+    async def handle_interruption(self):
+        """Barge-in: prune stale queued metas and reset the turn clock.
+
+        Sarvam has no server-side Clear; dropping buffered metas plus the clock reset
+        lets the next push re-detect as a new turn and the generate loop drop stragglers.
+        """
+        try:
+            try:
+                should = getattr(self, "should_synthesize_response", None)
+                if callable(should) and getattr(self, "text_queue", None):
+                    kept = deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                    dropped = len(self.text_queue) - len(kept)
+                    if dropped:
+                        logger.info(f"sarvam: pruned {dropped} queued metas on interruption")
+                    self.text_queue = kept
+            except Exception:
+                pass
+            self.current_turn_start_time = None
+            task = getattr(self, "sender_task", None)
+            if task is not None and not task.done():
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in sarvam handle_interruption: {e}")
+
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                return
-
-            await self._wait_for_ws()
-
-            if text != "":
-                try:
-                    if self.ws_send_time is None:
-                        self.ws_send_time = time.perf_counter()
-                    await self._send_json({"type": "text", "data": {"text": text}})
-                except Exception as e:
-                    logger.error(f"Error sending chunk: {e}")
-                    self.connection_error = str(e)
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
                     return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                try:
-                    await self._send_json({"type": "flush"})
-                except Exception as e:
-                    logger.info(f"Error sending end-of-stream signal: {e}")
-                    self.connection_error = str(e)
+                await self._wait_for_ws()
+
+                if text != "":
+                    try:
+                        if self.ws_send_time is None:
+                            self.ws_send_time = time.perf_counter()
+                        await self._send_json({"type": "text", "data": {"text": text}})
+                    except Exception as e:
+                        logger.error(f"Error sending chunk: {e}")
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    try:
+                        await self._send_json({"type": "flush"})
+                    except Exception as e:
+                        logger.info(f"Error sending end-of-stream signal: {e}")
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
@@ -185,6 +214,9 @@ class SarvamSynthesizer(StreamSynthesizer):
 
                 if data.get("type") == "audio":
                     chunk = base64.b64decode(data["data"]["audio"])
+                    # Recovered: a prior transient error must not stick once audio flows again.
+                    if self.connection_error and "transient" in str(self.connection_error).lower():
+                        self.connection_error = None
                     yield chunk
 
                 event_type = data.get("data", {}).get("event_type") or data.get("event_type")
@@ -194,9 +226,18 @@ class SarvamSynthesizer(StreamSynthesizer):
                     continue
 
                 if data.get("type") == "error":
-                    logger.error(f"Sarvam TTS error response: {data}")
-                    self.connection_error = json.dumps(data)
-                    return
+                    err = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+                    err_type = str(err.get("type", "") or data.get("error", "")).lower()
+                    err_msg = str(err.get("message", "") or json.dumps(data))
+                    # Classify per-frame like Kalpa: only fatal/auth sticks; transient
+                    # frame rejections just log and the turn still completes.
+                    fatal = data.get("fatal", False) or "auth" in err_type or "401" in err_msg or "403" in err_msg
+                    if fatal:
+                        logger.error(f"sarvam: fatal TTS error response: {data}")
+                        self.connection_error = json.dumps(data)
+                        return
+                    logger.error(f"sarvam: transient TTS error response (continuing): {data}")
+                    continue
 
             except websockets.exceptions.ConnectionClosed:
                 break
