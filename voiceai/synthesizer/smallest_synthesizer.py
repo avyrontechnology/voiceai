@@ -1,17 +1,20 @@
 import asyncio
 import base64
 import json
-import os
 import time
 
 import aiohttp
 import websockets
+from collections import deque
+from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import require_str
 from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import SMALLEST_API_KEY_ENV
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class SmallestSynthesizer(StreamSynthesizer):
@@ -36,7 +39,7 @@ class SmallestSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["SMALLEST_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(SMALLEST_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.model = model
         self.sampling_rate = int(sampling_rate)
@@ -67,28 +70,56 @@ class SmallestSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
+    async def handle_interruption(self):
+        """Barge-in: prune stale queued metas and reset the turn clock.
+
+        Smallest has no server-side Clear; dropping buffered metas plus the clock reset
+        lets the next push re-detect as a new turn and the generate loop drop stragglers.
+        """
+        try:
+            try:
+                should = getattr(self, "should_synthesize_response", None)
+                if callable(should) and getattr(self, "text_queue", None):
+                    kept = deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                    dropped = len(self.text_queue) - len(kept)
+                    if dropped:
+                        logger.info(f"smallest: pruned {dropped} queued metas on interruption")
+                    self.text_queue = kept
+            except Exception:
+                pass
+            self.current_turn_start_time = None
+            task = getattr(self, "sender_task", None)
+            if task is not None and not task.done():
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in smallest handle_interruption: {e}")
+
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                return
-
-            await self._wait_for_ws()
-
-            if text != "":
-                try:
-                    if self.ws_send_time is None:
-                        self.ws_send_time = time.perf_counter()
-                    await self._send_json(self.form_payload(text))
-                except Exception as e:
-                    logger.error(f"Error sending chunk: {e}")
-                    self.connection_error = str(e)
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
                     return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
+                await self._wait_for_ws()
+
+                if text != "":
+                    try:
+                        if self.ws_send_time is None:
+                            self.ws_send_time = time.perf_counter()
+                        await self._send_json(self.form_payload(text))
+                    except Exception as e:
+                        logger.error(f"Error sending chunk: {e}")
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
@@ -154,6 +185,14 @@ class SmallestSynthesizer(StreamSynthesizer):
             return websocket
         except asyncio.TimeoutError:
             logger.error("Timeout while connecting to Smallest websocket")
+            return None
+        except InvalidHandshake as e:
+            error_msg = str(e)
+            if "401" in error_msg or "403" in error_msg:
+                logger.error(f"Smallest authentication failed: Invalid API key - {e}")
+            else:
+                logger.error(f"Smallest handshake failed: {e}")
+            self.connection_error = str(e)
             return None
         except Exception as e:
             logger.error(f"Failed to connect to Smallest: {e}")

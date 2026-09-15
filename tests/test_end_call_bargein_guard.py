@@ -7,11 +7,10 @@ never set, and the agent loops goodbyes until the caller drops.
 """
 
 import asyncio
-import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-
+from tests.doubles.task_manager import bare_tm, private, stub
 from voiceai.agent_manager.task_manager import TaskManager
 
 
@@ -47,27 +46,26 @@ _INTERIM_BARGEIN = {
 
 
 def _make_tm(*, end_call_in_progress, hangup_triggered, function_call_in_flight=False):
-    tm = MagicMock()
-    tm.hangup_triggered = hangup_triggered
+    # A11: shared double; permissive mode so the real _listen_transcriber can
+    # run (it touches dynamic attrs like voicemail_handler). No mangled literal.
+    tm = bare_tm(
+        strict=False,
+        hangup_triggered=hangup_triggered,
+        function_call_in_flight=function_call_in_flight,
+    )
     tm._end_call_in_progress = end_call_in_progress
-    tm.function_call_in_flight = function_call_in_flight
     tm.has_transfer = False
-    tm.stream = True
-    tm.response_in_pipeline = False
-    tm.transcriber_output_queue = asyncio.Queue()
-    tm.process_transcriber_request = AsyncMock(return_value=0)
-    tm._set_call_details = MagicMock()
-    tm._get_next_step = MagicMock(return_value="llm")
-    tm.tools = {"input": MagicMock(), "transcriber": MagicMock()}
-    tm.tools["input"].welcome_message_played = MagicMock(return_value=True)
-    tm.conversation_history.is_duplicate_user = MagicMock(return_value=False)
     tm.interruption_manager.should_trigger_interruption = MagicMock(return_value=True)
-    tm._TaskManager__cleanup_downstream_tasks = AsyncMock()
+    stub(tm, "__cleanup_downstream_tasks", AsyncMock())
     tm._end_call_on_component_error = AsyncMock()
-    tm.task_config = {"tools_config": {"transcriber": {"provider": "deepgram"}}}
-    tm._should_ignore_transcriber_input = TaskManager._should_ignore_transcriber_input.__get__(tm, TaskManager)
-    tm._listen_transcriber = TaskManager._listen_transcriber.__get__(tm, TaskManager)
+    tm._should_ignore_transcriber_input = tm.bind("_should_ignore_transcriber_input")
+    tm._listen_transcriber = tm.bind("_listen_transcriber")
     return tm
+
+
+def _cleanup_mock(tm):
+    # Read the stubbed private cleanup mock without the mangled literal.
+    return private(tm, "__cleanup_downstream_tasks")
 
 
 async def _drive_with_bargein(tm):
@@ -82,13 +80,13 @@ async def test_bargein_does_not_cancel_turn_during_end_call():
     tm = _make_tm(end_call_in_progress=True, hangup_triggered=False)
     await _drive_with_bargein(tm)
     tm._set_call_details.assert_not_called()
-    tm._TaskManager__cleanup_downstream_tasks.assert_not_called()
+    _cleanup_mock(tm).assert_not_called()
 
 
 async def test_bargein_cancels_turn_during_normal_conversation():
     tm = _make_tm(end_call_in_progress=False, hangup_triggered=False)
     await _drive_with_bargein(tm)
-    tm._TaskManager__cleanup_downstream_tasks.assert_awaited_once()
+    _cleanup_mock(tm).assert_awaited_once()
 
 
 async def test_bargein_does_not_cancel_turn_during_tool_call():
@@ -96,20 +94,28 @@ async def test_bargein_does_not_cancel_turn_during_tool_call():
     # cancelled before its result is recorded and the pre-call filler loops.
     tm = _make_tm(end_call_in_progress=False, hangup_triggered=False, function_call_in_flight=True)
     await _drive_with_bargein(tm)
-    tm._TaskManager__cleanup_downstream_tasks.assert_not_called()
+    _cleanup_mock(tm).assert_not_called()
 
 
-class TestSourceGuards:
-    """Catch accidental removal of the wiring that closes the barge-in race."""
+class TestBehaviorGuards:
+    """Behavior guards for the wiring that closes the barge-in race.
 
-    def test_end_call_branch_sets_in_progress_flag(self):
-        src = inspect.getsource(TaskManager._TaskManager__execute_function_call)
-        assert "_end_call_in_progress = True" in src, (
-            "end_call branch must set _end_call_in_progress before generating the goodbye"
-        )
+    A11: replaces source-code inspection asserts with driving the real listener.
+    The end_call flag must suppress cleanup, and flipping the guard must
+    observably change listener behavior (proves the listener consults it).
+    """
 
-    def test_listen_transcriber_uses_the_guard(self):
-        src = inspect.getsource(TaskManager._listen_transcriber)
-        assert "_should_ignore_transcriber_input" in src, (
-            "_listen_transcriber must drop user speech while a hangup/end_call actuation is underway"
-        )
+    def test_end_call_flag_blocks_cleanup_behavior(self):
+        # The flag alone (no hangup yet) must make the guard ignore input.
+        assert _ignore(hangup_triggered=False, end_call_in_progress=True) is True
+
+    async def test_listener_consults_guard_behavior(self):
+        # Same barge-in, same interruption signal: guard True -> no cleanup,
+        # guard False -> cleanup. Proves _listen_transcriber consults the guard.
+        tm_guarded = _make_tm(end_call_in_progress=True, hangup_triggered=False)
+        await _drive_with_bargein(tm_guarded)
+        _cleanup_mock(tm_guarded).assert_not_called()
+
+        tm_open = _make_tm(end_call_in_progress=False, hangup_triggered=False)
+        await _drive_with_bargein(tm_open)
+        _cleanup_mock(tm_open).assert_awaited_once()

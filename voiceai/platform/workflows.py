@@ -1,14 +1,17 @@
 """Workflow definitions, validation and the simulated runner.
 
 Workflows chain agent calls with extraction, API, wait, retry, WhatsApp and
-end steps. Execution is simulated (same policy as calls: no telephony, no
+end steps. Execution is SIMULATED (same policy as calls: no telephony, no
 real HTTP): agent nodes run the simulated-call runner, API/WhatsApp steps
-record would-be requests, extraction reads call variables. Deterministic
-with delay_scale=0.
+record would-be requests with `simulated: true` and never send traffic,
+extraction reads call variables. Deterministic with delay_scale=0.
+
+Campaigns honor an optional daily calling window (`calling_hours` with IANA `tz`);
+run_campaign enforces it directly so schedulers cannot bypass the HTTP start route.
 """
 
 import asyncio
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +27,9 @@ from voiceai.platform.models import (
 )
 from voiceai.platform.simulation import run_simulated_call
 from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:  # Annotation-only (no runtime cycle)
+    from voiceai.platform.repositories import PlatformRepository
 
 logger = configure_logger(__name__)
 
@@ -140,7 +146,7 @@ def _next_node(definition: WorkflowDefinition, current_id: str, last_ok: Optiona
 
 
 async def run_workflow(
-    store: MemoryStore,
+    store: "PlatformRepository",
     workflow_id: str,
     definition: WorkflowDefinition,
     contact: Dict[str, Any],
@@ -202,6 +208,7 @@ async def run_workflow(
                 )  # type: ignore[arg-type]
             )
         elif current.type == "api":
+            # STUB (SIMULATED): no HTTP request is sent; the report records the would-be call.
             run.reports.append(
                 NodeReport(
                     node_id=current.id,
@@ -209,7 +216,9 @@ async def run_workflow(
                     detail={
                         "method": config.get("method", "POST"),
                         "url": config.get("url"),
-                        "note": "simulated — no request sent",
+                        "mode": "SIMULATED",
+                        "simulated": True,
+                        "note": "SIMULATED — no request sent",
                     },
                     at=utcnow().isoformat(),  # type: ignore[arg-type]
                 )
@@ -247,11 +256,19 @@ async def run_workflow(
                 )
             )
         elif current.type == "whatsapp":
+            # STUB (SIMULATED): no WhatsApp message is sent; the report records the would-be send.
             run.reports.append(
                 NodeReport(
                     node_id=current.id,
                     type="whatsapp",
-                    detail={"to": config.get("to", to_number), "template": config.get("template"), "status": "logged"},
+                    detail={
+                        "to": config.get("to", to_number),
+                        "template": config.get("template"),
+                        "mode": "SIMULATED",
+                        "simulated": True,
+                        "status": "SIMULATED_LOGGED",
+                        "note": "SIMULATED — no message sent",
+                    },
                     at=utcnow().isoformat(),  # type: ignore[arg-type]
                 )
             )
@@ -271,8 +288,14 @@ async def run_workflow(
     return run
 
 
-async def run_campaign(store: MemoryStore, campaign_id: str, delay_scale: float = 0) -> Any:
-    """Drive every campaign entry through its workflow. Honors stop between entries."""
+async def run_campaign(store: "PlatformRepository", campaign_id: str, delay_scale: float = 0) -> Any:
+    """Drive every campaign entry through its workflow. Honors stop and calling windows between entries."""
+    import os
+
+    from voiceai.errors import ConflictError, InvalidRequestError
+    from voiceai.platform.models import CAMPAIGN_MAX_ENTRIES
+    from voiceai.platform.simulation import is_within_calling_hours
+
     campaign = await store.get_campaign(campaign_id)
     if campaign is None or campaign.status not in (
         WorkflowCampaignStatus.DRAFT,
@@ -280,6 +303,19 @@ async def run_campaign(store: MemoryStore, campaign_id: str, delay_scale: float 
         WorkflowCampaignStatus.RUNNING,
     ):
         return campaign
+    try:
+        from voiceai.core import environment as _environment
+
+        limit = _environment.get_campaign_max_entries(CAMPAIGN_MAX_ENTRIES)
+    except Exception:
+        limit = CAMPAIGN_MAX_ENTRIES
+    if len(campaign.entries) > limit:
+        raise InvalidRequestError(f"Campaign exceeds max entries ({limit})")
+    if getattr(campaign, "calling_hours", None) is not None and not is_within_calling_hours(
+        utcnow(),
+        campaign.calling_hours,  # type: ignore[arg-type]
+    ):
+        raise ConflictError(f"Campaign {campaign_id} is outside its calling hours")
     workflow = await store.get_workflow(campaign.workflow_id)
     if workflow is None:
         return campaign

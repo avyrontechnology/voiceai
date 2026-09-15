@@ -132,6 +132,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Local ngrok overrides — the committed ngrok-config.yml is a placeholder-only
+# template (NGROK_AUTHTOKEN comes from .env). Never commit a file with a live token.
+local_setup/ngrok-config.local.yml
+local_setup/.ngrok.yml
 
 # Spyder project settings
 .spyderproject
@@ -182,3 +186,9 @@ scripts/
 docs/
 GRAPH_AGENT_GUIDE.md
 .env.example
+
+# Local-only tooling/session artifacts (never pushed)
+.opencode/
+.specify/
+specs/
+.ruff_cache/

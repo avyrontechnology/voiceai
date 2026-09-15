@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 import audioop
@@ -14,16 +13,23 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import InvalidHandshake, ConnectionClosed, ConnectionClosedError
 
 from .base_transcriber import BaseTranscriber
+from .constants import (
+    DEFAULT_OPENAI_REALTIME_HOST,
+    OPENAI_API_KEY_ENV_KEY,
+    OPENAI_API_KEY_EU_ENV_KEY,
+    OPENAI_REALTIME_HOST_ENV_KEY,
+)
 from voiceai.constants import (
     OPENAI_TRANSCRIBER_HEARTBEAT_INTERVAL_S,
     OPENAI_TRANSCRIBER_UTTERANCE_TIMEOUT_S,
 )
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAITranscriber(BaseTranscriber):
@@ -60,9 +66,11 @@ class OpenAITranscriber(BaseTranscriber):
         self.vad_threshold = float(vad_threshold)
         self.vad_prefix_padding_ms = int(vad_prefix_padding_ms)
 
-        self.api_host = kwargs.get("transcriber_host", os.getenv("OPENAI_REALTIME_HOST", "api.openai.com"))
-        _default_key_env = "OPENAI_API_KEY_EU" if "eu." in self.api_host else "OPENAI_API_KEY"
-        self.api_key = kwargs.get("transcriber_key", os.getenv(_default_key_env))
+        self.api_host = kwargs.get(
+            "transcriber_host", get_str(OPENAI_REALTIME_HOST_ENV_KEY, DEFAULT_OPENAI_REALTIME_HOST)
+        )
+        _default_key_env = OPENAI_API_KEY_EU_ENV_KEY if "eu." in self.api_host else OPENAI_API_KEY_ENV_KEY
+        self.api_key = kwargs.get("transcriber_key", get_str(_default_key_env))
 
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
@@ -103,14 +111,26 @@ class OpenAITranscriber(BaseTranscriber):
         self._turn_committed = False
         # Timestamp of last committed turn (for utterance timeout)
         self._commit_time: Optional[float] = None
+        # Stateful resampler: audioop.ratecv filter state carried across chunks so
+        # consecutive frames resample continuously (stateless None clicks). Mirrors lid/sarvam.py.
+        self._resample_state = None
 
         self._configure_audio_params()
 
     def _configure_audio_params(self):
-        if self.telephony_provider == "twilio":
-            self.encoding = "mulaw"
+        from voiceai.enums import TelephonyProvider as _TP
+
+        if self.telephony_provider in _TP.telephony_values():
+            is_mulaw = self.telephony_provider in _TP.mulaw_values()
+            self.encoding = "mulaw" if is_mulaw else "linear16"
             self.input_sampling_rate = 8000
-        elif self.telephony_provider in ("plivo", "exotel", "vobiz"):
+        elif self.telephony_provider == "web_based_call":
+            self.encoding = "linear16"
+            self.input_sampling_rate = 16000
+        elif self.telephony_provider == _TP.FREESWITCH.value:
+            self.encoding = "linear16"
+            self.input_sampling_rate = 16000
+        elif self.telephony_provider == "playground":
             self.encoding = "linear16"
             self.input_sampling_rate = 8000
         else:
@@ -126,7 +146,7 @@ class OpenAITranscriber(BaseTranscriber):
             return audio_bytes
 
         try:
-            resampled, _ = audioop.ratecv(audio_bytes, 2, 1, in_rate, 24000, None)
+            resampled, self._resample_state = audioop.ratecv(audio_bytes, 2, 1, in_rate, 24000, self._resample_state)
             return resampled
         except Exception:
             audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
@@ -244,6 +264,55 @@ class OpenAITranscriber(BaseTranscriber):
         except Exception as e:
             logger.error(f"Error in OpenAI heartbeat: {e}")
 
+    async def _force_finalize_utterance(self):
+        """Emit the buffered turn when completed never arrives (no silent drop).
+
+        The sender commits on local RMS silence and the server normally answers with
+        conversation.item.input_audio_transcription.completed. When that event is lost
+        (socket hiccup, server VAD race), dropping the turn would lose the user's words
+        with no transcript and no latency entry. Instead join the streamed deltas into
+        the turn transcript and deliver it with force_finalized=True, mirroring the
+        other providers' timeout path. Callers hold no lock: the completed handler
+        upserts by turn_id, so a late completed for the same turn overwrites this
+        entry rather than duplicating it.
+        """
+        transcript_to_send = "".join(
+            (d.get("transcript") or "") for d in (self.current_turn_interim_details or [])
+        ).strip()
+        if not transcript_to_send:
+            logger.warning("OpenAI force-finalize: no interim deltas to emit, unblocking EOS drain")
+            self._final_transcript_event.set()
+            self._reset_turn_state()
+            return
+        turn_id = self._last_committed_turn_id or self.current_turn_id
+        try:
+            first_ms, last_ms = self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
+            self._upsert_turn_latency(
+                {
+                    "turn_id": turn_id,
+                    "sequence_id": turn_id,
+                    "interim_details": list(self.current_turn_interim_details),
+                    "first_interim_to_final_ms": first_ms,
+                    "last_interim_to_final_ms": last_ms,
+                    "total_stream_duration_ms": round(
+                        (self.meta_info.get("transcriber_total_stream_duration") or 0) * 1000
+                    ),
+                    "asr_start_epoch_ms": self._turn_start_epoch_ms,
+                    "asr_finalized_epoch_ms": timestamp_ms(),
+                    "final_transcript": transcript_to_send,
+                    "force_finalized": True,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error building OpenAI force-finalize latency: {e}")
+        self._last_latency_turn_id = turn_id
+        self.meta_info["asr_turn_id"] = turn_id
+        data = {"type": "transcript", "content": transcript_to_send, "force_finalized": True}
+        logger.warning(f"OpenAI force-finalized turn {turn_id}: {transcript_to_send[:80]}")
+        await self.push_to_transcriber_queue(create_ws_data_packet(data, self.meta_info))
+        self._final_transcript_event.set()
+        self._reset_turn_state()
+
     async def monitor_utterance_timeout(self):
         """Force-finalize a committed turn if completed event never arrives."""
         try:
@@ -260,8 +329,7 @@ class OpenAITranscriber(BaseTranscriber):
                             f"Utterance timeout: completed event missing for {elapsed:.1f}s "
                             f"after commit on turn {self.current_turn_id}. Force-finalizing."
                         )
-                        self._final_transcript_event.set()
-                        self._reset_turn_state()
+                        await self._force_finalize_utterance()
         except asyncio.CancelledError:
             logger.info("OpenAI utterance timeout task cancelled")
             raise
@@ -329,6 +397,10 @@ class OpenAITranscriber(BaseTranscriber):
                         self.audio_submission_time = time.time()
                         self._final_transcript_event.clear()
                         self._audio_appended_since_commit = False
+                        # New turn: clear stale commit tracking from the previous turn so
+                        # the timeout monitor cannot force-finalize this fresh turn.
+                        self._turn_committed = False
+                        self._commit_time = None
                         self.turn_counter += 1
                         self.current_turn_id = f"turn_{self.turn_counter}"
                         self.current_turn_start_time = time.perf_counter()
@@ -427,11 +499,11 @@ class OpenAITranscriber(BaseTranscriber):
                             first_interim_to_final_ms, last_interim_to_final_ms = (
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": turn_id,
                                     "sequence_id": turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "total_stream_duration_ms": round(
@@ -446,7 +518,11 @@ class OpenAITranscriber(BaseTranscriber):
 
                             # Attach turn_latencies only on the final transcript packet,
                             # then remove it so interim packets for the next turn stay small.
-                            self.meta_info["turn_latencies"] = self.turn_latencies
+                            # Copy, not alias: create_ws_data_packet deepcopies for the packet,
+                            # but the live list must not stay aliased on meta_info.
+                            import copy as _copy
+
+                            self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
                             yield create_ws_data_packet(
                                 {"type": "transcript", "content": transcript},
                                 self.meta_info,
@@ -465,6 +541,10 @@ class OpenAITranscriber(BaseTranscriber):
 
                     elif event_type == "input_audio_buffer.speech_started":
                         self._speech_active = True
+                        # New turn: clear stale commit tracking so the timeout monitor
+                        # cannot force-finalize this fresh turn for the previous commit.
+                        self._turn_committed = False
+                        self._commit_time = None
                         self.turn_counter += 1
                         self.current_turn_id = f"turn_{self.turn_counter}"
                         self.current_turn_start_time = time.perf_counter()
@@ -597,6 +677,7 @@ class OpenAITranscriber(BaseTranscriber):
 
     async def transcribe(self):
         ws = None
+        self._resample_state = None
         try:
             start_time = time.perf_counter()
             try:

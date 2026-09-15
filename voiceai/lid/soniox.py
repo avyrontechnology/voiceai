@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 
 from dotenv import load_dotenv
 
@@ -9,15 +8,17 @@ from voiceai.constants import (
     SONIOX_ENDPOINT_TOKEN,
     SONIOX_WEBSOCKET_HOST,
 )
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import build_soniox_config, soniox_ws_url
 
 from .base import LIDBackend
+from .constants import DEFAULT_SONIOX_API_KEY, SONIOX_API_KEY_ENV
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class SonioxLID(LIDBackend):
@@ -31,7 +32,7 @@ class SonioxLID(LIDBackend):
 
     def __init__(self, on_language, config):
         super().__init__(on_language, config)
-        self._api_key = config.get("soniox_api_key") or os.getenv("SONIOX_API_KEY", "")
+        self._api_key = config.get("soniox_api_key") or get_str(SONIOX_API_KEY_ENV, DEFAULT_SONIOX_API_KEY)
         self._host = config.get("soniox_host") or SONIOX_WEBSOCKET_HOST
         self._telephony = config.get("telephony_provider", "")
         # Telephony streams 8kHz; Soniox accepts mulaw/pcm natively, no resampling.

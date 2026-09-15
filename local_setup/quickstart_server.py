@@ -49,7 +49,7 @@ from voiceai.errors import (
     summarize_exception,
 )
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import call_soft
+from voiceai.core.resilience import call_soft
 from voiceai.helpers.utils import get_prompt_responses, store_file
 from voiceai.llms import LiteLLM
 from voiceai.models import AgentModel
@@ -104,11 +104,42 @@ redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
 
 
+async def _scan_keys_nonblocking(client: Any, pattern: str = "*") -> List[str]:
+    """Non-blocking key scan: SCAN preferred (never KEYS on the event loop).
+
+    KEYS blocks Redis for the full keyspace; SCAN iterates incrementally. Falls back
+    to KEYS only for fakes/minimal doubles without ``scan_iter`` (tests).
+    """
+    import inspect
+
+    try:
+        scan_iter = getattr(client, "scan_iter", None)
+        if callable(scan_iter):
+            result = scan_iter(match=pattern)
+            if inspect.isawaitable(result):
+                result = await result
+            if hasattr(result, "__aiter__"):
+                keys: List[str] = []
+                async for key in result:  # type: ignore[union-attr]
+                    keys.append(key.decode() if isinstance(key, bytes) else str(key))
+                return keys
+            if result is not None:
+                try:
+                    items = list(result)
+                except TypeError:
+                    items = []
+                return [k.decode() if isinstance(k, bytes) else str(k) for k in items]
+    except Exception:
+        pass
+    raw = await client.keys(pattern)
+    return [k.decode() if isinstance(k, bytes) else str(k) for k in (raw or [])]
+
+
 async def _load_all_agent_records() -> list:
     """(agent_id, record) pairs for the welcome prewarm; best-effort, never raises."""
     records = []
     try:
-        keys = await redis_client.keys("*")
+        keys = await _scan_keys_nonblocking(redis_client, "*")
     except Exception:
         return records
     for key in keys or []:
@@ -212,11 +243,15 @@ ErrorResponse = ErrorEnvelope
 
 
 class CreateAgentPayload(BaseModel):
-    agent_config: AgentModel = Field(..., description="The main agent configuration including tools, tasks, and settings.")
+    agent_config: AgentModel = Field(
+        ..., description="The main agent configuration including tools, tasks, and settings."
+    )
     # Values are usually strings (system_prompt, welcome_message) but may be
     # nested blocks such as task_1.multilingual_prompts, which the engine
     # reads at runtime for language switching.
-    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(None, description="Optional prompts mapped by intent/context.")
+    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(
+        None, description="Optional prompts mapped by intent/context."
+    )
 
 
 class AgentCreatedResponse(BaseModel):
@@ -285,7 +320,9 @@ async def load_agent_record(agent_id: str) -> dict:
     try:
         record = json.loads(raw)
     except (TypeError, ValueError) as exc:
-        raise StorageError(f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc) from exc
+        raise StorageError(
+            f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc
+        ) from exc
     if not isinstance(record, dict):
         raise StorageError(f"stored config for agent {agent_id} is not an object", details={"agent_id": agent_id})
     return record
@@ -370,7 +407,9 @@ async def health():
             raise
         logger.warning("health: redis ping failed: %s", summarize_exception(exc))
     platform_ok = getattr(app.state, "platform_store", None) is not None
-    return HealthResponse(ok=redis_ok, redis=redis_ok, platform=platform_ok, stream_secret_configured=stream_secret_configured())
+    return HealthResponse(
+        ok=redis_ok, redis=redis_ok, platform=platform_ok, stream_secret_configured=stream_secret_configured()
+    )
 
 
 @app.get(
@@ -426,7 +465,9 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depend
             logger.info("welcome pre-rendered | agent=%s", agent_id)
     except Exception as exc:
         logger.warning("welcome pre-render skipped | agent=%s err=%s", agent_id, summarize_exception(exc))
-    logger.info("agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", [])))
+    logger.info(
+        "agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", []))
+    )
     return AgentCreatedResponse(agent_id=agent_id)
 
 
@@ -492,7 +533,7 @@ async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read")
     from voiceai.platform.agent_records import collect_agent_records
 
     try:
-        agent_keys = await redis_client.keys("*")
+        agent_keys = await _scan_keys_nonblocking(redis_client, "*")
     except Exception as exc:
         if is_cancellation(exc):
             raise
@@ -516,7 +557,7 @@ async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read")
 # Platform layer (executions, batches, numbers, KBs, tools, webhooks, wallet, templates)
 #############################################################################################
 try:
-    from voiceai.platform.router import build_routers
+    from voiceai.platform.controllers import build_routers
     from voiceai.platform.store import RedisStore
 
     for _router in build_routers():
@@ -548,11 +589,15 @@ async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str], ag
         if session_token:
             from voiceai.platform.auth import _principal_from_session
 
-            principal = await call_soft(_principal_from_session, store, session_token, name="ws session lookup", logger=logger)
+            principal = await call_soft(
+                _principal_from_session, store, session_token, name="ws session lookup", logger=logger
+            )
     if principal is not None:
         if principal.has_scope("calls:write"):
             return principal.auth_type
-        raise AuthenticationError("This account may not place calls (calls:write scope required)", details={"scope": "calls:write"})
+        raise AuthenticationError(
+            "This account may not place calls (calls:write scope required)", details={"scope": "calls:write"}
+        )
     if token and verify_stream_token(token, agent_id):
         return "stream-token"
 
@@ -561,7 +606,9 @@ async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str], ag
         details["hint"] = "carrier calls need VOICE_STREAM_SECRET on the engine and the telephony servers"
     if store is None:
         details["platform"] = "platform store unavailable; only stream tokens can authenticate"
-    raise AuthenticationError("Voice socket requires a ws ticket, a session cookie, or a signed stream token", details=details)
+    raise AuthenticationError(
+        "Voice socket requires a ws ticket, a session cookie, or a signed stream token", details=details
+    )
 
 
 def _browser_leg_config(agent_config: dict) -> dict:
@@ -707,7 +754,9 @@ async def _lookup_inbound_did(agent_id: str) -> Optional[str]:
     return None
 
 
-async def _record_execution(agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]) -> None:
+async def _record_execution(
+    agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]
+) -> None:
     """Best-effort execution log for the platform layer; never breaks the call path."""
     from voiceai.platform.engine_hook import _numbers_from_context, record_engine_execution
 
@@ -863,4 +912,6 @@ async def websocket_endpoint(
             )
             await close_with_error(websocket, error)
         _forget_socket(websocket)
-        await call_soft(_record_execution, agent_id, assistant_manager, task_outputs, name="execution logging", logger=logger)
+        await call_soft(
+            _record_execution, agent_id, assistant_manager, task_outputs, name="execution logging", logger=logger
+        )

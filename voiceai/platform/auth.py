@@ -16,19 +16,22 @@ Notes for operators:
 
 import hashlib
 import hmac
-import os
+import asyncio
 import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, List, Optional
+from typing import TYPE_CHECKING, Deque, Dict, List, Optional
 
 from fastapi import Depends, HTTPException, Request, Response
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import ROLE_RANK, ROLE_SCOPES, SessionRecord, User, new_id, utcnow
 from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:  # Annotation-only (no runtime cycle)
+    from voiceai.platform.repositories import PlatformRepository
 
 logger = configure_logger(__name__)
 
@@ -39,8 +42,10 @@ WS_TICKET_TTL_S = 60
 INVITE_TTL_S = 7 * 24 * 3600
 LOGIN_WINDOW_S = 60
 LOGIN_MAX_ATTEMPTS = 5
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
-COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax")
+from voiceai.core.environment import get_cookie_samesite, get_cookie_secure
+
+COOKIE_SECURE = get_cookie_secure()
+COOKIE_SAMESITE = get_cookie_samesite()
 
 _PBKDF2_ITERATIONS = 600_000
 
@@ -55,6 +60,7 @@ def get_store(request: Request) -> MemoryStore:
 
 # -- password + token hashing ----------------------------------------------------
 
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERATIONS)
@@ -66,12 +72,20 @@ def verify_password(password: str, reference: str) -> bool:
         algo, iterations, salt_hex, digest_hex = reference.split("$")
         if algo != "pbkdf2_sha256":
             return False
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), bytes.fromhex(salt_hex), int(iterations)
-        )
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_hex), int(iterations))
         return hmac.compare_digest(digest.hex(), digest_hex)
     except Exception:
         return False
+
+
+async def ahash_password(password: str) -> str:
+    """PBKDF2 (600k iters, ~200ms) off the event loop — never block the audio loop."""
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def averify_password(password: str, reference: str) -> bool:
+    """PBKDF2 verify off the event loop (same cost as hash)."""
+    return await asyncio.to_thread(verify_password, password, reference)
 
 
 def new_token() -> str:
@@ -83,6 +97,7 @@ def token_hash(token: str) -> str:
 
 
 # -- principal ---------------------------------------------------------------------
+
 
 @dataclass
 class Principal:
@@ -118,9 +133,7 @@ def _forbidden(detail: str = "Insufficient permissions") -> HTTPException:
     return HTTPException(status_code=403, detail=detail)
 
 
-async def _principal_from_session(
-    store: MemoryStore, token: str
-) -> Optional[Principal]:
+async def _principal_from_session(store: MemoryStore, token: str) -> Optional[Principal]:
     session = await store.get_session(token_hash(token))
     if not session or session.kind != "session":
         return None
@@ -136,25 +149,59 @@ async def _principal_from_session(
     )
 
 
+# Throttle last_used_at writes: at most one RMW per key per window (avoids a write per request).
+_LAST_USED_TOUCH_S = 300.0
+
+
 async def _principal_from_api_key(store: MemoryStore, secret: str) -> Optional[Principal]:
     digest = token_hash(secret)
-    for key in await store.list_api_keys():
+    # Indexed fast path (RedisStore): O(1) HASH lookup, no KEYS/SCAN list sweep.
+    get_by_hash = getattr(store, "get_api_key_by_hash", None)
+    if callable(get_by_hash):
+        try:
+            single = await get_by_hash(digest)
+            candidates = [single] if single is not None else []
+        except Exception:
+            candidates = await store.list_api_keys()
+    else:
+        candidates = await store.list_api_keys()
+    for key in candidates:
         if not key.key_hash:
             continue  # legacy key minted before hashing; rotate it
         prefix_ok = secret.startswith(key.prefix) if key.prefix else True
         if prefix_ok and hmac.compare_digest(key.key_hash, digest):
             if key.expires_at and key.expires_at.replace(tzinfo=timezone.utc) < utcnow():
                 return None
-            key.last_used_at = utcnow()
-            try:
-                await store.save_api_key(key)
-            except Exception:
-                logger.warning(f"Could not touch last_used_at for key {key.key_id}")
-            user = await store.get_user(key.created_by) if key.created_by else None
+            # Orphaned/disabled owners lose their keys (deleted users are revoked on delete).
+            if key.created_by:
+                owner = await store.get_user(key.created_by)
+                if owner is None or owner.disabled:
+                    return None
+                user_email: Optional[str] = owner.email
+                user_org: str = owner.org_id
+            else:
+                user_email = None
+                user_org = "default"
+            now = utcnow()
+            should_touch = True
+            if key.last_used_at is not None:
+                last = key.last_used_at
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                try:
+                    should_touch = (now - last).total_seconds() >= _LAST_USED_TOUCH_S
+                except Exception:
+                    should_touch = True
+            if should_touch:
+                key.last_used_at = now
+                try:
+                    await store.save_api_key(key)
+                except Exception:
+                    logger.warning(f"Could not touch last_used_at for key {key.key_id}")
             return Principal(
                 user_id=key.created_by,
-                email=user.email if user else None,
-                org_id=user.org_id if user else "default",
+                email=user_email,
+                org_id=user_org,
                 role="viewer",
                 auth_type="key",
                 scopes=list(key.scopes),
@@ -203,9 +250,8 @@ def require_scope(scope: str):
 
 # -- sessions / cookies --------------------------------------------------------------
 
-async def mint_session(
-    store: MemoryStore, user: User, response: Response, ttl_s: int = SESSION_TTL_S
-) -> str:
+
+async def mint_session(store: MemoryStore, user: User, response: Response, ttl_s: int = SESSION_TTL_S) -> str:
     token = new_token()
     await store.save_session(
         SessionRecord(
@@ -293,8 +339,9 @@ def client_ip(request: Request) -> str:
 
 # -- audit -------------------------------------------------------------------------------
 
+
 async def audit(
-    store: MemoryStore,
+    store: "PlatformRepository",
     event_type: str,
     user_id: Optional[str] = None,
     email: Optional[str] = None,

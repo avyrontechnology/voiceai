@@ -7,11 +7,27 @@ the simulator later without contract changes.
 """
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer
+from pymongo import IndexModel
+
+from voiceai.database.base import BaseDocument
+from voiceai.database.constants import COLLECTIONS
+
+
+def _to_decimal(value: Any) -> Decimal:
+    """Coerce float/int/str to Decimal without binary-float dust (Decimal(str(v)))."""
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+#: Credits stored as Decimal internally, serialized as float for API compat.
+CreditAmount = Annotated[Decimal, BeforeValidator(_to_decimal), PlainSerializer(lambda v: float(v), return_type=float)]
 
 
 def utcnow() -> datetime:
@@ -61,7 +77,11 @@ class LatencyBreakdown(BaseModel):
     e2e_ms: int = 0
 
 
-class Execution(BaseModel):
+class Execution(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["EXECUTIONS"]
+        indexes = [IndexModel([("org_id", 1), ("agent_id", 1), ("started_at", -1)])]
+
     execution_id: str
     agent_id: str
     batch_id: Optional[str] = None
@@ -78,6 +98,8 @@ class Execution(BaseModel):
     started_at: datetime = Field(default_factory=utcnow)
     ended_at: Optional[datetime] = None
     duration_s: float = 0
+    # Tenancy starter: single-default compat (old rows default to "default").
+    org_id: str = Field("default", description="Owning org; lists/gets are scoped to the caller org.")
 
 
 class ExecutionListResponse(BaseModel):
@@ -112,24 +134,50 @@ class BatchEntry(BaseModel):
     variables: Dict[str, Any] = Field(default_factory=dict)
 
 
+#: Max entries per batch/campaign. Batches run in the background (202 + poll) so a 1000-entry
+#: gather with semaphore 3 x 20s trunk timeouts would block the worker for ~2h; 100 keeps the
+#: queue bounded while the status endpoint reports progress. Override via BATCH_MAX_ENTRIES env.
+BATCH_MAX_ENTRIES = 100
+CAMPAIGN_MAX_ENTRIES = 100
+
+
 class BatchStats(BaseModel):
     total: int = 0
     queued: int = 0
     completed: int = 0
     failed: int = 0
+    pending: int = Field(
+        default=0,
+        description="Talko-accepted dials awaiting CDR (execution IN_PROGRESS, media outcome in Talko).",
+    )
 
 
 class CallingHours(BaseModel):
-    """Daily calling window in 24h HH:MM. start == end means closed all day."""
+    """Daily calling window in 24h HH:MM. start == end means closed all day.
+
+    `tz` is an IANA zone (e.g. "Asia/Kolkata", "UTC"). The window is evaluated in that zone;
+    UTC is the default so bare "09:00-18:00" keeps its historical meaning. run_batch and
+    run_campaign enforce the window themselves (not only the HTTP start route).
+    """
 
     start: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     end: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    tz: str = Field(default="UTC", description='IANA timezone for the window, e.g. "Asia/Kolkata".')
 
 
 class CreateBatchRequest(BaseModel):
+    """Create a dial batch (max 100 entries).
+
+    Start is asynchronous: POST /batches/{id}/start claims the batch (compare-and-set
+    DRAFT/SCHEDULED -> RUNNING, Idempotency-Key supported) and returns 202 with RUNNING;
+    poll GET /batches/{id} (or /batches/{id}/status) until completed/stopped. Talko dials
+    stay IN_PROGRESS (batch pending, media outcome in Talko CDR) while simulated dials end
+    COMPLETED/FAILED. Dials never debit the wallet (topup-only decorative balance).
+    """
+
     agent_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    entries: List[BatchEntry] = Field(..., min_length=1, max_length=1000)
+    entries: List[BatchEntry] = Field(..., min_length=1, max_length=100)
     schedule_at: Optional[datetime] = None
     calling_hours: Optional[CallingHours] = None
     delay_scale: float = Field(0.5, ge=0)
@@ -142,11 +190,29 @@ class CreateBatchRequest(BaseModel):
     )
     talko_api_key: Optional[str] = Field(
         None,
-        description="Talko partner API key for this batch's dials (defaults to trunk TALKO_API_KEY). Lets each user dial with their own key.",
+        description=(
+            "Write-only per-batch Talko key. Accepted on create, held ephemerally for the dial "
+            "(request-scoped store), never persisted readable nor serialized back. "
+            "Omit to use trunk TALKO_API_KEY env."
+        ),
     )
 
 
-class Batch(BaseModel):
+class Batch(BaseDocument):
+    """A dial batch. Lifecycle: DRAFT/SCHEDULED -> RUNNING -> COMPLETED/STOPPED.
+
+    Start uses compare-and-set (only DRAFT/SCHEDULED may move to RUNNING) with an optional
+    Idempotency-Key: replaying the same key returns the same batch without a second dial pass.
+    Stop sets STOPPED; run_batch checks the flag before every entry and cancels in-flight
+    trunk HTTP so pending dials never start. Talko-accepted entries count as `stats.pending`
+    (execution IN_PROGRESS, completion arrives via Talko CDR callback — not yet wired, see
+    talko_dialer) rather than `stats.completed`.
+    """
+
+    class Settings:
+        name = COLLECTIONS["BATCHES"]
+        indexes = [IndexModel([("org_id", 1), ("agent_id", 1)])]
+
     batch_id: str
     agent_id: str
     name: str
@@ -157,7 +223,14 @@ class Batch(BaseModel):
     calling_hours: Optional[CallingHours] = None
     provider: Literal["simulated", "talko"] = "simulated"
     from_number: Optional[str] = None
-    talko_api_key: Optional[str] = None
+    idempotency_key: Optional[str] = Field(
+        default=None, description="Last Idempotency-Key that claimed the start (CAS guard)."
+    )
+    # Deprecated readable copy: never serialized (exclude) and never persisted for new
+    # batches. Per-batch keys live ephemerally in the store (see MemoryStore batch secrets)
+    # and fall back to trunk TALKO_API_KEY env. Old persisted values are dropped on next save.
+    talko_api_key: Optional[str] = Field(default=None, exclude=True)
+    org_id: str = Field("default", description="Owning org; lists/gets are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -177,7 +250,10 @@ class AssignNumberRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
 
 
-class PhoneNumber(BaseModel):
+class PhoneNumber(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["PHONE_NUMBERS"]
+
     number_id: str
     number: str
     provider: PhoneNumberProvider = "simulated"
@@ -205,7 +281,10 @@ class AttachKBRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
 
 
-class KnowledgeBase(BaseModel):
+class KnowledgeBase(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["KNOWLEDGE_BASES"]
+
     kb_id: str
     name: str
     sources: List[KBSource] = Field(default_factory=list)
@@ -226,13 +305,17 @@ class CreateToolRequest(BaseModel):
     enabled: bool = True
 
 
-class Tool(BaseModel):
+class Tool(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["TOOLS"]
+
     tool_id: str
     agent_id: Optional[str] = None
     name: str
     kind: ToolKind
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    org_id: str = Field("default", description="Owning org; lists are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -247,12 +330,16 @@ class CreateWebhookRequest(BaseModel):
     enabled: bool = True
 
 
-class Webhook(BaseModel):
+class Webhook(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WEBHOOKS"]
+
     webhook_id: str
     agent_id: Optional[str] = None
     url: str
     events: List[str] = Field(default_factory=list)
     enabled: bool = True
+    org_id: str = Field("default", description="Owning org; lists are scoped to the caller org.")
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -260,21 +347,34 @@ class WebhookListResponse(BaseModel):
     webhooks: List[Webhook]
 
 
-class Wallet(BaseModel):
-    balance_credits: float = 0
+class Wallet(BaseDocument):
+    """Topup-only decorative balance (no debit path calls it yet; `debit` ledger type is reserved).
+
+    Amounts are Decimal internally (serialized as float for API compat) and topups are
+    atomic via the store lock; Redis multi-worker deployments need a Lua/WATCH transaction
+    for the same guarantee (see MemoryStore.topup_wallet_credits).
+    """
+
+    class Settings:
+        name = COLLECTIONS["WALLETS"]
+
+    balance_credits: CreditAmount = Field(default=Decimal("0"))
     currency: str = "credits"
     updated_at: datetime = Field(default_factory=utcnow)
 
 
 class TopUpRequest(BaseModel):
-    amount_credits: float = Field(..., gt=0)
+    amount_credits: CreditAmount = Field(..., gt=0)
     reason: Optional[str] = None
 
 
-class LedgerEntry(BaseModel):
+class LedgerEntry(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["LEDGER_ENTRIES"]
+
     entry_id: str
     type: Literal["topup", "debit"]
-    amount_credits: float
+    amount_credits: CreditAmount
     reason: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -315,7 +415,10 @@ class NotificationPrefs(BaseModel):
     channel_webhook: bool = False
 
 
-class Organization(BaseModel):
+class Organization(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["ORGANIZATIONS"]
+
     org_id: str = "default"
     name: str = "Acme Neural Corp"
     support_email: str = "ops@acmeneural.io"
@@ -335,17 +438,26 @@ class UpdateOrganizationRequest(BaseModel):
     notifications: Optional[NotificationPrefs] = None
 
 
-class ApiKey(BaseModel):
+class ApiKey(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["API_KEYS"]
+        indexes = [IndexModel([("key_hash", 1)], unique=True)]
+
     key_id: str
     name: str
     prefix: str
-    # bcrypt hash of the full secret (secret itself is never stored).
-    key_hash: Optional[str] = None
+    # SHA-256 hex of the full secret (fast hash is fine: secrets are 256-bit high-entropy;
+    # passwords use PBKDF2 instead). Never serialized to clients; list endpoints must strip it.
+    key_hash: Optional[str] = Field(default=None, description="SHA-256 of secret; never exposed via API.")
     scopes: List[str] = Field(default_factory=list)
     expires_at: Optional[datetime] = None
     created_by: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     last_used_at: Optional[datetime] = None
+
+    def public(self) -> "ApiKey":
+        """Copy safe for API responses: hash stripped, store untouched."""
+        return self.model_copy(update={"key_hash": None})
 
 
 class ApiKeyListResponse(BaseModel):
@@ -354,8 +466,6 @@ class ApiKeyListResponse(BaseModel):
 
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(..., min_length=1)
-    scopes: List[str] = Field(default_factory=list)
-    expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
     scopes: List[str] = Field(default_factory=list)
     expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
 
@@ -417,7 +527,11 @@ ROLE_SCOPES: Dict[str, List[str]] = {
 ROLE_RANK: Dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
 
 
-class User(BaseModel):
+class User(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["USERS"]
+        indexes = [IndexModel([("email", 1)], unique=True)]
+
     user_id: str
     email: str = Field(..., pattern=EMAIL_PATTERN)
     name: Optional[str] = None
@@ -462,7 +576,11 @@ class InviteRequest(BaseModel):
     role: UserRole = "member"
 
 
-class Invite(BaseModel):
+class Invite(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INVITES"]
+        indexes = [IndexModel([("token_hash", 1)], unique=True)]
+
     invite_id: str
     email: str
     name: Optional[str] = None
@@ -501,7 +619,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-class SessionRecord(BaseModel):
+class SessionRecord(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["SESSIONS"]
+        indexes = [IndexModel([("token_hash", 1)], unique=True), IndexModel([("expires_at", 1)], expireAfterSeconds=0)]
+
     token_hash: str
     user_id: str
     org_id: str = "default"
@@ -520,7 +642,10 @@ class WsTicketResponse(BaseModel):
     expires_in: int = 60
 
 
-class AuthEvent(BaseModel):
+class AuthEvent(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["AUTH_EVENTS"]
+
     event_id: str
     type: str
     user_id: Optional[str] = None
@@ -556,7 +681,10 @@ class Member(BaseModel):
     added_at: datetime = Field(default_factory=utcnow)
 
 
-class SubAccount(BaseModel):
+class SubAccount(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["SUB_ACCOUNTS"]
+
     sub_id: str
     name: str
     concurrency_cap: Optional[int] = None
@@ -579,9 +707,14 @@ class SubAccountListResponse(BaseModel):
     sub_accounts: List[SubAccount]
 
 
-class Integration(BaseModel):
+class Integration(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INTEGRATIONS"]
+
     integration_id: str
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal[
+        "twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"
+    ]
     name: str
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -596,7 +729,9 @@ class Integration(BaseModel):
 
 
 class CreateIntegrationRequest(BaseModel):
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
+    kind: Literal[
+        "twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"
+    ]
     name: str = Field(..., min_length=1)
     config: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -627,7 +762,20 @@ def mask_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
     return masked
 
 
-class InboundConfig(BaseModel):
+def is_masked_secret(value: Any) -> bool:
+    """True when the client echoed the masked literal back (must never overwrite the real secret)."""
+    return value == MASKED_SECRET
+
+
+def strip_masked_values(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop masked-literal entries so a GET→PUT round-trip preserves real secrets."""
+    return {field: value for field, value in config.items() if value != MASKED_SECRET}
+
+
+class InboundConfig(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INBOUND_CONFIGS"]
+
     agent_id: str
     assigned_number_id: Optional[str] = None
     greeting: Optional[str] = None
@@ -656,7 +804,10 @@ class CreateVoiceRequest(BaseModel):
     language: Optional[str] = None
 
 
-class VoiceEntry(BaseModel):
+class VoiceEntry(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["VOICES"]
+
     voice_id: str
     agent_id: Optional[str] = None
     name: str
@@ -671,11 +822,16 @@ class VoiceListResponse(BaseModel):
     voices: List[VoiceEntry]
 
 
-class VectorStoreConfig(BaseModel):
+class VectorStoreConfig(BaseDocument):
     """Manual vector-store connection for knowledge/graph agents.
 
     Persisted per agent in the platform store (never silently dropped).
+    `connection_string` holds credentials: GETs return the masked literal,
+    PUTs with the masked literal preserve the stored secret (never clobber).
     """
+
+    class Settings:
+        name = COLLECTIONS["VECTOR_STORES"]
 
     provider: Literal["mongodb", "lancedb"] = "mongodb"
     connection_string: Optional[str] = None
@@ -693,8 +849,25 @@ class VectorStoreConfig(BaseModel):
     final_count: int = 5
     updated_at: datetime = Field(default_factory=utcnow)
 
+    def masked(self) -> "VectorStoreConfig":
+        """Copy safe for API responses: connection string replaced, store untouched."""
+        copy = self.model_copy(deep=True)
+        if copy.connection_string:
+            copy.connection_string = MASKED_SECRET
+        return copy
 
-class GraphDoc(BaseModel):
+    def with_real_secret(self, existing: Optional["VectorStoreConfig"]) -> "VectorStoreConfig":
+        """Resolve a PUT payload: masked literal keeps the stored secret, else the new value wins."""
+        if self.connection_string == MASKED_SECRET:
+            real = existing.connection_string if existing and existing.connection_string else None
+            return self.model_copy(update={"connection_string": real})
+        return self
+
+
+class GraphDoc(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["GRAPHS"]
+
     graph_id: str
     name: str
     agent_id: Optional[str] = None
@@ -703,7 +876,10 @@ class GraphDoc(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class GraphVersion(BaseModel):
+class GraphVersion(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["GRAPH_VERSIONS"]
+
     version_id: str
     graph_id: str
     version_number: int
@@ -745,7 +921,10 @@ class NodeReport(BaseModel):
     at: str = ""
 
 
-class WorkflowRun(BaseModel):
+class WorkflowRun(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_RUNS"]
+
     run_id: str
     workflow_id: str
     campaign_id: Optional[str] = None
@@ -760,7 +939,10 @@ class WorkflowRunListResponse(BaseModel):
     runs: List[WorkflowRun]
 
 
-class WorkflowDoc(BaseModel):
+class WorkflowDoc(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOWS"]
+
     workflow_id: str
     name: str
     definition: Dict[str, Any] = Field(default_factory=dict)
@@ -768,7 +950,10 @@ class WorkflowDoc(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class WorkflowVersion(BaseModel):
+class WorkflowVersion(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_VERSIONS"]
+
     version_id: str
     workflow_id: str
     version_number: int
@@ -822,13 +1007,19 @@ class WorkflowCampaignStatus(str, Enum):
     STOPPED = "stopped"
 
 
-class WorkflowCampaign(BaseModel):
+class WorkflowCampaign(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_CAMPAIGNS"]
+
     campaign_id: str
     workflow_id: str
     name: str
     status: WorkflowCampaignStatus = WorkflowCampaignStatus.DRAFT
     entries: List[CampaignEntry] = Field(default_factory=list)
     stats: CampaignStats = Field(default_factory=CampaignStats)
+    calling_hours: Optional[CallingHours] = Field(
+        default=None, description="Daily calling window enforced on start and inside run_campaign."
+    )
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -841,7 +1032,10 @@ class WorkflowCampaignListResponse(BaseModel):
 class CreateCampaignRequest(BaseModel):
     workflow_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    entries: List[CampaignEntry] = Field(..., min_length=1, max_length=1000)
+    entries: List[CampaignEntry] = Field(..., min_length=1, max_length=100)
+    calling_hours: Optional[CallingHours] = Field(
+        default=None, description="Daily calling window (with tz) enforced on start and inside run_campaign."
+    )
 
 
 class LatencyBucket(BaseModel):
@@ -857,3 +1051,32 @@ class LatencyStats(BaseModel):
     p95_e2e_ms: Optional[int] = None
     by_stage: Dict[str, int] = Field(default_factory=dict)
     buckets: List[LatencyBucket] = Field(default_factory=list)
+
+
+ALL_DOCUMENT_MODELS: list = [
+    Execution,
+    Batch,
+    PhoneNumber,
+    KnowledgeBase,
+    Tool,
+    Webhook,
+    InboundConfig,
+    VoiceEntry,
+    VectorStoreConfig,
+    SubAccount,
+    Integration,
+    GraphDoc,
+    GraphVersion,
+    WorkflowDoc,
+    WorkflowVersion,
+    WorkflowRun,
+    WorkflowCampaign,
+    Organization,
+    ApiKey,
+    User,
+    SessionRecord,
+    Invite,
+    AuthEvent,
+    Wallet,
+    LedgerEntry,
+]

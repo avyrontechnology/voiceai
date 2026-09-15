@@ -1,22 +1,24 @@
-import os
 import json
 import uuid
 import base64
-from typing import AsyncIterable
+from typing import Any, AsyncIterable
 from google import genai
 from google.genai import types
 from voiceai.constants import default_thinking_level
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import (
     now_ms,
     compute_function_pre_call_message,
     convert_to_request_log,
     clean_gemini_schema,
 )
+from .constants import GEMINI_API_KEY_ENV, GOOGLE_API_KEY_ENV
 from .llm import BaseLLM
+from .openai_base import _strip_server_injected_params
 from .types import LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 GEMINI_THINKING_MIN_OUTPUT_TOKENS: int = 512
 
@@ -38,6 +40,53 @@ def _usage_kwargs(usage) -> dict:
         "reasoning_tokens": usage.thoughts_token_count,
         "cached_tokens": usage.cached_content_token_count,
     }
+
+
+def _extract_forced_function_name(tool_choice: Any) -> str | None:
+    """Forced function name from a chat tool_choice dict, or None when not forced."""
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        func = tool_choice.get("function")
+        if isinstance(func, dict) and isinstance(func.get("name"), str) and func.get("name"):
+            return func["name"]
+        name = tool_choice.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+def _voiceai_tools_to_declarations(voiceai_tools: Any) -> list[types.FunctionDeclaration]:
+    """Chat/legacy voiceai tools -> Gemini declarations, stripped of server-owned ids."""
+    if isinstance(voiceai_tools, str):
+        try:
+            voiceai_tools = json.loads(voiceai_tools)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse tool definitions as JSON")
+            return []
+    if not isinstance(voiceai_tools, list) or not voiceai_tools:
+        return []
+    stripped = _strip_server_injected_params(voiceai_tools)
+    declarations: list[types.FunctionDeclaration] = []
+    for tool in stripped:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            func = tool["function"]
+            declarations.append(
+                types.FunctionDeclaration(
+                    name=func["name"],
+                    description=func.get("description", ""),
+                    parameters=clean_gemini_schema(func.get("parameters")),
+                )
+            )
+        elif "name" in tool and "parameters" in tool:
+            declarations.append(
+                types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=tool.get("description", ""),
+                    parameters=clean_gemini_schema(tool.get("parameters")),
+                )
+            )
+    return declarations
 
 
 class GeminiLLM(BaseLLM):
@@ -67,43 +116,25 @@ class GeminiLLM(BaseLLM):
 
         self.temperature = temperature
         # S2S and the transcriber accept GEMINI_API_KEY; accept it here too so one key works everywhere.
-        api_key = kwargs.get("llm_key", os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        api_key = kwargs.get("llm_key", get_str(GEMINI_API_KEY_ENV) or get_str(GOOGLE_API_KEY_ENV))
         self.client = genai.Client(api_key=api_key)
 
         self.api_params = kwargs.get("api_tools", {}).get("tools_params", {})
         voiceai_tools = kwargs.get("api_tools", {}).get("tools", [])
 
-        gemini_declarations = []
-        if voiceai_tools:
-            if isinstance(voiceai_tools, str):
-                try:
-                    voiceai_tools = json.loads(voiceai_tools)
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse tool definitions as JSON")
-                    voiceai_tools = []
-
-            for tool in voiceai_tools:
-                if tool.get("type") == "function":
-                    func = tool["function"]
-                    gemini_declarations.append(
-                        types.FunctionDeclaration(
-                            name=func["name"],
-                            description=func["description"],
-                            parameters=clean_gemini_schema(func["parameters"]),
-                        )
-                    )
-                elif "name" in tool and "parameters" in tool:
-                    gemini_declarations.append(
-                        types.FunctionDeclaration(
-                            name=tool["name"],
-                            description=tool.get("description", ""),
-                            parameters=clean_gemini_schema(tool["parameters"]),
-                        )
-                    )
+        if isinstance(voiceai_tools, str):
+            try:
+                voiceai_tools = json.loads(voiceai_tools)
+            except json.JSONDecodeError:
+                logger.error("Failed to parse tool definitions as JSON")
+                voiceai_tools = []
+        # Stripped copy for validation, so a server-owned required key never blocks dispatch.
+        stripped_raw = _strip_server_injected_params(voiceai_tools) if isinstance(voiceai_tools, list) else []
+        gemini_declarations = _voiceai_tools_to_declarations(stripped_raw)
 
         self.gemini_tools = [types.Tool(function_declarations=gemini_declarations)] if gemini_declarations else None
         # Keep raw voiceai tools list for required-param validation at call time
-        self.voiceai_tools_raw = voiceai_tools if isinstance(voiceai_tools, list) else []
+        self.voiceai_tools_raw = stripped_raw
         self.thinking_budget = kwargs.get("thinking_budget", 0)
         self.run_id = kwargs.get("run_id", None)
         self.language = kwargs.get("language", "en")
@@ -250,7 +281,13 @@ class GeminiLLM(BaseLLM):
 
         return None
 
-    def _build_config(self, system_instruction: str | None, request_json: bool = False) -> types.GenerateContentConfig:
+    def _build_config(
+        self,
+        system_instruction: str | None,
+        request_json: bool = False,
+        tools: Any = None,
+        tool_choice: Any = None,
+    ) -> types.GenerateContentConfig:
         effective_max_tokens: int = self.max_tokens
         if _is_thinking_model(self.model) and effective_max_tokens < GEMINI_THINKING_MIN_OUTPUT_TOKENS:
             logger.warning(
@@ -270,19 +307,57 @@ class GeminiLLM(BaseLLM):
             config_kwargs["thinking_config"] = thinking_config
 
         config = types.GenerateContentConfig(**config_kwargs)
-        if self.gemini_tools:
-            config.tools = self.gemini_tools
+        # Per-node scoping: None uses the full set, [] omits tools entirely (an empty list is a 400).
+        if tools is None:
+            effective_gemini_tools = self.gemini_tools
+        else:
+            if isinstance(tools, str):
+                try:
+                    tools = json.loads(tools)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse per-turn tool definitions as JSON")
+                    tools = []
+            turn_declarations = _voiceai_tools_to_declarations(tools)
+            effective_gemini_tools = (
+                [types.Tool(function_declarations=turn_declarations)] if turn_declarations else None
+            )
+        if effective_gemini_tools:
+            config.tools = effective_gemini_tools
+        # Forced tool (graph function_call): pin the turn to that function in ANY mode.
+        forced_name = _extract_forced_function_name(tool_choice)
+        if forced_name and effective_gemini_tools:
+            config.tool_config = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="ANY", allowed_function_names=[forced_name])
+            )
         # Manual post-stream dispatch is the orchestrator: SDK AFC must stay off
         # unconditionally (its own retries/noise stall voice turns).
         config.automatic_function_calling = types.AutomaticFunctionCallingConfig(disable=True)
         return config
 
+    def _resolve_turn_tools(self, tools: Any) -> list[dict]:
+        """Effective voiceai tools for this turn (stripped), for required-param validation."""
+        if tools is None:
+            return self.voiceai_tools_raw
+        if isinstance(tools, str):
+            try:
+                tools = json.loads(tools)
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(tools, list):
+            return []
+        return _strip_server_injected_params(tools)
+
     async def generate_stream(
-        self, messages, synthesize=True, meta_info=None, tool_choice=None, tools=None
+        self,
+        messages: list[dict],
+        synthesize: bool = True,
+        meta_info: dict | None = None,
+        tool_choice: Any = None,
+        tools: Any = None,
     ) -> AsyncIterable[LLMStreamChunk]:
-        # tools= accepted for interface parity; per-node scoping is not wired for Gemini.
         system_instruction, history = self._prepare_history(messages)
-        config = self._build_config(system_instruction)
+        config = self._build_config(system_instruction, tools=tools, tool_choice=tool_choice)
+        turn_tools = self._resolve_turn_tools(tools)
 
         start_time = now_ms()
         first_token_time = None
@@ -432,25 +507,29 @@ class GeminiLLM(BaseLLM):
             tool_spec = next(
                 (
                     t
-                    for t in self.voiceai_tools_raw
-                    if (t.get("type") == "function" and t["function"]["name"] == fn_name) or (t.get("name") == fn_name)
+                    for t in turn_tools
+                    if (t.get("type") == "function" and t.get("function", {}).get("name") == fn_name)
+                    or (t.get("name") == fn_name)
                 ),
                 None,
             )
+            # Required-args gate (OpenAI parity): missing keys zero resp and skip apply so downstream
+            # validates instead of firing with partial args. Unknown tools also zero resp.
+            args_valid = False
             if tool_spec:
                 params_schema = (
                     tool_spec["function"]["parameters"]
                     if tool_spec.get("type") == "function"
                     else tool_spec.get("parameters", {})
                 )
-                required_keys = params_schema.get("required", [])
-                if not all(k in fn_args for k in required_keys):
-                    missing = [k for k in required_keys if k not in fn_args]
-                    logger.warning(
-                        f"[GeminiLLM] Tool call {fn_name} still missing params after full stream: "
-                        f"missing={missing}, got={list(fn_args.keys())} — "
-                        f"dispatching anyway (OpenAI-parity; downstream will validate)"
-                    )
+                required_keys = (params_schema or {}).get("required", []) or []
+                if isinstance(fn_args, dict) and all(k in fn_args for k in required_keys):
+                    args_valid = True
+                else:
+                    missing = [k for k in required_keys if k not in (fn_args or {})]
+                    logger.warning(f"[GeminiLLM] Tool call {fn_name} missing required args {missing}, zeroing resp")
+            else:
+                logger.warning(f"[GeminiLLM] Tool call {fn_name} not in turn tools, zeroing resp")
 
             model_resp: list[dict] = list(ctx["model_resp_prefix"])
             fn_entry: dict = {
@@ -479,18 +558,22 @@ class GeminiLLM(BaseLLM):
                 tool_call_id=call_id,
                 textual_response=answer.strip() if answer else None,
             )
-            # Reserved keys (url, api_token, ...) stay as configured; see apply_tool_arguments.
-            apply_tool_arguments(payload, fn_args, logger=logger)
+            if args_valid:
+                # Reserved keys (url, api_token, ...) stay as configured; see apply_tool_arguments.
+                apply_tool_arguments(payload, fn_args, logger=logger)
+            else:
+                payload.resp = None
 
-            convert_to_request_log(
-                json.dumps(fn_args),
-                meta_info,
-                self.model,
-                "llm",
-                direction="response",
-                is_cached=False,
-                run_id=self.run_id,
-            )
+            if args_valid:
+                convert_to_request_log(
+                    json.dumps(fn_args),
+                    meta_info,
+                    self.model,
+                    "llm",
+                    direction="response",
+                    is_cached=False,
+                    run_id=self.run_id,
+                )
             _tool_dispatched = True
             yield LLMStreamChunk(
                 data=payload,

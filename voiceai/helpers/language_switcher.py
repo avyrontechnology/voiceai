@@ -1,5 +1,4 @@
 import asyncio
-import os
 import json
 import time
 import uuid
@@ -13,9 +12,23 @@ from voiceai.prompts import (
 )
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import (
+    ANTHROPIC_API_KEY_ENV,
+    AWS_REGION_ENV,
+    AZURE_OPENAI_API_KEY_ENV,
+    AZURE_OPENAI_ENDPOINT_ENV,
+    AZURE_OPENAI_API_VERSION_ENV,
+    LANGUAGE_SWITCH_HEDGE_AFTER_S_ENV,
+    LANGUAGE_SWITCH_LLM_API_BASE_ENV,
+    LANGUAGE_SWITCH_LLM_API_KEY_ENV,
+    LANGUAGE_SWITCH_LLM_API_VERSION_ENV,
+    LANGUAGE_SWITCH_LLM_ENV,
+    OPENAI_API_KEY_ENV,
+)
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Haiku 4.5: small classification task, ~half sonnet's decide latency. LANGUAGE_SWITCH_LLM
 DEFAULT_LANGUAGE_SWITCH_LLM = "claude-haiku-4-5-20251001"
@@ -37,23 +50,23 @@ def resolve_switch_llm_credentials(model: str) -> tuple[str, str, str]:
     LANGUAGE_SWITCH_LLM_API_* wins; else the provider's standard env — ANTHROPIC_API_KEY
     for claude, AZURE_OPENAI_* for azure/* (matches voiceai/llms/azure_llm.py), else OPENAI_API_KEY.
     """
-    key = os.getenv("LANGUAGE_SWITCH_LLM_API_KEY") or ""
-    base = os.getenv("LANGUAGE_SWITCH_LLM_API_BASE") or ""
-    version = os.getenv("LANGUAGE_SWITCH_LLM_API_VERSION") or ""
+    key = get_str(LANGUAGE_SWITCH_LLM_API_KEY_ENV) or ""
+    base = get_str(LANGUAGE_SWITCH_LLM_API_BASE_ENV) or ""
+    version = get_str(LANGUAGE_SWITCH_LLM_API_VERSION_ENV) or ""
     if model.startswith("bedrock/"):
         # Auth is the instance IAM role via boto3 — an api_key here would be wrong, and an
         # empty one must NOT read as "no credentials" (see has_credentials in __init__).
         return "", base, version
     if model.startswith("azure/"):
-        key = key or os.getenv("AZURE_OPENAI_API_KEY") or ""
-        base = base or os.getenv("AZURE_OPENAI_ENDPOINT") or ""
+        key = key or get_str(AZURE_OPENAI_API_KEY_ENV) or ""
+        base = base or get_str(AZURE_OPENAI_ENDPOINT_ENV) or ""
         # Match azure_llm.py's default so an unset AZURE_OPENAI_API_VERSION doesn't
         # leave the judge with an empty version (which fails every decide).
-        version = version or os.getenv("AZURE_OPENAI_API_VERSION") or "2024-12-01-preview"
+        version = version or get_str(AZURE_OPENAI_API_VERSION_ENV) or "2024-12-01-preview"
     elif model.startswith(("anthropic/", "claude")):
-        key = key or os.getenv("ANTHROPIC_API_KEY") or ""
+        key = key or get_str(ANTHROPIC_API_KEY_ENV) or ""
     else:
-        key = key or os.getenv("OPENAI_API_KEY") or ""
+        key = key or get_str(OPENAI_API_KEY_ENV) or ""
     return key, base, version
 
 
@@ -71,7 +84,7 @@ class LanguageSwitcher:
         self.run_id = run_id
         # Explicit-only judge: switches only on an explicit request/selection/confirmation.
         self.explicit_only = bool(explicit_only)
-        self.model = model or os.getenv("LANGUAGE_SWITCH_LLM", DEFAULT_LANGUAGE_SWITCH_LLM)
+        self.model = model or get_str(LANGUAGE_SWITCH_LLM_ENV, DEFAULT_LANGUAGE_SWITCH_LLM)
         # Explicit anthropic/ prefix: bare claude names fail on litellm versions whose
         if self.model.startswith("claude") and "/" not in self.model:
             self.model = f"anthropic/{self.model}"
@@ -116,7 +129,7 @@ class LanguageSwitcher:
             llm_key=switch_llm_key,
             base_url=switch_llm_base,
             api_version=switch_llm_version,
-            aws_region_name=(os.getenv("AWS_REGION") or BEDROCK_DEFAULT_REGION) if self._is_bedrock else None,
+            aws_region_name=(get_str(AWS_REGION_ENV) or BEDROCK_DEFAULT_REGION) if self._is_bedrock else None,
         )
 
     def _system_message(self):
@@ -133,8 +146,12 @@ class LanguageSwitcher:
         return {"role": "system", "content": [block]}
 
     def _tally_usage(self, usage):
-        """Count every completed response; a hedge loser cancelled mid-request never reaches
-        here, so tokens the provider billed for it are not client-visible and go uncounted."""
+        """Tally the winning response only; hedged losers never reach here.
+
+        Both hedge attempts run attempt() without tallying; only the winner's usage is counted
+        once in _hedged_generate. A loser cancelled mid-request has no client-visible usage, and
+        a loser that finished just after the winner is deliberately not double-counted.
+        """
         self.usage_totals["requests"] += 1
         if self.model not in self.models_used:
             self.models_used.append(self.model)
@@ -163,7 +180,14 @@ class LanguageSwitcher:
             except Exception as e:
                 logger.debug(f"LanguageSwitcher: prewarm skipped: {e}")
 
-        return asyncio.create_task(_warm())
+        try:
+            from voiceai.core.resilience import safe_task as _safe_task
+
+            return _safe_task(_warm(), name="language_switcher_prewarm", logger=logger)
+        except RuntimeError:
+            task = asyncio.get_event_loop().create_task(_warm())
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            return task
 
     async def decide(
         self,
@@ -269,38 +293,44 @@ class LanguageSwitcher:
         1.3-2.7s, observed tail 5.9s), not a slow model — a fresh request usually beats the
         straggler. Bounds caller-visible silence without raising the decide timeout, and both
         requests read the same cached prefix. 0 disables (single request)."""
-        hedge_after_s = float(os.getenv("LANGUAGE_SWITCH_HEDGE_AFTER_S", str(DEFAULT_HEDGE_AFTER_S)))
+        hedge_after_s = float(get_str(LANGUAGE_SWITCH_HEDGE_AFTER_S_ENV, str(DEFAULT_HEDGE_AFTER_S)))
         self.hedge_won = False  # per-decide; without the reset it stays True for the rest of the call
         # Both-attempts-errored also returns None (exceptions are swallowed per-attempt), so this
         # flag is how decide() tells a dead judge from a model that validly replied `null`.
         self.last_generate_errored = False
 
         async def attempt():
+            # No tally here: only the winner's usage is counted once below (winner-only).
             text, usage = await self._llm.generate(messages, ret_metadata=True)
-            self._tally_usage(usage)
-            return self._parse_json(text)
+            return self._parse_json(text), usage
 
         # Tasks created inside the try: cancellation of decide() itself must not strand a
-        # running attempt unowned (finally covers every await window).
+        # running attempt unowned (finally covers every await window). These are awaited,
+        # not fire-forget, so plain create_task is correct (tracked to completion below).
         first = None
         second = None
         try:
-            first = asyncio.create_task(attempt())
+            first = asyncio.create_task(attempt(), name="switcher-decide-first")
             if hedge_after_s <= 0:
-                return await first
+                parsed, usage = await first
+                self._tally_usage(usage)
+                return parsed
 
             await asyncio.wait({first}, timeout=hedge_after_s)
             if first.done() and first.exception() is None:
-                return first.result()
+                parsed, usage = first.result()
+                self._tally_usage(usage)
+                return parsed
             # Hedge on a SLOW first attempt and on a FAST-FAILED one alike: a 429 at 200ms is the
             # case where a retry is cheapest, and returning its exception threw the decide away.
             if first.done():
                 logger.info(f"LanguageSwitcher: first attempt failed ({first.exception()}) — retrying")
             else:
                 logger.info(f"LanguageSwitcher: no decision in {hedge_after_s}s — hedging a second request")
-            second = asyncio.create_task(attempt())
+            second = asyncio.create_task(attempt(), name="switcher-decide-hedge")
             pending = {first, second}
             # First SUCCESSFUL reply wins; a failing straggler must not lose the other's answer.
+            # Only the winner's usage is tallied (winner-only) so hedged decides cost one request.
             while pending:
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 winner = None
@@ -314,7 +344,9 @@ class LanguageSwitcher:
                         winner = task
                 if winner is not None:
                     self.hedge_won = winner is second
-                    return winner.result()
+                    parsed, usage = winner.result()
+                    self._tally_usage(usage)
+                    return parsed
             self.last_generate_errored = True
             return None
         finally:

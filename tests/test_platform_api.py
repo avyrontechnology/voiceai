@@ -5,6 +5,8 @@ tools, webhooks, wallet and agent templates. All tests run against an
 in-memory store so the suite stays offline and deterministic.
 """
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +14,20 @@ from tests.auth_helpers import signup_owner
 
 from voiceai.platform import create_platform_app
 from voiceai.platform.store import MemoryStore
+
+
+async def _wait_for_batch(client: AsyncClient, batch_id: str, timeout: float = 5.0) -> dict:
+    """Poll GET /batches/{id} until the background dial pass finishes (A10 async 202 pattern)."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    last: dict = {}
+    while asyncio.get_event_loop().time() < deadline:
+        resp = await client.get(f"/batches/{batch_id}")
+        assert resp.status_code == 200, resp.text
+        last = resp.json()
+        if last["status"] in ("completed", "stopped", "failed"):
+            return last
+        await asyncio.sleep(0.05)
+    return last
 
 
 @pytest_asyncio.fixture
@@ -134,8 +150,12 @@ async def test_batch_lifecycle(client):
     assert get.status_code == 200
 
     start = await client.post(f"/batches/{batch['batch_id']}/start")
-    assert start.status_code == 200
-    started = start.json()
+    assert start.status_code == 202, start.text
+    assert start.json()["status"] in ("running", "completed")
+    # Background dial pass: poll the status endpoint until terminal.
+    status = await client.get(f"/batches/{batch['batch_id']}/status")
+    assert status.status_code == 200
+    started = await _wait_for_batch(client, batch["batch_id"])
     assert started["status"] == "completed"
     assert started["stats"]["completed"] == 2
 
@@ -209,7 +229,9 @@ async def test_batch_retry_failed(client):
     )
     batch_id = create.json()["batch_id"]
     started = await client.post(f"/batches/{batch_id}/start")
-    assert started.json()["stats"] == {"total": 2, "queued": 0, "completed": 1, "failed": 1}
+    assert started.status_code == 202, started.text
+    final = await _wait_for_batch(client, batch_id)
+    assert final["stats"] == {"total": 2, "queued": 0, "completed": 1, "failed": 1, "pending": 0}
 
     retry = await client.post(f"/batches/{batch_id}/retry-failed")
     assert retry.status_code == 201
@@ -218,7 +240,9 @@ async def test_batch_retry_failed(client):
     assert retried["entries"][0]["to_number"] == "+912222222222"
 
     restarted = await client.post(f"/batches/{retried['batch_id']}/start")
-    assert restarted.json()["stats"]["failed"] == 1  # still forced to fail: deterministic
+    assert restarted.status_code == 202, restarted.text
+    refinal = await _wait_for_batch(client, retried["batch_id"])
+    assert refinal["stats"]["failed"] == 1  # still forced to fail: deterministic
 
 
 async def test_batch_retry_failed_with_no_failures_conflicts(client):
@@ -227,7 +251,9 @@ async def test_batch_retry_failed_with_no_failures_conflicts(client):
         json={"agent_id": "agent-1", "name": "clean", "entries": [{"to_number": "+911"}], "delay_scale": 0},
     )
     batch_id = create.json()["batch_id"]
-    await client.post(f"/batches/{batch_id}/start")
+    started = await client.post(f"/batches/{batch_id}/start")
+    assert started.status_code == 202, started.text
+    await _wait_for_batch(client, batch_id)
     retry = await client.post(f"/batches/{batch_id}/retry-failed")
     assert retry.status_code == 409
 

@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-import os
 import json
 import aiohttp
 import time
@@ -12,12 +11,14 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
+from .constants import ASSEMBLY_API_KEY_ENV_KEY
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -46,7 +47,7 @@ class AssemblyAITranscriber(BaseTranscriber):
         self.encoding = encoding
         self.format_turns = format_turns
 
-        self.api_key = kwargs.get("transcriber_key", os.getenv("ASSEMBLY_API_KEY"))
+        self.api_key = kwargs.get("transcriber_key", get_str(ASSEMBLY_API_KEY_ENV_KEY))
         self.assemblyai_host = "streaming.assemblyai.com"
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
@@ -433,14 +434,14 @@ class AssemblyAITranscriber(BaseTranscriber):
                                             ((self.meta_info or {}).get("transcriber_first_result_latency", 0)) * 1000
                                         ),
                                         "total_stream_duration_ms": round(total_stream_duration * 1000),
-                                        "interim_details": self.current_turn_interim_details,
+                                        "interim_details": list(self.current_turn_interim_details),
                                         "first_interim_to_final_ms": first_interim_to_final_ms,
                                         "last_interim_to_final_ms": last_interim_to_final_ms,
                                         "asr_start_epoch_ms": self._turn_start_epoch_ms,
                                         "asr_finalized_epoch_ms": timestamp_ms(),
                                         "final_transcript": transcript,
                                     }
-                                    self.turn_latencies.append(turn_info)
+                                    self._upsert_turn_latency(turn_info)
 
                                     self.current_turn_start_time = None
                                     self._turn_start_epoch_ms = None

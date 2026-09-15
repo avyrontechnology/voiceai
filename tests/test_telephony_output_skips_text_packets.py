@@ -43,32 +43,20 @@ def _audio_meta(**overrides):
 
 async def test_text_packet_skipped_without_closing_handler():
     ws = _CollectSocket()
-    handler = TalkoOutputHandler(
-        websocket=ws, mark_event_meta_data=MagicMock(), log_dir_name=None
-    )
+    handler = TalkoOutputHandler(websocket=ws, mark_event_meta_data=MagicMock(), log_dir_name=None)
     await handler.set_stream_sid("S1")
     # Agent + user transcript packets as the S2S loop emits them.
-    await handler.handle(
-        {"data": "Good day! Thank you for calling.", "meta_info": {"type": "text", "role": "agent"}}
-    )
-    await handler.handle(
-        {"data": "Hindi mein baat kar sakte ho?", "meta_info": {"type": "text", "role": "user"}}
-    )
+    await handler.handle({"data": "Good day! Thank you for calling.", "meta_info": {"type": "text", "role": "agent"}})
+    await handler.handle({"data": "Hindi mein baat kar sakte ho?", "meta_info": {"type": "text", "role": "user"}})
     assert handler._closed is False
     assert ws.sent == []
 
 
 async def test_audio_still_flows_after_text_packets():
     ws = _CollectSocket()
-    handler = TalkoOutputHandler(
-        websocket=ws, mark_event_meta_data=MagicMock(), log_dir_name=None
-    )
+    handler = TalkoOutputHandler(websocket=ws, mark_event_meta_data=MagicMock(), log_dir_name=None)
     await handler.set_stream_sid("S1")
-    await handler.handle(
-        {"data": "transcript that used to kill output", "meta_info": {"type": "text"}}
-    )
-    await handler.handle(
-        {"data": b"\xaa" * 160, "meta_info": _audio_meta()}
-    )
+    await handler.handle({"data": "transcript that used to kill output", "meta_info": {"type": "text"}})
+    await handler.handle({"data": b"\xaa" * 160, "meta_info": _audio_meta()})
     assert handler._closed is False
     assert len(ws.sent) == 3  # pre-mark + media + post-mark

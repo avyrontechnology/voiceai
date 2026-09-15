@@ -11,7 +11,7 @@ Design
   whether to end the call, retry, or degrade.
 * ``classify_exception`` turns arbitrary exceptions from SDKs and the standard library into
   the closest ``VoiceAIError`` so callers never need to enumerate third-party exception
-  types themselves.
+  types themselves. ̰ ̰
 
 Backwards compatibility: ``voiceai.exceptions`` re-exports the historical names
 (``VoiceAIComponentError``, ``LLMError``, ``SynthesizerError``, ``TranscriberError``) with

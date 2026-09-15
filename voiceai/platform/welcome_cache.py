@@ -17,7 +17,6 @@ behavior, so enabling is always safe).
 """
 
 import hashlib
-import os
 from typing import Any, Dict, Optional, Tuple
 
 from voiceai.errors import summarize_exception
@@ -29,11 +28,14 @@ _CACHE: Dict[str, Tuple[bytes, int]] = {}
 
 
 def is_welcome_preload_enabled() -> bool:
-    return (os.getenv("WELCOME_PRELOAD_ENABLED", "1") or "1").strip() == "1"
+    from voiceai.core.environment import get_bool
+
+    return get_bool("WELCOME_PRELOAD_ENABLED", True)
 
 
 def _text_hash(text: str) -> str:
-    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
+    # Non-security cache key (not a password/token hash): same digest as before.
+    return hashlib.sha1((text or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def welcome_cache_key(
@@ -112,7 +114,9 @@ async def prerender_welcome(*, text: str, voice: str, model: str, lang: str, rat
     """
     if not (text or "").strip() or not voice:
         return None
-    if not os.getenv("SARVAM_API_KEY"):
+    from voiceai.core.environment import get_str
+
+    if not get_str("SARVAM_API_KEY"):
         logger.info("welcome preload skipped: SARVAM_API_KEY not set")
         return None
     try:
@@ -123,7 +127,7 @@ async def prerender_welcome(*, text: str, voice: str, model: str, lang: str, rat
             model=model or "bulbul:v3",
             language=lang or "hi-IN",
             sampling_rate=str(int(rate)),
-            synthesizer_key=os.getenv("SARVAM_API_KEY"),
+            synthesizer_key=get_str("SARVAM_API_KEY"),
         )
         raw = await synth.synthesize(text)
         if not raw or not isinstance(raw, (bytes, bytearray)):

@@ -6,7 +6,7 @@ import logging
 import pytest
 
 from voiceai.errors import ErrorCode, ProviderTimeoutError
-from voiceai.helpers.resilience import (
+from voiceai.core.resilience import (
     LoopFailure,
     TaskRegistry,
     call_soft,

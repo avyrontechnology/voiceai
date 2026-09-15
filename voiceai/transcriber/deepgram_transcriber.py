@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-import os
 import json
 import aiohttp
 import time
@@ -11,7 +10,17 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, ConnectionClosed
 
 from .base_transcriber import BaseTranscriber
-from voiceai.helpers.logger_config import configure_logger
+from .constants import (
+    DEEPGRAM_AUTH_TOKEN_ENV_KEY,
+    DEEPGRAM_FLUX_HOST_ENV_KEY,
+    DEEPGRAM_HOST_ENV_KEY,
+    DEEPGRAM_HOST_PROTOCOL_ENV_KEY,
+    DEFAULT_DEEPGRAM_FLUX_HOST,
+    DEFAULT_DEEPGRAM_HOST,
+    DEFAULT_DEEPGRAM_HOST_PROTOCOL,
+)
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 from voiceai.enums import TelephonyProvider
@@ -23,7 +32,7 @@ from voiceai.constants import (
 )
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -59,9 +68,9 @@ class DeepgramTranscriber(BaseTranscriber):
         self.model = model
         self.sampling_rate = int(sampling_rate) if isinstance(sampling_rate, (str, int)) else 16000
         self.encoding = encoding
-        self.api_key = kwargs.get("transcriber_key", os.getenv("DEEPGRAM_AUTH_TOKEN"))
-        self.deepgram_host = os.getenv("DEEPGRAM_HOST", "api.deepgram.com")
-        self.deepgram_flux_host = os.getenv("DEEPGRAM_FLUX_HOST", "api.deepgram.com")
+        self.api_key = kwargs.get("transcriber_key", get_str(DEEPGRAM_AUTH_TOKEN_ENV_KEY))
+        self.deepgram_host = get_str(DEEPGRAM_HOST_ENV_KEY, DEFAULT_DEEPGRAM_HOST)
+        self.deepgram_flux_host = get_str(DEEPGRAM_FLUX_HOST_ENV_KEY, DEFAULT_DEEPGRAM_FLUX_HOST)
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
         self.keywords = keywords
@@ -131,6 +140,28 @@ class DeepgramTranscriber(BaseTranscriber):
         # ASR-native LID events (flux-general-multi only) — collected per turn and
         # merged into lid_shadow_events.asr_lid_events at call end.
         self.flux_lid_events: list[dict] = []
+        # Atomic finalize guard: check-then-finalize in receiver (speech_final /
+        # UtteranceEnd / EndOfTurn) raced monitor_utterance_timeout's force-finalize,
+        # emitting the same turn twice. All finalizers claim the turn under this lock
+        # (ElevenLabs suppress-late pattern: force sets is_transcript_sent True, next
+        # interim reopens it), so only the first wins.
+        try:
+            self._finalize_lock = asyncio.Lock()
+        except Exception:
+            self._finalize_lock = None
+
+    def _get_finalize_lock(self):
+        """Lazily create the finalize mutex (tests build instances via __new__)."""
+        lock = getattr(self, "_finalize_lock", None)
+        if lock is None:
+            try:
+                lock = asyncio.Lock()
+            except Exception:
+                # No running loop (sync context): fall back to a dummy that still
+                # serializes within a single task via immediate re-check.
+                lock = None
+            self._finalize_lock = lock
+        return lock
 
     def get_deepgram_ws_url(self):
         if self.is_flux_model:
@@ -191,7 +222,9 @@ class DeepgramTranscriber(BaseTranscriber):
             dg_params["tag"] = self.run_id
             dg_params["extra"] = f"run_id:{self.run_id}"
 
-        websocket_api = "{}://{}/v1/listen?".format(os.getenv("DEEPGRAM_HOST_PROTOCOL", "wss"), self.deepgram_host)
+        websocket_api = "{}://{}/v1/listen?".format(
+            get_str(DEEPGRAM_HOST_PROTOCOL_ENV_KEY, DEFAULT_DEEPGRAM_HOST_PROTOCOL), self.deepgram_host
+        )
         websocket_url = websocket_api + urlencode(dg_params)
 
         if self.keywords:
@@ -250,7 +283,9 @@ class DeepgramTranscriber(BaseTranscriber):
         if self.run_id:
             dg_params["tag"] = self.run_id
 
-        websocket_api = "{}://{}/v2/listen?".format(os.getenv("DEEPGRAM_HOST_PROTOCOL", "wss"), self.deepgram_flux_host)
+        websocket_api = "{}://{}/v2/listen?".format(
+            get_str(DEEPGRAM_HOST_PROTOCOL_ENV_KEY, DEFAULT_DEEPGRAM_HOST_PROTOCOL), self.deepgram_flux_host
+        )
         websocket_url = websocket_api + urlencode(dg_params, doseq=True)
         return websocket_url
 
@@ -345,59 +380,76 @@ class DeepgramTranscriber(BaseTranscriber):
         self.eager_transcript_pending = None
 
     async def _force_finalize_utterance(self):
-        """Force-finalize a stuck utterance and send to queue"""
+        """Force-finalize a stuck utterance and send to queue (atomic vs receiver finals)."""
+        async with self._get_finalize_lock():
+            # Re-check under lock: a concurrent speech_final/UtteranceEnd/EndOfTurn may
+            # have claimed this turn while we awaited the lock.
+            if self.is_transcript_sent_for_processing:
+                return
+            # Determine what transcript to use
+            transcript_to_send = self.final_transcript.strip()
 
-        # Determine what transcript to use
-        transcript_to_send = self.final_transcript.strip()
+            # Fallback: use last interim if no is_final results received
+            if not transcript_to_send and self.current_turn_interim_details:
+                transcript_to_send = self.current_turn_interim_details[-1]["transcript"]
+                logger.info(
+                    "Using last interim as fallback | run_id=%s turn_id=%s len=%s",
+                    self.run_id,
+                    self.current_turn_id,
+                    len(transcript_to_send.strip()),
+                )
 
-        # Fallback: use last interim if no is_final results received
-        if not transcript_to_send and self.current_turn_interim_details:
-            transcript_to_send = self.current_turn_interim_details[-1]["transcript"]
-            logger.info(f"Using last interim as fallback: {transcript_to_send}")
+            if not transcript_to_send:
+                logger.warning("No transcript available to force-finalize")
+                self._reset_turn_state()
+                return
 
-        if not transcript_to_send:
-            logger.warning("No transcript available to force-finalize")
+            # Build turn latencies (same as UtteranceEnd logic)
+            try:
+                self._mark_last_interim_final()
+
+                first_interim_to_final_ms, last_interim_to_final_ms = self.calculate_interim_to_final_latencies(
+                    self.current_turn_interim_details
+                )
+
+                self._upsert_turn_latency(
+                    {
+                        "turn_id": self.current_turn_id,
+                        "asr_start_epoch_ms": self.current_turn_start_time,
+                        "asr_turn_start_epoch_ms": self._turn_first_speech_epoch_ms,
+                        "asr_finalized_epoch_ms": timestamp_ms(),
+                        "final_transcript": transcript_to_send,
+                        "interim_details": list(self.current_turn_interim_details),
+                        "first_interim_to_final_ms": first_interim_to_final_ms,
+                        "last_interim_to_final_ms": last_interim_to_final_ms,
+                        "force_finalized": True,
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error building turn latencies: {e}")
+
+            # Create transcript message (same format as UtteranceEnd)
+            data = {
+                "type": "transcript",
+                "content": transcript_to_send,
+                "force_finalized": True,  # For debugging
+            }
+
+            logger.info(
+                "Force-finalized transcript after timeout | run_id=%s turn_id=%s len=%s",
+                self.run_id,
+                self.current_turn_id,
+                len(transcript_to_send.strip()),
+            )
+
+            packet = create_ws_data_packet(data, self.meta_info)
+            # Claim the turn before releasing the lock so a racing receiver final
+            # sees is_transcript_sent True and suppresses its late duplicate
+            # (ElevenLabs suppress-late pattern). Next interim reopens via receiver.
             self._reset_turn_state()
-            return
 
-        # Build turn latencies (same as UtteranceEnd logic)
-        try:
-            self._mark_last_interim_final()
-
-            first_interim_to_final_ms, last_interim_to_final_ms = self.calculate_interim_to_final_latencies(
-                self.current_turn_interim_details
-            )
-
-            self._upsert_turn_latency(
-                {
-                    "turn_id": self.current_turn_id,
-                    "asr_start_epoch_ms": self.current_turn_start_time,
-                    "asr_turn_start_epoch_ms": self._turn_first_speech_epoch_ms,
-                    "asr_finalized_epoch_ms": timestamp_ms(),
-                    "final_transcript": transcript_to_send,
-                    "interim_details": self.current_turn_interim_details,
-                    "first_interim_to_final_ms": first_interim_to_final_ms,
-                    "last_interim_to_final_ms": last_interim_to_final_ms,
-                    "force_finalized": True,
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error building turn latencies: {e}")
-
-        # Create transcript message (same format as UtteranceEnd)
-        data = {
-            "type": "transcript",
-            "content": transcript_to_send,
-            "force_finalized": True,  # For debugging
-        }
-
-        logger.info(f"Force-finalized transcript after timeout: {transcript_to_send}")
-
-        # Send to queue (unblocks _listen_transcriber)
-        await self.push_to_transcriber_queue(create_ws_data_packet(data, self.meta_info))
-
-        # Reset state (same as normal UtteranceEnd)
-        self._reset_turn_state()
+        # Send outside the lock (queue I/O must not hold the finalize mutex).
+        await self.push_to_transcriber_queue(packet)
 
     async def monitor_utterance_timeout(self):
         """Monitor for stuck utterances that never receive UtteranceEnd"""
@@ -693,7 +745,7 @@ class DeepgramTranscriber(BaseTranscriber):
                             self._turn_pending = False
                             logger.info(f"Starting new turn with turn_id: {self.current_turn_id}")
                             # Eager stub — captured even if turn is never finalized (e.g. transcriber drop)
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "asr_start_epoch_ms": self.current_turn_start_time,
@@ -707,7 +759,7 @@ class DeepgramTranscriber(BaseTranscriber):
                             self.current_turn_id = self.turn_counter
                             logger.info(f"Turn id assigned without SpeechStarted: {self.current_turn_id}")
                             # Eager stub for turns where SpeechStarted was suppressed
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "asr_start_epoch_ms": self.current_turn_start_time,
@@ -733,7 +785,11 @@ class DeepgramTranscriber(BaseTranscriber):
                         }
 
                         logger.info(
-                            f"Interim result - request_id: {deepgram_request_id}, is_final: {msg.get('is_final', False)}, transcript: {transcript}"
+                            "Interim result - request_id=%s is_final=%s dg_turn=%s len=%s",
+                            deepgram_request_id,
+                            msg.get("is_final", False),
+                            self.current_turn_id,
+                            len(transcript.strip()),
                         )
 
                         self.current_turn_interim_details.append(interim_detail)
@@ -746,28 +802,106 @@ class DeepgramTranscriber(BaseTranscriber):
                         yield create_ws_data_packet(data, self.meta_info)
 
                     if msg["is_final"] and transcript.strip():
-                        logger.info(f"Received interim result with is_final set as True - {transcript}")
+                        logger.info(
+                            "Received interim result with is_final set as True | dg_turn=%s request_id=%s len=%s",
+                            self.current_turn_id,
+                            deepgram_request_id,
+                            len(transcript.strip()),
+                        )
                         self.final_transcript += f" {transcript}"
                         logger.info(
-                            "VOICEAI_TRACE_DG result_final dg_turn=%s request_id=%s speech_final=%s final_len=%s text=%r",
+                            "VOICEAI_TRACE_DG result_final dg_turn=%s request_id=%s speech_final=%s final_len=%s",
                             self.current_turn_id,
                             deepgram_request_id,
                             msg.get("speech_final", False),
                             len(self.final_transcript.strip()),
-                            transcript[:80],
                         )
 
                     if msg["speech_final"] and self.final_transcript.strip():
+                        # Atomic claim vs concurrent force-finalize (TOCTOU guard).
+                        packet = None
+                        async with self._get_finalize_lock():
+                            if self.is_transcript_sent_for_processing or not self.final_transcript.strip():
+                                # Force-finalize already claimed this turn — suppress late
+                                # duplicate (ElevenLabs suppress-late pattern).
+                                packet = None
+                            else:
+                                logger.info(
+                                    "Received speech final, yielding transcript | dg_turn=%s request_id=%s len=%s",
+                                    self.current_turn_id,
+                                    deepgram_request_id,
+                                    len(self.final_transcript.strip()),
+                                )
+                                logger.info(
+                                    "VOICEAI_TRACE_DG emit_speech_final dg_turn=%s request_id=%s text_len=%s",
+                                    self.current_turn_id,
+                                    deepgram_request_id,
+                                    len(self.final_transcript.strip()),
+                                )
+
+                                data = {"type": "transcript", "content": self.final_transcript}
+
+                                # Build turn_latencies with new metrics before resetting
+                                try:
+                                    first_interim_to_final_ms, last_interim_to_final_ms = (
+                                        self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
+                                    )
+
+                                    self._upsert_turn_latency(
+                                        {
+                                            "turn_id": self.current_turn_id,
+                                            "asr_start_epoch_ms": self.current_turn_start_time,
+                                            "asr_turn_start_epoch_ms": self._turn_first_speech_epoch_ms,
+                                            "asr_finalized_epoch_ms": timestamp_ms(),
+                                            "final_transcript": self.final_transcript,
+                                            "interim_details": list(self.current_turn_interim_details),
+                                            "first_interim_to_final_ms": first_interim_to_final_ms,
+                                            "last_interim_to_final_ms": last_interim_to_final_ms,
+                                        }
+                                    )
+
+                                    # Complete turn reset
+                                    self.speech_start_time = None
+                                    self.speech_end_time = None
+                                    self._turn_first_speech_epoch_ms = None
+                                    self.current_turn_interim_details = []
+                                    self.current_turn_start_time = None
+                                    self.current_turn_id = None
+                                    self.final_transcript = ""
+                                    self.is_transcript_sent_for_processing = True
+                                except Exception as e:
+                                    logger.error(
+                                        f"Failed to extract transcript from Deepgram response in speech_final: {e}"
+                                    )
+                                    pass
+                                self.meta_info["user_stop_offset_ms"] = self.endpointing_ms
+                                # Always assign (even None) to clear any stale value from a previous turn.
+                                # None is safe: interruption_manager guards on it before use.
+                                self.meta_info["user_stop_ts_wall"] = self._compute_last_word_end_wall(msg)
+                                packet = create_ws_data_packet(data, self.meta_info)
+                        if packet is not None:
+                            yield packet
+
+                elif msg["type"] == "UtteranceEnd":
+                    logger.info(
+                        f"Value of is_transcript_sent_for_processing in utterance end - {self.is_transcript_sent_for_processing}"
+                    )
+                    # Atomic claim vs concurrent force-finalize (TOCTOU guard).
+                    _utter_packet = None
+                    _utter_claimed = False
+                    async with self._get_finalize_lock():
                         if not self.is_transcript_sent_for_processing and self.final_transcript.strip():
                             logger.info(
-                                f"Received speech final hence yielding the following transcript - {self.final_transcript}"
+                                "Received UtteranceEnd, yielding transcript | dg_turn=%s request_id=%s len=%s",
+                                self.current_turn_id,
+                                self.meta_info.get("request_id"),
+                                len(self.final_transcript.strip()),
                             )
                             logger.info(
-                                "VOICEAI_TRACE_DG emit_speech_final dg_turn=%s request_id=%s text_len=%s text=%r",
+                                "VOICEAI_TRACE_DG emit_utterance_end dg_turn=%s request_id=%s text_len=%s",
                                 self.current_turn_id,
-                                deepgram_request_id,
+                                self.meta_info.get("request_id"),
                                 len(self.final_transcript.strip()),
-                                self.final_transcript.strip()[:120],
                             )
 
                             data = {"type": "transcript", "content": self.final_transcript}
@@ -785,7 +919,7 @@ class DeepgramTranscriber(BaseTranscriber):
                                         "asr_turn_start_epoch_ms": self._turn_first_speech_epoch_ms,
                                         "asr_finalized_epoch_ms": timestamp_ms(),
                                         "final_transcript": self.final_transcript,
-                                        "interim_details": self.current_turn_interim_details,
+                                        "interim_details": list(self.current_turn_interim_details),
                                         "first_interim_to_final_ms": first_interim_to_final_ms,
                                         "last_interim_to_final_ms": last_interim_to_final_ms,
                                     }
@@ -801,70 +935,16 @@ class DeepgramTranscriber(BaseTranscriber):
                                 self.final_transcript = ""
                                 self.is_transcript_sent_for_processing = True
                             except Exception as e:
-                                logger.error(
-                                    f"Failed to extract transcript from Deepgram response in speech_final: {e}"
-                                )
+                                logger.error(f"Failed to extract transcript from Deepgram response: {e}")
                                 pass
-                            self.meta_info["user_stop_offset_ms"] = self.endpointing_ms
-                            # Always assign (even None) to clear any stale value from a previous turn.
-                            # None is safe: interruption_manager guards on it before use.
-                            self.meta_info["user_stop_ts_wall"] = self._compute_last_word_end_wall(msg)
-                            yield create_ws_data_packet(data, self.meta_info)
-
-                elif msg["type"] == "UtteranceEnd":
-                    logger.info(
-                        f"Value of is_transcript_sent_for_processing in utterance end - {self.is_transcript_sent_for_processing}"
-                    )
-                    if not self.is_transcript_sent_for_processing and self.final_transcript.strip():
-                        logger.info(
-                            f"Received UtteranceEnd hence yielding the following transcript - {self.final_transcript}"
-                        )
-                        logger.info(
-                            "VOICEAI_TRACE_DG emit_utterance_end dg_turn=%s request_id=%s text_len=%s text=%r",
-                            self.current_turn_id,
-                            self.meta_info.get("request_id"),
-                            len(self.final_transcript.strip()),
-                            self.final_transcript.strip()[:120],
-                        )
-
-                        data = {"type": "transcript", "content": self.final_transcript}
-
-                        # Build turn_latencies with new metrics before resetting
-                        try:
-                            first_interim_to_final_ms, last_interim_to_final_ms = (
-                                self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
-                            )
-
-                            self._upsert_turn_latency(
-                                {
-                                    "turn_id": self.current_turn_id,
-                                    "asr_start_epoch_ms": self.current_turn_start_time,
-                                    "asr_turn_start_epoch_ms": self._turn_first_speech_epoch_ms,
-                                    "asr_finalized_epoch_ms": timestamp_ms(),
-                                    "final_transcript": self.final_transcript,
-                                    "interim_details": self.current_turn_interim_details,
-                                    "first_interim_to_final_ms": first_interim_to_final_ms,
-                                    "last_interim_to_final_ms": last_interim_to_final_ms,
-                                }
-                            )
-
-                            # Complete turn reset
-                            self.speech_start_time = None
-                            self.speech_end_time = None
-                            self._turn_first_speech_epoch_ms = None
-                            self.current_turn_interim_details = []
-                            self.current_turn_start_time = None
-                            self.current_turn_id = None
-                            self.final_transcript = ""
-                            self.is_transcript_sent_for_processing = True
-                        except Exception as e:
-                            logger.error(f"Failed to extract transcript from Deepgram response: {e}")
-                            pass
-                        self.meta_info["user_stop_offset_ms"] = self.utterance_end_ms
-                        last_word_end_audio = msg.get("last_word_end")
-                        if last_word_end_audio is not None:
-                            self.meta_info["user_stop_ts_wall"] = self.connection_start_time + last_word_end_audio
-                        yield create_ws_data_packet(data, self.meta_info)
+                            self.meta_info["user_stop_offset_ms"] = self.utterance_end_ms
+                            last_word_end_audio = msg.get("last_word_end")
+                            if last_word_end_audio is not None:
+                                self.meta_info["user_stop_ts_wall"] = self.connection_start_time + last_word_end_audio
+                            _utter_packet = create_ws_data_packet(data, self.meta_info)
+                            _utter_claimed = True
+                    if _utter_claimed and _utter_packet is not None:
+                        yield _utter_packet
                     else:
                         # Transcript already sent but we still need to notify speech ended
                         # This prevents callee_speaking from staying True indefinitely
@@ -920,7 +1000,13 @@ class DeepgramTranscriber(BaseTranscriber):
                     languages_hinted = msg.get("languages_hinted")
 
                     if event == "StartOfTurn":
-                        logger.info(f"Flux: StartOfTurn (turn_index={turn_index}, transcript={transcript!r})")
+                        logger.info(
+                            "Flux: StartOfTurn turn_index=%s turn_id=%s run_id=%s len=%s",
+                            turn_index,
+                            self.current_turn_id,
+                            self.run_id,
+                            len(transcript),
+                        )
                         self.turn_counter += 1
                         self.current_turn_id = self.turn_counter
                         self.speech_start_time = timestamp_ms()
@@ -929,7 +1015,7 @@ class DeepgramTranscriber(BaseTranscriber):
                         self.is_transcript_sent_for_processing = False
                         self.final_transcript = ""
                         # Eager stub — captured even if turn is never finalized
-                        self.turn_latencies.append(
+                        self._upsert_turn_latency(
                             {
                                 "turn_id": self.current_turn_id,
                                 "asr_start_epoch_ms": self.speech_start_time,
@@ -986,7 +1072,14 @@ class DeepgramTranscriber(BaseTranscriber):
                                     "detected_at": time.time(),
                                 }
                             )
-                        logger.info(f"Flux: EagerEndOfTurn (confidence={eot_confidence}, transcript={transcript!r})")
+                        logger.info(
+                            "Flux: EagerEndOfTurn confidence=%s turn_index=%s turn_id=%s run_id=%s len=%s",
+                            eot_confidence,
+                            turn_index,
+                            self.current_turn_id,
+                            self.run_id,
+                            len(transcript),
+                        )
                         if transcript:
                             self.eager_transcript_pending = transcript
                             self.last_interim_time = time.time()
@@ -1024,62 +1117,78 @@ class DeepgramTranscriber(BaseTranscriber):
                                     "detected_at": time.time(),
                                 }
                             )
-                        logger.info(f"Flux: EndOfTurn (confidence={eot_confidence}) transcript={transcript!r}")
+                        logger.info(
+                            "Flux: EndOfTurn confidence=%s turn_index=%s turn_id=%s run_id=%s len=%s",
+                            eot_confidence,
+                            turn_index,
+                            self.current_turn_id,
+                            self.run_id,
+                            len(transcript),
+                        )
 
-                        if transcript and not self.is_transcript_sent_for_processing:
-                            try:
-                                if not self.current_turn_interim_details:
-                                    logger.warning(
-                                        "Flux: EndOfTurn has transcript but no interim_details to mark final "
-                                        "(turn_id=%s, transcript=%r)",
-                                        self.current_turn_id,
-                                        transcript,
+                        # Atomic claim vs concurrent stuck-turn release (TOCTOU guard).
+                        _flux_packet = None
+                        _flux_claimed = False
+                        async with self._get_finalize_lock():
+                            if transcript and not self.is_transcript_sent_for_processing:
+                                try:
+                                    if not self.current_turn_interim_details:
+                                        logger.warning(
+                                            "Flux: EndOfTurn has transcript but no interim_details to mark final "
+                                            "(turn_id=%s, len=%s)",
+                                            self.current_turn_id,
+                                            len(transcript),
+                                        )
+                                    self._mark_last_interim_final()
+                                    first_interim_to_final_ms, last_interim_to_final_ms = (
+                                        self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                                     )
-                                self._mark_last_interim_final()
-                                first_interim_to_final_ms, last_interim_to_final_ms = (
-                                    self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
-                                )
-                                asr_finalized_epoch_ms = timestamp_ms()
-                                turn_latency = {
-                                    "turn_id": self.current_turn_id,
-                                    "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
-                                    "first_interim_to_final_ms": first_interim_to_final_ms,
-                                    "last_interim_to_final_ms": last_interim_to_final_ms,
-                                    "asr_start_epoch_ms": self.speech_start_time,
-                                    "asr_turn_start_epoch_ms": self.speech_start_time,
-                                    "asr_finalized_epoch_ms": asr_finalized_epoch_ms,
-                                    "final_transcript": transcript,
+                                    asr_finalized_epoch_ms = timestamp_ms()
+                                    turn_latency = {
+                                        "turn_id": self.current_turn_id,
+                                        "sequence_id": self.current_turn_id,
+                                        "interim_details": list(self.current_turn_interim_details),
+                                        "first_interim_to_final_ms": first_interim_to_final_ms,
+                                        "last_interim_to_final_ms": last_interim_to_final_ms,
+                                        "asr_start_epoch_ms": self.speech_start_time,
+                                        "asr_turn_start_epoch_ms": self.speech_start_time,
+                                        "asr_finalized_epoch_ms": asr_finalized_epoch_ms,
+                                        "final_transcript": transcript,
+                                    }
+                                    # Observability only: asr_finalized minus user_speech_end measures
+                                    # flux's end-of-turn detection delay. Omit when missing or out of
+                                    # order (frame-mapping anomaly, e.g. post-reconnect) — absent beats
+                                    # wrong for a latency metric.
+                                    user_speech_end_epoch_ms = self.last_transcript_audio_sent_at
+                                    if (
+                                        user_speech_end_epoch_ms is not None
+                                        and user_speech_end_epoch_ms <= asr_finalized_epoch_ms
+                                    ):
+                                        turn_latency["user_speech_end_epoch_ms"] = user_speech_end_epoch_ms
+                                    self._upsert_turn_latency(turn_latency)
+                                except Exception as e:
+                                    logger.error(f"Error building turn latencies: {e}")
+
+                                data = {
+                                    "type": "transcript",
+                                    "content": transcript,
+                                    "was_eager": self.eager_transcript_pending is not None,
                                 }
-                                # Observability only: asr_finalized minus user_speech_end measures
-                                # flux's end-of-turn detection delay. Omit when missing or out of
-                                # order (frame-mapping anomaly, e.g. post-reconnect) — absent beats
-                                # wrong for a latency metric.
-                                user_speech_end_epoch_ms = self.last_transcript_audio_sent_at
-                                if (
-                                    user_speech_end_epoch_ms is not None
-                                    and user_speech_end_epoch_ms <= asr_finalized_epoch_ms
-                                ):
-                                    turn_latency["user_speech_end_epoch_ms"] = user_speech_end_epoch_ms
-                                self._upsert_turn_latency(turn_latency)
-                            except Exception as e:
-                                logger.error(f"Error building turn latencies: {e}")
 
-                            data = {
-                                "type": "transcript",
-                                "content": transcript,
-                                "was_eager": self.eager_transcript_pending is not None,
-                            }
+                                self._reset_turn_state()
+                                self.eager_transcript_pending = None
 
-                            self._reset_turn_state()
-                            self.eager_transcript_pending = None
-
-                            yield create_ws_data_packet(data, self.meta_info)
+                                _flux_packet = create_ws_data_packet(data, self.meta_info)
+                                _flux_claimed = True
+                        if _flux_claimed and _flux_packet is not None:
+                            yield _flux_packet
                         else:
                             if transcript:
                                 logger.warning(
-                                    f"Flux: EndOfTurn suppressed — transcript already sent for processing "
-                                    f"(turn_id={self.current_turn_id}, transcript={transcript!r})"
+                                    "Flux: EndOfTurn suppressed — transcript already sent for processing "
+                                    "(turn_id=%s, len=%s)",
+                                    self.current_turn_id,
+                                    len(transcript),
                                 )
                                 # Eager path already fired — still mark is_final so the DD FINAL metric
                                 # counts this turn.

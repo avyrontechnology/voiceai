@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import io
 import wave
 import time
@@ -18,13 +17,15 @@ from scipy.signal import resample_poly
 from typing import Optional
 
 from .base_transcriber import BaseTranscriber
-from voiceai.helpers.logger_config import configure_logger
+from .constants import DEFAULT_SARVAM_HOST, SARVAM_API_KEY_ENV_KEY, SARVAM_HOST_ENV_KEY
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.enums import TelephonyProvider
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # saaras models that transcribe directly on /speech-to-text; older ones need the translate endpoint.
 SAARAS_TRANSCRIBE_MODELS = {"saaras:v3", "saaras:v4"}
@@ -72,14 +73,14 @@ class SarvamTranscriber(BaseTranscriber):
         super().__init__(input_queue)
 
         self.telephony_provider = telephony_provider
-        
+
         # Backward compatibility: map deprecated saarika models to saaras:v3
         if model and model.startswith("saarika"):
             logger.info(f"Mapping deprecated model {model} to saaras:v3")
             self.model = "saaras:v3"
         else:
             self.model = model
-            
+
         self.language = language
         self.target_language = target_language
         self.stream = stream
@@ -89,8 +90,8 @@ class SarvamTranscriber(BaseTranscriber):
         self.vad_signals = vad_signals
         self.disable_sdk = disable_sdk
 
-        self.api_key = kwargs.get("transcriber_key", os.getenv("SARVAM_API_KEY"))
-        self.api_host = os.getenv("SARVAM_HOST", "api.sarvam.ai")
+        self.api_key = kwargs.get("transcriber_key", get_str(SARVAM_API_KEY_ENV_KEY))
+        self.api_host = get_str(SARVAM_HOST_ENV_KEY, DEFAULT_SARVAM_HOST)
 
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
@@ -124,6 +125,9 @@ class SarvamTranscriber(BaseTranscriber):
         self.curr_message = ""
         self.finalized_transcript = ""
         self.interruption_signalled = False
+        # Stateful resampler: audioop.ratecv keeps filter state across chunks; passing
+        # None per chunk (stateless) clicks at every boundary. Mirrors lid/sarvam.py.
+        self._resample_state = None
 
         self.api_url = None
         self.ws_url = None
@@ -234,7 +238,9 @@ class SarvamTranscriber(BaseTranscriber):
             try:
                 current_rate = getattr(self, "input_sampling_rate", self.sampling_rate)
                 if current_rate != self.sampling_rate:
-                    audio_bytes, _ = audioop.ratecv(audio_bytes, 2, 1, current_rate, self.sampling_rate, None)
+                    audio_bytes, self._resample_state = audioop.ratecv(
+                        audio_bytes, 2, 1, current_rate, self.sampling_rate, self._resample_state
+                    )
             except Exception:
                 audio_bytes = self.normalize_to_16k(audio_bytes, current_rate)
 
@@ -407,9 +413,7 @@ class SarvamTranscriber(BaseTranscriber):
                             # turn_latencies (observability/eval). Each Sarvam "data" message
                             # is a finalized segment; overlap-merge (not join) — segments
                             # re-emit the previous tail and naive joining doubles digits.
-                            self.final_transcript = merge_transcript_segments(
-                                self.final_transcript, transcript.strip()
-                            )
+                            self.final_transcript = merge_transcript_segments(self.final_transcript, transcript.strip())
                             # Segments can arrive AFTER END_SPEECH closed the turn (short
                             # utterances) — backfill the closed entry, else it stores null text.
                             if (
@@ -472,7 +476,9 @@ class SarvamTranscriber(BaseTranscriber):
                                 # Via the base helper so meta_info["asr_turn_id"] is published —
                                 # a raw append left user messages unjoinable (asr_turn_id null).
                                 self._upsert_turn_latency(turn_info)
-                                self.meta_info["turn_latencies"] = self.turn_latencies
+                                import copy as _copy
+
+                                self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
 
                                 # Reset turn tracking
                                 self.current_turn_start_time = None
@@ -642,6 +648,7 @@ class SarvamTranscriber(BaseTranscriber):
             pass
 
     async def transcribe(self):
+        self._resample_state = None
         try:
             start_time = time.perf_counter()
             try:

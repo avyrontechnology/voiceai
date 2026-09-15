@@ -1,16 +1,23 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import uuid
 
+from voiceai.core.environment import get_str
+from voiceai.output_handlers.constants import (
+    DEFAULT_WEBCALL_ESTIMATOR_GRACE_S,
+    DEFAULT_WEBCALL_PLAYBACK_SETTLE_S,
+    WEBCALL_ESTIMATOR_GRACE_S_ENV,
+    WEBCALL_PLAYBACK_SETTLE_S_ENV,
+)
 from voiceai.output_handlers.default import DefaultOutputHandler
 from voiceai.output_handlers.socket_errors import is_socket_closed_error
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
+from voiceai.core.resilience import safe_task
 from voiceai.helpers.utils import wav_bytes_to_pcm
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # A single large streamAudio frame (e.g. a ~90KB cached welcome → ~120KB WS frame) drops the
 # mod_audio_stream connection (libwsc, code 1006). Split PCM into small frames; the module's
@@ -40,9 +47,9 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
         self._finish_marks = []
         self.stream_sid = None
         # in-band marks (Twilio semantics): final mark's echo ends the turn (+settle); estimator stays as fallback
-        self.playback_settle_s = float(os.getenv("WEBCALL_PLAYBACK_SETTLE_S", "0.15"))
+        self.playback_settle_s = float(get_str(WEBCALL_PLAYBACK_SETTLE_S_ENV, DEFAULT_WEBCALL_PLAYBACK_SETTLE_S))
         # once echoes are confirmed, the estimator gets this grace so the real echo wins the race
-        self.estimator_grace_s = float(os.getenv("WEBCALL_ESTIMATOR_GRACE_S", "1.5"))
+        self.estimator_grace_s = float(get_str(WEBCALL_ESTIMATOR_GRACE_S_ENV, DEFAULT_WEBCALL_ESTIMATOR_GRACE_S))
         self._final_mark_id = None
         self.marks_echoed = False  # first echo = module supports marks (observability)
         if input_handler is not None:
@@ -66,8 +73,10 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
             self._final_mark_id = None
             if self._finish_task and not self._finish_task.done():
                 self._finish_task.cancel()  # real playback clock supersedes the estimator
-            self._finish_task = asyncio.create_task(
-                self._complete_after_playout(self.playback_settle_s, list(self._finish_marks))
+            self._finish_task = safe_task(
+                self._complete_after_playout(self.playback_settle_s, list(self._finish_marks)),
+                name="freeswitch_finish",
+                logger=logger,
             )
 
     def on_playout_done_event(self):
@@ -254,7 +263,9 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
                 self._response_bytes = 0
                 self._response_first_send = None
                 self._finish_marks = list(marks)
-                self._finish_task = asyncio.create_task(self._complete_after_playout(remaining, marks))
+                self._finish_task = safe_task(
+                    self._complete_after_playout(remaining, marks), name="freeswitch_finish", logger=logger
+                )
         except Exception as e:
             # only a dead websocket should silence the handler permanently; a send timeout or
             # a bad chunk is dropped (logged once per error type) and later audio keeps flowing

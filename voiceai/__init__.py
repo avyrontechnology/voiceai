@@ -1,9 +1,9 @@
-__version__ = "0.10.217"
+__version__ = "0.11.0"
 
-import os
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import set_env
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 def setenv(variables):
@@ -12,4 +12,4 @@ def setenv(variables):
     """
     for key, value in variables.items():
         logger.info(f"Setting environment variable: {key}")
-        os.environ[key] = value
+        set_env(key, value)

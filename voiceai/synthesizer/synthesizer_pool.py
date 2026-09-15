@@ -1,10 +1,10 @@
 import asyncio
 
-from voiceai.errors import classify_exception, is_cancellation, summarize_exception
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import call_soft, iteration_guard
+from voiceai.core.resilience import call_soft, iteration_guard
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.exceptions import classify_exception, is_cancellation, summarize_exception
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Sentinel pushed into _output_queue to unblock generate() on switch
 _SWITCH_SENTINEL = object()

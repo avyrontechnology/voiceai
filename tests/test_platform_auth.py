@@ -28,9 +28,7 @@ def fresh_client(app):
 
 
 async def signup_owner(client, email="owner@acme.test"):
-    resp = await client.post(
-        "/auth/signup", json={"email": email, "name": "Owner", "password": "correct-horse-1"}
-    )
+    resp = await client.post("/auth/signup", json={"email": email, "name": "Owner", "password": "correct-horse-1"})
     assert resp.status_code == 201, resp.text
     assert resp.json()["role"] == "owner"
     return resp.json()
@@ -38,9 +36,7 @@ async def signup_owner(client, email="owner@acme.test"):
 
 async def test_signup_closes_after_first_user(ctx):
     await signup_owner(ctx.client)
-    resp = await ctx.client.post(
-        "/auth/signup", json={"email": "second@acme.test", "password": "correct-horse-1"}
-    )
+    resp = await ctx.client.post("/auth/signup", json={"email": "second@acme.test", "password": "correct-horse-1"})
     assert resp.status_code == 403
 
 
@@ -52,9 +48,7 @@ async def test_login_and_me_roundtrip(ctx):
     assert "*" in me.json()["scopes"]
 
     # Wrong password is a flat 401 (no user enumeration).
-    bad = await ctx.client.post(
-        "/auth/login", json={"email": "owner@acme.test", "password": "wrong-password"}
-    )
+    bad = await ctx.client.post("/auth/login", json={"email": "owner@acme.test", "password": "wrong-password"})
     assert bad.status_code == 401
 
 
@@ -68,9 +62,7 @@ async def test_me_without_session_is_401(ctx):
 async def test_invite_accept_and_role_gates(ctx):
     await signup_owner(ctx.client)
 
-    invite = await ctx.client.post(
-        "/auth/invite", json={"email": "member@acme.test", "role": "member"}
-    )
+    invite = await ctx.client.post("/auth/invite", json={"email": "member@acme.test", "role": "member"})
     assert invite.status_code == 201, invite.text
     token = invite.json()["token"]
 
@@ -93,38 +85,28 @@ async def test_invite_accept_and_role_gates(ctx):
 
     # Reusing the token fails.
     async with fresh_client(ctx.app) as other:
-        again = await other.post(
-            "/auth/accept", json={"token": token, "password": "correct-horse-3"}
-        )
+        again = await other.post("/auth/accept", json={"token": token, "password": "correct-horse-3"})
         assert again.status_code == 400
 
 
 async def test_non_owner_cannot_invite_admin(ctx):
     await signup_owner(ctx.client)
-    invite = await ctx.client.post(
-        "/auth/invite", json={"email": "admin@acme.test", "role": "admin"}
-    )
+    invite = await ctx.client.post("/auth/invite", json={"email": "admin@acme.test", "role": "admin"})
     token = invite.json()["token"]
     async with fresh_client(ctx.app) as admin:
         await admin.post("/auth/accept", json={"token": token, "password": "correct-horse-6"})
         # Admins may invite members but never owners/admins.
-        assert (
-            await admin.post("/auth/invite", json={"email": "o2@acme.test", "role": "owner"})
-        ).status_code == 403
+        assert (await admin.post("/auth/invite", json={"email": "o2@acme.test", "role": "owner"})).status_code == 403
         ok = await admin.post("/auth/invite", json={"email": "m2@acme.test", "role": "member"})
         assert ok.status_code == 201
 
 
 async def test_viewer_is_read_only(ctx):
     await signup_owner(ctx.client)
-    invite = await ctx.client.post(
-        "/auth/invite", json={"email": "viewer@acme.test", "role": "viewer"}
-    )
+    invite = await ctx.client.post("/auth/invite", json={"email": "viewer@acme.test", "role": "viewer"})
     token = invite.json()["token"]
     async with fresh_client(ctx.app) as viewer:
-        accepted = await viewer.post(
-            "/auth/accept", json={"token": token, "password": "correct-horse-4"}
-        )
+        accepted = await viewer.post("/auth/accept", json={"token": token, "password": "correct-horse-4"})
         assert accepted.status_code == 201
         assert (await viewer.get("/tools")).status_code == 200
         assert (await viewer.get("/batches")).status_code == 200
@@ -160,9 +142,7 @@ async def test_api_key_scopes(ctx):
 
 async def test_reset_is_owner_only_and_preserves_users(ctx):
     await signup_owner(ctx.client)
-    invite = await ctx.client.post(
-        "/auth/invite", json={"email": "member@acme.test", "role": "member"}
-    )
+    invite = await ctx.client.post("/auth/invite", json={"email": "member@acme.test", "role": "member"})
     token = invite.json()["token"]
     async with fresh_client(ctx.app) as member:
         await member.post("/auth/accept", json={"token": token, "password": "correct-horse-2"})
@@ -179,15 +159,11 @@ async def test_reset_is_owner_only_and_preserves_users(ctx):
 async def test_owner_safety_guards(ctx):
     owner = await signup_owner(ctx.client)
     # Nobody can touch their own role, even the sole owner.
-    assert (
-        await ctx.client.put(f"/auth/users/{owner['user_id']}/role", json={"role": "member"})
-    ).status_code == 400
+    assert (await ctx.client.put(f"/auth/users/{owner['user_id']}/role", json={"role": "member"})).status_code == 400
     assert (await ctx.client.delete(f"/auth/users/{owner['user_id']}")).status_code == 400
 
     # With a second owner present, demoting one of them works...
-    invite = await ctx.client.post(
-        "/auth/invite", json={"email": "owner2@acme.test", "role": "owner"}
-    )
+    invite = await ctx.client.post("/auth/invite", json={"email": "owner2@acme.test", "role": "owner"})
     owner2_id = None
     async with fresh_client(ctx.app) as second:
         accepted = await second.post(
@@ -199,12 +175,8 @@ async def test_owner_safety_guards(ctx):
     assert demote.status_code == 200
     # ...and the demoted admin can no longer touch roles.
     async with fresh_client(ctx.app) as second:
-        await second.post(
-            "/auth/login", json={"email": "owner2@acme.test", "password": "correct-horse-5"}
-        )
-        assert (
-            await second.put(f"/auth/users/{owner['user_id']}/role", json={"role": "viewer"})
-        ).status_code == 403
+        await second.post("/auth/login", json={"email": "owner2@acme.test", "password": "correct-horse-5"})
+        assert (await second.put(f"/auth/users/{owner['user_id']}/role", json={"role": "viewer"})).status_code == 403
 
 
 async def test_unauthenticated_requests_are_rejected(ctx):
@@ -215,9 +187,7 @@ async def test_unauthenticated_requests_are_rejected(ctx):
         assert (await anon.get("/templates")).status_code == 401
         assert (await anon.get("/auth/me")).status_code == 401
         assert (await anon.post("/organization/reset")).status_code == 401
-        assert (
-            await anon.post("/calls/simulate", json={"agent_id": "a", "to_number": "+91"})
-        ).status_code == 401
+        assert (await anon.post("/calls/simulate", json={"agent_id": "a", "to_number": "+91"})).status_code == 401
 
 
 async def test_logout_kills_session(ctx):

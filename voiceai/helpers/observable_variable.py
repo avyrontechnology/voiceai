@@ -1,8 +1,8 @@
 import asyncio
 import inspect
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ObservableVariable:
@@ -38,8 +38,14 @@ class ObservableVariable:
             if inspect.iscoroutinefunction(observer):
                 try:
                     # If an event loop is already running, schedule the async observer
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(observer(new_value))
+                    asyncio.get_running_loop()
+                    try:
+                        from voiceai.core.resilience import safe_task as _safe_task
+
+                        _safe_task(observer(new_value), name="observable_notify", logger=logger)
+                    except RuntimeError:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(observer(new_value))
                 except RuntimeError:
                     # No running loop; run the async function in a temporary event loop
                     asyncio.run(observer(new_value))

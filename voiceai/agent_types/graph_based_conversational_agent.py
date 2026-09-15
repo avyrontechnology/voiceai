@@ -3,10 +3,10 @@ import json
 import asyncio
 import traceback
 from .base_agent import BaseAgent
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import update_prompt_with_context, get_md5_hash
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class Node:

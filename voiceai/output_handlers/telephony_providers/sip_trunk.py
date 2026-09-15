@@ -24,24 +24,33 @@ Ref: https://docs.asterisk.org/Configuration/Channel-Drivers/WebSocket/
 """
 
 import asyncio
-import os
 import time
 import uuid
 from collections import deque
+from voiceai.core.environment import get_str
+from voiceai.output_handlers.constants import (
+    DEFAULT_SIP_MAX_SEND_RATE_FACTOR,
+    DEFAULT_SIP_MAX_WS_FRAME_BYTES,
+    DEFAULT_SIP_PLAYBACK_SETTLE_S,
+    SIP_MAX_SEND_RATE_FACTOR_ENV,
+    SIP_MAX_WS_FRAME_BYTES_ENV,
+    SIP_PLAYBACK_SETTLE_S_ENV,
+)
 from voiceai.output_handlers.telephony import TelephonyOutputHandler, lin16_to_mulaw
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
+from voiceai.core.resilience import log_ignored, safe_task
 from dotenv import load_dotenv
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # One frame must arrive within the 10 short reads ws_safe_read() allows or Asterisk drops
 # the call; a proxy relaying in ~4 KB chunks costs one read each.
-MAX_WS_FRAME_BYTES = int(os.environ.get("SIP_MAX_WS_FRAME_BYTES", "8000"))  # 1 s of ulaw
+MAX_WS_FRAME_BYTES = int(get_str(SIP_MAX_WS_FRAME_BYTES_ENV, DEFAULT_SIP_MAX_WS_FRAME_BYTES))  # 1 s of ulaw
 
 # Extra buffer after estimated playback end before clearing is_audio_being_played.
 # Accounts for Asterisk's internal retiming and RTP jitter buffer.
-PLAYBACK_SETTLE_S = float(os.environ.get("SIP_PLAYBACK_SETTLE_S", "0.1"))
+PLAYBACK_SETTLE_S = float(get_str(SIP_PLAYBACK_SETTLE_S_ENV, DEFAULT_SIP_PLAYBACK_SETTLE_S))
 
 # ulaw 8 kHz = 8,000 bytes per second.
 ULAW_BYTES_PER_SECOND = 8000
@@ -55,7 +64,7 @@ ULAW_BYTES_PER_SECOND = 8000
 # queue never reaches capacity.  Longer responses trigger XOFF/XON cycles — the
 # drain is also rate-limited (and re-anchored to exclude the XOFF pause time) so
 # it never re-overflows the queue.  Set SIP_MAX_SEND_RATE_FACTOR=0 to disable.
-MAX_SEND_RATE_FACTOR = float(os.environ.get("SIP_MAX_SEND_RATE_FACTOR", "1.5"))
+MAX_SEND_RATE_FACTOR = float(get_str(SIP_MAX_SEND_RATE_FACTOR_ENV, DEFAULT_SIP_MAX_SEND_RATE_FACTOR))
 
 # Tags for _local_audio_queue entries. Audio and marks share one queue so an XOFF pause
 # can't let a mark overtake the audio it belongs to.
@@ -122,8 +131,8 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
             tasks = self.agent_config.get("tasks") or []
             if tasks and isinstance(tasks[0], dict):
                 return tasks[0].get("tools_config", {}).get("output") or {}
-        except Exception:
-            pass
+        except Exception as exc:
+            log_ignored(logger, "sip-trunk output config", exc, level=10)
         return {}
 
     # ------------------------------------------------------------------
@@ -161,7 +170,9 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
         remaining = self._response_audio_duration - elapsed
         delay = max(remaining, 0) + PLAYBACK_SETTLE_S
 
-        self._settle_task = asyncio.create_task(self._settle_and_finish(generation, delay))
+        self._settle_task = safe_task(
+            self._settle_and_finish(generation, delay), name="sip_settle_finish", logger=logger
+        )
         logger.info(
             f"sip-trunk: playback finish in {delay:.2f}s "
             f"(audio={self._response_audio_duration:.2f}s, elapsed={elapsed:.2f}s)"
@@ -527,7 +538,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
     def set_hangup_sent(self):
         super().set_hangup_sent()
         try:
-            asyncio.create_task(self.send_hangup())
+            safe_task(self.send_hangup(), name="sip_send_hangup", logger=logger)
         except Exception as e:
             logger.error(f"sip-trunk send_hangup: {e}")
 

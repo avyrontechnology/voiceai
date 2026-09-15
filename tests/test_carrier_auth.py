@@ -54,9 +54,30 @@ def twilio(env, monkeypatch):
     return fake
 
 
-async def _post(app, path, json=None, headers=None):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def _post(app, path, json=None, headers=None, client_ip: str | None = None):
+    kwargs = {"app": app}
+    if client_ip is not None:
+        kwargs["client"] = (client_ip, 123)
+    async with AsyncClient(transport=ASGITransport(**kwargs), base_url="http://test") as client:
         return await client.post(path, json=json, headers=headers or {})
+
+
+def _request_scope(client_ip: str | None = "127.0.0.1", forwarded_host: str = "tel.ngrok.app") -> dict:
+    headers = [(b"host", b"internal:8001")]
+    if forwarded_host:
+        headers += [(b"x-forwarded-proto", b"https"), (b"x-forwarded-host", forwarded_host.encode())]
+    scope: dict = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/twilio_connect",
+        "query_string": b"agent_id=a",
+        "headers": headers,
+        "server": ("internal", 8001),
+    }
+    if client_ip is not None:
+        scope["client"] = (client_ip, 12345)
+    return scope
 
 
 async def test_call_requires_api_key_when_configured(twilio):
@@ -147,19 +168,8 @@ async def test_signature_validation_rejects_unsigned_callbacks(env, monkeypatch)
 def test_public_url_honours_proxy_headers():
     from starlette.requests import Request
 
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "scheme": "http",
-        "path": "/twilio_connect",
-        "query_string": b"agent_id=a",
-        "headers": [
-            (b"host", b"internal:8001"),
-            (b"x-forwarded-proto", b"https"),
-            (b"x-forwarded-host", b"tel.ngrok.app"),
-        ],
-        "server": ("internal", 8001),
-    }
+    # Trusted proxy (docker/ngrok private net) may set X-Forwarded-*; untrusted peers may not.
+    scope = _request_scope(client_ip="172.18.0.5", forwarded_host="tel.ngrok.app")
     assert carrier_auth.public_url_for(Request(scope)) == "https://tel.ngrok.app/twilio_connect?agent_id=a"
 
 
@@ -170,3 +180,99 @@ def test_warn_once_when_open(monkeypatch, caplog):
     carrier_auth.warn_if_dial_endpoints_open("twilio-app")
     assert sum("unauthenticated requests" in r.message for r in caplog.records) == 1
     assert os.getenv("TELEPHONY_API_KEY") is None
+
+
+# --- A1 AUTH GATE: fail-closed dial + connect, trusted proxy (Red) ---
+
+
+async def test_dial_open_rejects_non_loopback_without_key(monkeypatch, twilio):
+    monkeypatch.delenv("TELEPHONY_API_KEY", raising=False)
+    monkeypatch.delenv("ALLOW_OPEN_DIAL", raising=False)
+    resp = await _post(
+        twilio_api_server.app,
+        "/call",
+        {"agent_id": "a1", "recipient_phone_number": "+15550002222"},
+        client_ip="203.0.113.10",
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthenticated"
+    assert twilio.calls.kwargs is None
+
+
+async def test_dial_open_allows_explicit_flag_for_non_loopback(monkeypatch, twilio):
+    monkeypatch.delenv("TELEPHONY_API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_OPEN_DIAL", "1")
+    resp = await _post(
+        twilio_api_server.app,
+        "/call",
+        {"agent_id": "a1", "recipient_phone_number": "+15550002222"},
+        client_ip="203.0.113.10",
+    )
+    assert resp.status_code == 200
+
+
+async def test_twilio_connect_rejects_unsigned_non_loopback(monkeypatch, env):
+    monkeypatch.delenv("CARRIER_VALIDATE_SIGNATURES", raising=False)
+    monkeypatch.delenv("ALLOW_UNSIGNED_CARRIER_CALLBACK", raising=False)
+    resp = await _post(
+        twilio_api_server.app,
+        "/twilio_connect?voiceai_host=wss://engine.example&agent_id=agent-9",
+        client_ip="203.0.113.10",
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+
+
+async def test_plivo_connect_rejects_unsigned_non_loopback(monkeypatch, env):
+    monkeypatch.delenv("CARRIER_VALIDATE_SIGNATURES", raising=False)
+    monkeypatch.delenv("ALLOW_UNSIGNED_CARRIER_CALLBACK", raising=False)
+    resp = await _post(
+        plivo_api_server.app,
+        "/plivo_connect?voiceai_host=wss://engine.example&agent_id=agent-9",
+        client_ip="203.0.113.10",
+    )
+    assert resp.status_code == 403
+
+
+async def test_connect_allows_unsigned_with_explicit_flag(monkeypatch, env):
+    monkeypatch.delenv("CARRIER_VALIDATE_SIGNATURES", raising=False)
+    monkeypatch.setenv("ALLOW_UNSIGNED_CARRIER_CALLBACK", "1")
+    resp = await _post(
+        twilio_api_server.app,
+        "/twilio_connect?voiceai_host=wss://engine.example&agent_id=agent-9",
+        client_ip="203.0.113.10",
+    )
+    assert resp.status_code == 200
+
+
+def test_public_url_ignores_spoofed_headers_when_untrusted():
+    from starlette.requests import Request
+
+    scope = _request_scope(client_ip="203.0.113.10", forwarded_host="evil.example")
+    assert carrier_auth.public_url_for(Request(scope)) == "http://internal:8001/twilio_connect?agent_id=a"
+
+
+def test_public_url_prefers_explicit_base(monkeypatch):
+    from starlette.requests import Request
+
+    monkeypatch.setenv("TELEPHONY_PUBLIC_URL", "https://tel.example")
+    scope = _request_scope(client_ip="203.0.113.10", forwarded_host="evil.example")
+    assert carrier_auth.public_url_for(Request(scope)) == "https://tel.example/twilio_connect?agent_id=a"
+
+
+def test_public_url_trusts_private_proxy_headers():
+    from starlette.requests import Request
+
+    scope = _request_scope(client_ip="172.18.0.5", forwarded_host="tel.ngrok.app")
+    assert carrier_auth.public_url_for(Request(scope)) == "https://tel.ngrok.app/twilio_connect?agent_id=a"
+
+
+def test_warn_once_when_signatures_disabled(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.delenv("CARRIER_VALIDATE_SIGNATURES", raising=False)
+    monkeypatch.setattr(carrier_auth, "_warned_sig", False)
+    with caplog.at_level(logging.WARNING, logger=carrier_auth.logger.name):
+        carrier_auth.warn_if_signatures_disabled("twilio-app")
+        carrier_auth.warn_if_signatures_disabled("twilio-app")
+    assert sum("CARRIER_VALIDATE_SIGNATURES" in r.message for r in caplog.records) == 1

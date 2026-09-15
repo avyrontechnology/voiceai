@@ -5,10 +5,10 @@ import re
 
 from pydub import AudioSegment
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS
-from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseSynthesizer:
@@ -157,14 +157,15 @@ class BaseSynthesizer:
 
             if not self.should_synthesize_response(meta_info.get("sequence_id")):
                 logger.info(f"Not synthesizing: sequence_id {meta_info.get('sequence_id')} not current")
-                return
+                continue
 
             audio = await self._fetch_http_audio(text, meta_info)
             if self._has_audio(audio):
                 # Only transform real audio: _process_http_audio decodes/resamples, so it
                 # raises on None (convert_audio_to_wav) and can legitimately drop the chunk
-                # itself (e.g. Sarvam returning a header-only wav).
-                audio = self._process_http_audio(audio)
+                # itself (e.g. Sarvam returning a header-only wav). Offload ffmpeg/scipy
+                # work so the event loop never blocks on decode/resample.
+                audio = await asyncio.to_thread(self._process_http_audio, audio)
 
             if not self._has_audio(audio):
                 # Yielding this used to crash the output handler in base64.b64encode(None),

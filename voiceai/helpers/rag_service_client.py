@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 import time
+
+from voiceai.otobaai_logger import get_logger
 import uuid
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
@@ -41,7 +43,7 @@ class RAGServiceClient:
         self.base_url = rag_server_url.rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.session: Optional[aiohttp.ClientSession] = None
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # Skip RAG queries after repeated failures instead of blocking the LLM pipeline
         self._consecutive_failures = 0
@@ -278,34 +280,70 @@ Please respond to the user's query using the above context when relevant. If the
 
 
 class RAGServiceClientSingleton:
-    """
-    Singleton wrapper for RAG service client to avoid creating multiple sessions.
+    """Per-URL singleton wrapper to avoid creating multiple sessions.
+
+    Keyed by normalized base URL (the previous build pinned the first URL for the process).
+    Guarded by an asyncio lock so concurrent first-use callers create one client, and each URL
+    is validated with the SSRF guard before a client is cached.
     """
 
     _instance = None
     _client = None
+    _clients: dict = {}
+    _lock = None
+
+    @classmethod
+    def _get_lock(cls):
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
 
     @classmethod
     async def get_client(cls, rag_server_url: str) -> RAGServiceClient:
-        """
-        Get or create a RAG service client instance.
+        """Get or create a RAG service client for ``rag_server_url``."""
+        if not isinstance(rag_server_url, str) or not rag_server_url.strip():
+            raise ValueError("rag_server_url must be a non-empty URL")
+        from voiceai.helpers.function_calling_helpers import validate_outbound_url
 
-        Args:
-            rag_server_url: Base URL of the rag-proxy-server
-
-        Returns:
-            RAGServiceClient instance
-        """
-        if cls._instance is None or cls._client is None:
-            cls._client = RAGServiceClient(rag_server_url)
+        await validate_outbound_url(rag_server_url.strip())
+        key = rag_server_url.strip().rstrip("/")
+        async with cls._get_lock():
+            existing = cls._clients.get(key)
+            if existing is not None:
+                cls._client = existing
+                cls._instance = cls
+                return existing
+            client = RAGServiceClient(rag_server_url)
+            cls._clients[key] = client
+            cls._client = client
             cls._instance = cls
-
-        return cls._client
+            return client
 
     @classmethod
-    async def close_client(cls):
-        """Close the client if it exists."""
-        if cls._client:
-            await cls._client.close()
+    async def close_client(cls, rag_server_url: str | None = None):
+        """Close one cached client, or all when no URL is given (back-compat)."""
+        from voiceai.core.resilience import log_ignored
+
+        _log = get_logger(__name__)
+        if rag_server_url is None:
+            for client in list(cls._clients.values()):
+                try:
+                    await client.close()
+                except Exception as exc:
+                    log_ignored(_log, "rag close pooled client", exc)
+            cls._clients.clear()
+            if cls._client is not None:
+                try:
+                    await cls._client.close()
+                except Exception as exc:
+                    log_ignored(_log, "rag close shared client", exc)
+            cls._client = None
+            cls._instance = None
+            return
+        key = rag_server_url.strip().rstrip("/")
+        client = cls._clients.pop(key, None)
+        if client is not None:
+            await client.close()
+        if cls._client is client:
             cls._client = None
             cls._instance = None

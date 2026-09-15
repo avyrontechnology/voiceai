@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import re
 import time
 import uuid
@@ -11,12 +10,18 @@ import aiohttp
 import websockets
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, resample
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEFAULT_ELEVENLABS_API_HOST,
+    ELEVENLABS_API_HOST_ENV,
+    ELEVENLABS_API_KEY_ENV,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ElevenlabsBase(StreamSynthesizer):
@@ -45,7 +50,7 @@ class ElevenlabsBase(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["ELEVENLABS_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(ELEVENLABS_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice = voice_id
         self.model = model
         self.stream = True
@@ -60,7 +65,7 @@ class ElevenlabsBase(StreamSynthesizer):
         if self.caching:
             self.cache = InmemoryScalarCache()
 
-        self.elevenlabs_host = os.getenv("ELEVENLABS_API_HOST", "api.elevenlabs.io")
+        self.elevenlabs_host = get_str(ELEVENLABS_API_HOST_ENV, DEFAULT_ELEVENLABS_API_HOST)
         # Set from the x-trace-id response header on connect; both sockets log against it.
         self.ws_trace_id = None
         if self.use_mulaw:
@@ -184,44 +189,49 @@ class ElevenlabsSynthesizer(ElevenlabsBase):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                await self.flush_synthesizer_stream()
-                return
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
+                    await self.flush_synthesizer_stream()
+                    return
 
-            await self._wait_for_ws()
+                await self._wait_for_ws()
 
-            if text != "":
-                for text_chunk in self.text_chunker(text):
-                    if not self.should_synthesize_response(sequence_id):
-                        logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
-                        await self.flush_synthesizer_stream()
-                        return
+                if text != "":
+                    for text_chunk in self.text_chunker(text):
+                        if not self.should_synthesize_response(sequence_id):
+                            logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                            await self.flush_synthesizer_stream()
+                            return
+                        try:
+                            if self.ws_send_time is None:
+                                self.ws_send_time = time.perf_counter()
+                                logger.info(f"WS send trace_id={self.ws_trace_id} first_text_sent")
+                            await self.websocket.send(json.dumps({"text": text_chunk, "context_id": self.context_id}))
+                        except Exception as e:
+                            logger.info(f"Error sending chunk: {e}")
+                            self.connection_error = str(e)
+                            return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
                     try:
-                        if self.ws_send_time is None:
-                            self.ws_send_time = time.perf_counter()
-                            logger.info(f"WS send trace_id={self.ws_trace_id} first_text_sent")
-                        await self.websocket.send(json.dumps({"text": text_chunk, "context_id": self.context_id}))
+                        await self.websocket.send(
+                            json.dumps({"text": "", "context_id": self.context_id, "flush": True})
+                        )
+                        # Closing the context makes ElevenLabs emit isFinal, which the receiver uses
+                        # as end-of-stream. The context's remaining frames are still delivered.
+                        # Next turn opens a fresh context; voice_settings carry over from BOS.
+                        if self.context_id:
+                            await self.websocket.send(
+                                json.dumps({"context_id": self.context_id, "close_context": True})
+                            )
+                            self.context_id = None
                     except Exception as e:
-                        logger.info(f"Error sending chunk: {e}")
+                        logger.info(f"Error sending end-of-stream signal: {e}")
                         self.connection_error = str(e)
-                        return
-
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                try:
-                    await self.websocket.send(json.dumps({"text": "", "context_id": self.context_id, "flush": True}))
-                    # Closing the context makes ElevenLabs emit isFinal, which the receiver uses
-                    # as end-of-stream. The context's remaining frames are still delivered. The
-                    # next turn opens a fresh context; voice_settings carry over from the connection BOS.
-                    if self.context_id:
-                        await self.websocket.send(json.dumps({"context_id": self.context_id, "close_context": True}))
-                        self.context_id = None
-                except Exception as e:
-                    logger.info(f"Error sending end-of-stream signal: {e}")
-                    self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
@@ -569,65 +579,66 @@ class ElevenlabsV3Synthesizer(ElevenlabsBase):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                await self.flush_synthesizer_stream()
-                return
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
+                    await self.flush_synthesizer_stream()
+                    return
 
-            # Tighter than the 1s default: every barge-in redials, and the next turn should
-            # not wait a full poll tick on a socket that reconnects in about 200ms.
-            await self._wait_for_ws(poll_interval=RECONNECT_POLL_INTERVAL_S)
+                # Tighter than the 1s default: every barge-in redials, and the next turn should
+                # not wait a full poll tick on a socket that reconnects in about 200ms.
+                await self._wait_for_ws(poll_interval=RECONNECT_POLL_INTERVAL_S)
 
-            if text != "":
-                for text_chunk in self.text_chunker(text):
-                    if not self.should_synthesize_response(sequence_id):
-                        logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
-                        await self.flush_synthesizer_stream()
-                        return
-                    try:
-                        if self.ws_send_time is None:
-                            self.ws_send_time = time.perf_counter()
-                            self._turn_eos_emitted = False
-                            logger.info(f"WS send trace_id={self.ws_trace_id} first_text_sent")
-                        # Only the first fragment of a turn; per-fragment new_turn would
-                        # break intonation inside one utterance.
-                        payload = {"text": text_chunk, "voice_id": self.voice}
-                        if self._new_turn_pending:
-                            payload["new_turn"] = True
-                            self._new_turn_pending = False
-                        ws = self.websocket
-                        if ws is None:
+                if text != "":
+                    for text_chunk in self.text_chunker(text):
+                        if not self.should_synthesize_response(sequence_id):
+                            logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                            await self.flush_synthesizer_stream()
+                            return
+                        try:
+                            if self.ws_send_time is None:
+                                self.ws_send_time = time.perf_counter()
+                                self._turn_eos_emitted = False
+                                logger.info(f"WS send trace_id={self.ws_trace_id} first_text_sent")
+                            # Only the first fragment of a turn; per-fragment new_turn would
+                            # break intonation inside one utterance.
+                            payload = {"text": text_chunk, "voice_id": self.voice}
+                            if self._new_turn_pending:
+                                payload["new_turn"] = True
+                                self._new_turn_pending = False
+                            ws = self.websocket
+                            if ws is None:
+                                self._classify_lost_socket("mid-send")
+                                return
+                            await ws.send(json.dumps({"inputs": [payload]}))
+                            self._last_send_time = time.perf_counter()
+                        except websockets.exceptions.ConnectionClosed:
                             self._classify_lost_socket("mid-send")
                             return
-                        await ws.send(json.dumps({"inputs": [payload]}))
-                        self._last_send_time = time.perf_counter()
-                    except websockets.exceptions.ConnectionClosed:
-                        self._classify_lost_socket("mid-send")
-                        return
-                    except Exception as e:
-                        logger.info(f"Error sending chunk: {e}")
-                        self.connection_error = str(e)
-                        return
+                        except Exception as e:
+                            logger.info(f"Error sending chunk: {e}")
+                            self.connection_error = str(e)
+                            return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                try:
-                    # Closes the turn with is_final_audio_for_turn. close_socket would end
-                    # the session rather than the turn.
-                    ws = self.websocket
-                    if ws is None:
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    try:
+                        # Closes the turn with is_final_audio_for_turn. close_socket would end
+                        # the session rather than the turn.
+                        ws = self.websocket
+                        if ws is None:
+                            self._classify_lost_socket("before flush")
+                            return
+                        await ws.send(json.dumps({"flush": True}))
+                        self._last_send_time = time.perf_counter()
+                        self._new_turn_pending = True
+                    except websockets.exceptions.ConnectionClosed:
                         self._classify_lost_socket("before flush")
-                        return
-                    await ws.send(json.dumps({"flush": True}))
-                    self._last_send_time = time.perf_counter()
-                    self._new_turn_pending = True
-                except websockets.exceptions.ConnectionClosed:
-                    self._classify_lost_socket("before flush")
-                except Exception as e:
-                    logger.info(f"Error sending end-of-stream signal: {e}")
-                    self.connection_error = str(e)
+                    except Exception as e:
+                        logger.info(f"Error sending end-of-stream signal: {e}")
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")

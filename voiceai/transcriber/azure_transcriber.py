@@ -1,4 +1,3 @@
-import os
 import sys
 import asyncio
 import time
@@ -6,12 +5,14 @@ import json
 from azure.cognitiveservices.speech import AudioStreamWaveFormat, AudioStreamContainerFormat
 from dotenv import load_dotenv
 from .base_transcriber import BaseTranscriber
+from .constants import AZURE_SPEECH_KEY_ENV_KEY, AZURE_SPEECH_REGION_ENV_KEY
 import azure.cognitiveservices.speech as speechsdk
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -21,8 +22,8 @@ class AzureTranscriber(BaseTranscriber):
     ):
         super().__init__(input_queue)
         self.transcription_task = None
-        self.subscription_key = os.getenv("AZURE_SPEECH_KEY")
-        self.service_region = os.getenv("AZURE_SPEECH_REGION")
+        self.subscription_key = get_str(AZURE_SPEECH_KEY_ENV_KEY)
+        self.service_region = get_str(AZURE_SPEECH_REGION_ENV_KEY)
         self.push_stream = None
         self.recognizer = None
         self.transcriber_output_queue = output_queue
@@ -146,6 +147,10 @@ class AzureTranscriber(BaseTranscriber):
             exc_type, exc_obj, exc_tb = sys.exc_info()
             logger.error(f"Error occurred in send_audio_to_transcriber - {e} at {exc_tb.tb_lineno}")
 
+    def _start_continuous_blocking(self):
+        """Blocking SDK start (runs in an executor, never on the event loop)."""
+        self.recognizer.start_continuous_recognition_async().get()
+
     def _release_previous_connection(self):
         """Stop the superseded recognizer and drop it here, off the event loop."""
         recognizer, self.recognizer = self.recognizer, None
@@ -212,9 +217,10 @@ class AzureTranscriber(BaseTranscriber):
             self.recognizer.session_started.connect(self._sync_session_started_handler)
             self.recognizer.session_stopped.connect(self._sync_session_stopped_handler)
 
-            # Start continuous recognition (blocking call until started)
+            # Start continuous recognition — the SDK's .get() blocks the calling thread
+            # until the service acks, so it must run off the event loop.
             start_time = time.perf_counter()
-            self.recognizer.start_continuous_recognition_async().get()
+            await asyncio.get_event_loop().run_in_executor(None, self._start_continuous_blocking)
             logger.info("Azure speech recognition started successfully")
             if not self.connection_time:
                 self.connection_time = round((time.perf_counter() - start_time) * 1000)
@@ -240,7 +246,10 @@ class AzureTranscriber(BaseTranscriber):
         asyncio.run_coroutine_threadsafe(self.session_stopped_handler(evt), self.loop)
 
     async def recognizing_handler(self, evt):
-        logger.info(f"Intermediate results: {evt.result.text} | run_id - {self.run_id}")
+        logger.info(
+            f"Interim transcript received | run_id - {self.run_id} "
+            f"turn_id - {self.current_turn_id} len={len((evt.result.text or '').strip())}"
+        )
         if evt.result.text.strip():
             # Extract Azure's timing data (Offset and Duration are in ticks, 1 tick = 100 nanoseconds)
             offset_ticks = evt.result.offset
@@ -285,7 +294,10 @@ class AzureTranscriber(BaseTranscriber):
             await self.transcriber_output_queue.put(create_ws_data_packet(data, self.meta_info))
 
     async def recognized_handler(self, evt):
-        logger.info(f"Final transcript: {evt.result.text} | run_id - {self.run_id}")
+        logger.info(
+            f"Final transcript received | run_id - {self.run_id} "
+            f"turn_id - {self.current_turn_id} len={len((evt.result.text or '').strip())}"
+        )
         if evt.result.text.strip():
             # Extract Azure's timing data (Offset and Duration are in ticks, 1 tick = 100 nanoseconds)
             offset_ticks = evt.result.offset
@@ -322,14 +334,14 @@ class AzureTranscriber(BaseTranscriber):
                 turn_info = {
                     "turn_id": self.current_turn_id,
                     "sequence_id": self.current_turn_id,
-                    "interim_details": self.current_turn_interim_details,
+                    "interim_details": list(self.current_turn_interim_details),
                     "first_interim_to_final_ms": first_interim_to_final_ms,
                     "last_interim_to_final_ms": last_interim_to_final_ms,
                     "asr_start_epoch_ms": self._turn_start_epoch_ms,
                     "asr_finalized_epoch_ms": timestamp_ms(),
                     "final_transcript": evt.result.text.strip(),
                 }
-                self.turn_latencies.append(turn_info)
+                self._upsert_turn_latency(turn_info)
 
                 self.current_turn_interim_details = []
                 self.current_turn_start_time = None
@@ -382,7 +394,8 @@ class AzureTranscriber(BaseTranscriber):
                 pass
             self.send_audio_to_transcriber_task = None
 
-        self._sync_cleanup()
+        # _sync_cleanup blocks on stop_continuous_recognition_async().get() — offload it.
+        await asyncio.get_event_loop().run_in_executor(None, self._sync_cleanup)
 
     def _sync_cleanup(self):
         """Synchronous cleanup of Azure resources."""

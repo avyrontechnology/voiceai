@@ -14,12 +14,13 @@ from voiceai.platform.auth import (
     Principal,
     REMEMBER_TTL_S,
     SESSION_TTL_S,
+    ahash_password,
     audit,
+    averify_password,
     check_login_allowed,
     client_ip,
     get_principal,
     get_store,
-    hash_password,
     mint_session,
     mint_ws_ticket,
     new_token,
@@ -29,7 +30,6 @@ from voiceai.platform.auth import (
     require_scope,
     revoke_session,
     token_hash,
-    verify_password,
 )
 from voiceai.platform.models import (
     AcceptInviteRequest,
@@ -81,7 +81,7 @@ async def signup(
         user_id=new_id("usr"),
         email=payload.email.strip().lower(),
         name=payload.name,
-        password_hash=hash_password(payload.password),
+        password_hash=await ahash_password(payload.password),
         role="owner",
     )
     await store.save_user(user)
@@ -97,7 +97,7 @@ async def login(
 ) -> AuthMeResponse:
     check_login_allowed(client_ip(request))
     user = await store.get_user_by_email(payload.email)
-    if not user or user.disabled or not verify_password(payload.password, user.password_hash):
+    if not user or user.disabled or not await averify_password(payload.password, user.password_hash):
         await audit(store, "login_failed", None, payload.email.strip().lower())
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await mint_session(store, user, response, ttl_s=REMEMBER_TTL_S if payload.remember else SESSION_TTL_S)
@@ -185,10 +185,22 @@ async def accept_invite(
     payload: AcceptInviteRequest, response: Response, store: MemoryStore = Depends(get_store)
 ) -> AuthMeResponse:
     digest = token_hash(payload.token)
-    invite = next(
-        (i for i in await store.list_invites() if i.token_hash == digest and not i.accepted),
-        None,
-    )
+    # Indexed fast path (RedisStore): O(1) HASH lookup, no invite list SCAN.
+    _by_token = getattr(store, "get_invite_by_token_hash", None)
+    if callable(_by_token):
+        try:
+            _hit = await _by_token(digest)
+            invite = _hit if _hit is not None and not _hit.accepted else None
+        except Exception:
+            invite = next(
+                (i for i in await store.list_invites() if i.token_hash == digest and not i.accepted),
+                None,
+            )
+    else:
+        invite = next(
+            (i for i in await store.list_invites() if i.token_hash == digest and not i.accepted),
+            None,
+        )
     from datetime import timezone
 
     if not invite:
@@ -204,7 +216,7 @@ async def accept_invite(
         user_id=new_id("usr"),
         email=invite.email,
         name=payload.name or invite.name,
-        password_hash=hash_password(payload.password),
+        password_hash=await ahash_password(payload.password),
         role=invite.role,
     )
     await store.save_user(user)
@@ -256,6 +268,7 @@ async def delete_user(
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     await _assert_last_owner_safe(store, target)
     await store.delete_user_sessions(user_id)
+    await store.delete_user_api_keys(user_id)
     await store.delete_user(user_id)
     await audit(store, "user_deleted", principal.user_id, principal.email, target.email)
     return {"ok": True}
@@ -272,20 +285,24 @@ async def change_password(
     if principal.auth_type != "session" or not principal.user_id:
         raise HTTPException(status_code=403, detail="Password change requires a login session")
     user = await store.get_user(principal.user_id)
-    if not user or not verify_password(payload.current_password, user.password_hash):
+    if not user or not await averify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    user.password_hash = hash_password(payload.new_password)
+    user.password_hash = await ahash_password(payload.new_password)
     await store.save_user(user)
-    # Keep this session, kill the rest.
+    # Keep this session, kill the rest (indexed, no session list SCAN).
     current = request.cookies.get(auth.SESSION_COOKIE)
     keep = {token_hash(current)} if current else set()
-    if hasattr(store, "_redis"):
-        raws = await store._list_collection("sessions")
+    _except = getattr(store, "delete_user_sessions_except", None)
+    if callable(_except):
+        await _except(user.user_id, keep)
     else:
-        raws = list(store._data.get("sessions", {}).values())
-    for raw in raws:
-        if raw.get("user_id") == user.user_id and raw.get("token_hash") not in keep:
-            await store.delete_session(raw["token_hash"])
+        if hasattr(store, "_redis"):
+            raws = await store._list_collection("sessions")
+        else:
+            raws = list(store._data.get("sessions", {}).values())
+        for raw in raws:
+            if raw.get("user_id") == user.user_id and raw.get("token_hash") not in keep:
+                await store.delete_session(raw["token_hash"])
     await audit(store, "password_change", user.user_id, user.email)
     return {"ok": True}
 

@@ -62,11 +62,7 @@ def analyze_pcm(raw: bytes, frame_lens: list) -> dict:
             }
         )
     out["windows"] = window_top
-    out["verdict"] = (
-        "FAIL"
-        if out["clipped_frac"] > 0.01 or out["joint_clicks"] > len(steps) // 2
-        else "OK"
-    )
+    out["verdict"] = "FAIL" if out["clipped_frac"] > 0.01 or out["joint_clicks"] > len(steps) // 2 else "OK"
     return out
 
 
@@ -107,11 +103,15 @@ async def main() -> int:
     parser.add_argument("--language", default="hi")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--out", default="/tmp/s2s_health")
-    parser.add_argument("turns", nargs="*", default=[
-        "Hey! Who are you?",
-        "Namaste! Mujhe kal subah doctor se milna hai.",
-        "Doctor ka naam specialty batao aur time confirm karo.",
-    ])
+    parser.add_argument(
+        "turns",
+        nargs="*",
+        default=[
+            "Hey! Who are you?",
+            "Namaste! Mujhe kal subah doctor se milna hai.",
+            "Doctor ka naam specialty batao aur time confirm karo.",
+        ],
+    )
     args = parser.parse_args()
 
     from voiceai.s2s.gemini_live_s2s import GeminiLiveS2S

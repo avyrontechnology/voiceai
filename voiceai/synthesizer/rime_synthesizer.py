@@ -1,21 +1,23 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import uuid
 
 import aiohttp
 import websockets
 from dotenv import load_dotenv
+from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import convert_audio_to_wav
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import RIME_API_KEY_ENV
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -44,7 +46,7 @@ class RimeSynthesizer(StreamSynthesizer):
         self.voice_id = voice_id
         self.sample_rate = str(sampling_rate)
         self.model = model
-        self.api_key = os.environ["RIME_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(RIME_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.use_mulaw = True
         self.caching = caching
 
@@ -57,12 +59,14 @@ class RimeSynthesizer(StreamSynthesizer):
 
         self.context_id = None
         self.audio_data = b""
+        self._eos_context_id = None
 
         if caching:
             self.cache = InmemoryScalarCache()
 
     def supports_websocket(self):
-        return False
+        # arcana is HTTP-only; other models stream over WS when configured.
+        return bool(self.stream) and self.model != "arcana"
 
     def get_sleep_time(self):
         return 0.01
@@ -86,6 +90,7 @@ class RimeSynthesizer(StreamSynthesizer):
     def _on_push(self, meta_info, text):  # noqa: ARG002
         if not self.context_id:
             self.context_id = str(uuid.uuid4())
+            self._eos_context_id = None
 
     # ------------------------------------------------------------------
     # Interruption
@@ -94,9 +99,25 @@ class RimeSynthesizer(StreamSynthesizer):
     async def handle_interruption(self):
         if self.stream:
             try:
+                # Next turn must re-detect as new to clear stale queue entries.
+                self.current_turn_start_time = None
+                self._eos_context_id = None
                 if self.context_id:
                     self.context_id = str(uuid.uuid4())
-                    await self.websocket.send(json.dumps({"operation": "clear"}))
+                    try:
+                        if self._is_ws_connected():
+                            await self.websocket.send(json.dumps({"operation": "clear"}))
+                    except Exception:
+                        pass
+                try:
+                    should = getattr(self, "should_synthesize_response", None)
+                    if callable(should) and getattr(self, "text_queue", None):
+                        from collections import deque as _deque
+
+                        kept = _deque(m for m in self.text_queue if should(m.get("sequence_id")))
+                        self.text_queue = kept
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -106,39 +127,40 @@ class RimeSynthesizer(StreamSynthesizer):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                await self.flush_synthesizer_stream()
-                return
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
+                    await self.flush_synthesizer_stream()
+                    return
 
-            await self._wait_for_ws()
+                await self._wait_for_ws()
 
-            if text != "":
-                for text_chunk in self.text_chunker(text):
-                    if not self.should_synthesize_response(sequence_id):
-                        logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
-                        await self.flush_synthesizer_stream()
-                        return
-                    try:
-                        if self.ws_send_time is None:
-                            self.ws_send_time = time.perf_counter()
-                        await self._send_json({"text": text_chunk, "contextId": self.context_id})
-                    except Exception as e:
-                        logger.info(f"Error sending chunk: {e}")
-                        self.connection_error = str(e)
-                        return
+                if text != "":
+                    for text_chunk in self.text_chunker(text):
+                        if not self.should_synthesize_response(sequence_id):
+                            logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                            await self.flush_synthesizer_stream()
+                            return
+                        try:
+                            if self.ws_send_time is None:
+                                self.ws_send_time = time.perf_counter()
+                            await self._send_json({"text": text_chunk, "contextId": self.context_id})
+                        except Exception as e:
+                            logger.info(f"Error sending chunk: {e}")
+                            self.connection_error = str(e)
+                            return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                self.context_id = str(uuid.uuid4())
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    self.context_id = str(uuid.uuid4())
 
-            try:
-                await self._send_json({"operation": "flush"})
-            except Exception as e:
-                logger.info(f"Error sending end-of-stream signal: {e}")
-                self.connection_error = str(e)
+                try:
+                    await self._send_json({"operation": "flush"})
+                except Exception as e:
+                    logger.info(f"Error sending end-of-stream signal: {e}")
+                    self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
@@ -179,7 +201,13 @@ class RimeSynthesizer(StreamSynthesizer):
 
                 chunk_context_id = data.get("contextId")
                 if chunk_context_id != self.context_id:
-                    yield b"\x00"
+                    # Single EOS per turn: repeated frames for the same stale context
+                    # (timestamps + status) must not each close the turn.
+                    if chunk_context_id != self._eos_context_id:
+                        self._eos_context_id = chunk_context_id
+                        yield b"\x00"
+                    else:
+                        logger.info(f"rime: suppressing duplicate EOS for context {chunk_context_id}")
                 else:
                     logger.info("No audio data in the response")
 
@@ -209,6 +237,14 @@ class RimeSynthesizer(StreamSynthesizer):
             return websocket
         except asyncio.TimeoutError:
             logger.error("Timeout while connecting to Rime websocket")
+            return None
+        except InvalidHandshake as e:
+            error_msg = str(e)
+            if "401" in error_msg or "403" in error_msg:
+                logger.error(f"Rime authentication failed: Invalid or expired API key - {e}")
+            else:
+                logger.error(f"Rime handshake failed: {e}")
+            self.connection_error = str(e)
             return None
         except Exception as e:
             logger.error(f"Failed to connect to Rime: {e}")

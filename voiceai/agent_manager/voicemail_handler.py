@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Optional, TYPE_CHECKING
 
+from voiceai.agent_manager.constants import DEFAULT_VOICEMAIL_DETECTION_LLM, VOICEMAIL_DETECTION_LLM_ENV
+from voiceai.core.environment import get_str
 from voiceai.enums import HangupReason, LogComponent, LogDirection
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import convert_to_request_log, format_messages
 from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
 
 if TYPE_CHECKING:
     from .task_manager import TaskManager
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class VoicemailHandler:
@@ -39,7 +40,7 @@ class VoicemailHandler:
                         }}
                 """
         )
-        self.llm_model: str = os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini")
+        self.llm_model: str = get_str(VOICEMAIL_DETECTION_LLM_ENV, DEFAULT_VOICEMAIL_DETECTION_LLM)
 
     def should_check(self, transcriber_message: str, is_final: bool = True) -> bool:
         if not self.enabled:

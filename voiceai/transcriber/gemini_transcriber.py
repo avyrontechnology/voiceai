@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 
@@ -10,11 +9,13 @@ from dotenv import load_dotenv
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
+from .constants import GEMINI_API_KEY_ENV_KEY, GOOGLE_API_KEY_ENV_KEY
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import create_ws_data_packet, resample, timestamp_ms, ulaw_to_pcm
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 GEMINI_LIVE_URL = (
@@ -65,7 +66,9 @@ class GeminiTranscriber(BaseTranscriber):
         self.connected_via_dashboard = kwargs.get("enforce_streaming", True)
 
         # GOOGLE_API_KEY is the same key GeminiLLM reads; accept either name.
-        self.api_key = kwargs.get("transcriber_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.api_key = (
+            kwargs.get("transcriber_key") or get_str(GEMINI_API_KEY_ENV_KEY) or get_str(GOOGLE_API_KEY_ENV_KEY)
+        )
 
         # SMART strips disfluencies and self-corrections; VERBATIM keeps every word. Left unset the
         # server default (VERBATIM) applies, which is what a downstream LLM should reason over.
@@ -102,6 +105,9 @@ class GeminiTranscriber(BaseTranscriber):
         self.current_turn_interim_details = []
         self.turn_counter = 0
         self.last_interim_time = None
+        # Stateful resampler for the 8k→16k telephony upsample: audioop.ratecv filter
+        # state carried across frames so boundaries stay continuous (stateless clicks).
+        self._resample_state = None
 
     def _resolve_audio_params(self):
         """Set encoding and sample rate from the telephony/web I/O provider (task_manager also
@@ -182,9 +188,17 @@ class GeminiTranscriber(BaseTranscriber):
 
     def _to_gemini_pcm(self, data):
         """Telephony audio to the 16 kHz PCM-16 the Live API requires: decode mulaw, then upsample."""
+        import audioop
+
         pcm = ulaw_to_pcm(data) if self.encoding == "mulaw" else data
         if self.sampling_rate != GEMINI_INPUT_SAMPLE_RATE:
-            pcm = resample(pcm, GEMINI_INPUT_SAMPLE_RATE, format="pcm", original_sample_rate=self.sampling_rate)
+            try:
+                pcm, self._resample_state = audioop.ratecv(
+                    pcm, 2, 1, self.sampling_rate, GEMINI_INPUT_SAMPLE_RATE, self._resample_state
+                )
+            except Exception:
+                pcm = resample(pcm, GEMINI_INPUT_SAMPLE_RATE, format="pcm", original_sample_rate=self.sampling_rate)
+                self._resample_state = None
         return pcm
 
     async def sender_stream(self, ws):
@@ -251,7 +265,7 @@ class GeminiTranscriber(BaseTranscriber):
         self.final_transcript = ""
         self.running_interim = ""
         self.is_transcript_sent_for_processing = False
-        self.turn_latencies.append(
+        self._upsert_turn_latency(
             {
                 "turn_id": self.current_turn_id,
                 "asr_start_epoch_ms": self.current_turn_start_time,
@@ -445,6 +459,7 @@ class GeminiTranscriber(BaseTranscriber):
     async def transcribe(self):
         """Stream until eos or shutdown, reopening a fresh session across the Live API's ~10 min cap."""
         start_time = timestamp_ms()
+        self._resample_state = None
         self.utterance_timeout_task = asyncio.create_task(self.monitor_utterance_timeout())
         try:
             while self.connection_on and not self._eos_received:

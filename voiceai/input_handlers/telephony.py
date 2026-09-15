@@ -8,14 +8,14 @@ import uuid
 from typing import Any
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
-from voiceai.errors import summarize_exception
-from voiceai.helpers.resilience import LoopFailure, iteration_guard
+from voiceai.input_handlers.exceptions import summarize_exception
+from voiceai.core.resilience import LoopFailure, iteration_guard, safe_task
 from voiceai.helpers.utils import create_ws_data_packet
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.output_handlers.default import OUTPUT_SEND_TIMEOUT_S
 from voiceai.output_handlers.socket_errors import is_socket_closed_error, is_teardown_race
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # Carrier media frames are 20 ms; batch this many (~200 ms) per transcriber packet.
@@ -99,8 +99,12 @@ class TelephonyInputHandler(DefaultInputHandler):
     async def stop_handler(self):
         logger.info("stopping handler")
         self.running = False
-        # Fire and forget disconnect_stream - don't block the disconnection flow
-        asyncio.create_task(self._safe_disconnect_stream())
+        # Fire and forget disconnect_stream - don't block the disconnection flow.
+        # safe_task retains the task and logs failures (bare create_task loses exceptions).
+        try:
+            safe_task(self._safe_disconnect_stream(), name="telephony_disconnect", logger=logger)
+        except RuntimeError:
+            asyncio.create_task(self._safe_disconnect_stream())
         logger.info("sleeping for 2 seconds so that whatever needs to pass is passed")
         await asyncio.sleep(2)
         try:
@@ -276,9 +280,7 @@ class TelephonyInputHandler(DefaultInputHandler):
                     f"{self._ignored_frame_preview(message, packet)}"
                 )
             else:
-                logger.debug(
-                    f"{self.io_provider} receiver ignoring non-telephony frame #{self._ignored_frame_count}"
-                )
+                logger.debug(f"{self.io_provider} receiver ignoring non-telephony frame #{self._ignored_frame_count}")
             return True
 
         event = packet["event"]

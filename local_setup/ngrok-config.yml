@@ -1,6 +1,16 @@
-region: us
-version: '2'
-authtoken: 3ImSgMJ059F9Lhj2jl893rsbQSU_5Yq679WGPAT3P9L4GiHdg
+# ngrok agent config (template — no secrets in repo).
+#
+# SECURITY 2026-09-12 (A11 hygiene): the live `authtoken` previously committed
+# here was REMOVED. Rotate it immediately:
+#   1. https://dashboard.ngrok.com/get-started/your-authtoken -> "Rotate Authtoken"
+#   2. Put the new token in your local `.env` as NGROK_AUTHTOKEN=<token>
+#      (`.env` is gitignored; see `.env.sample`). Never paste it into this file.
+#   3. Restart: `docker compose up ngrok`
+#
+# ngrok v3 reads NGROK_AUTHTOKEN from the container environment automatically
+# (docker-compose passes it through `env_file: .env`).
+# For local usage: export NGROK_AUTHTOKEN first, then run ngrok.
+version: '3'
 tunnels:
   twilio-app:
     addr: twilio-app:8001

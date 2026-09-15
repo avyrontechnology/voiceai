@@ -9,9 +9,11 @@ package-mode = false
 python = ">=3.10,<3.11"
 aiobotocore = "==3.8.0"
 aiofiles = "==23.2.1"
-aiohttp = "==3.14.1"
+aiohttp = "==3.14.3"
+audioop-lts = {version = ">=0.2.0", markers = "python_version >= \"3.13\""}
 azure-cognitiveservices-speech = "==1.40.0"
-fastapi = "==0.109.1"
+beanie = "==2.2.0"
+fastapi = "==0.115.6"
 google-cloud-speech = "==2.27.0"
 google-genai = ">=2.21.0,<2.22.0"
 groq = ">=0.4.0"

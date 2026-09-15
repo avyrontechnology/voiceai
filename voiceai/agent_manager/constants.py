@@ -1,0 +1,86 @@
+"""Module-level constants for the agent_manager submodule.
+
+Nothing in module code is hard-coded ad hoc: environment key names and
+their default values live here and are imported where needed. The reads
+themselves go through ``voiceai.core.environment`` (Constitution V), so
+missing-vs-empty-vs-garbage semantics stay identical to the legacy
+environment reads they replace.
+
+Float/int-typed knobs keep the legacy ``float(get_str(...))`` /
+``int(get_str(...))`` shape at the call site (raising ``ValueError`` on
+garbage exactly like the old float-parse did) instead of
+the raising ``get_float``/``get_int`` accessors.
+"""
+
+from __future__ import annotations
+
+from voiceai.constants import (
+    LANGUAGE_SWITCH_AUDIO_GAP_S,
+    LANGUAGE_SWITCH_DECIDE_TIMEOUT_S,
+    LANGUAGE_SWITCH_MAX_HOLD_S,
+    LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S,
+    LANGUAGE_SWITCH_SETTLE_MS,
+)
+
+# --- S2S transport ---
+S2S_ACK_INDEPENDENT_ENV = "S2S_ACK_INDEPENDENT"
+S2S_TALKO_ENCODING_ENV = "S2S_TALKO_ENCODING"
+
+#: Fallback raw strings for the S2S transport knobs (empty env still falls back via `or`).
+DEFAULT_S2S_ACK_INDEPENDENT = "1"
+DEFAULT_S2S_TALKO_ENCODING = "mulaw-8k"
+
+# --- Auxiliary LLM / prompts ---
+CHECK_FOR_COMPLETION_LLM_ENV = "CHECK_FOR_COMPLETION_LLM"
+VOICEMAIL_DETECTION_LLM_ENV = "VOICEMAIL_DETECTION_LLM"
+BACKCHANNELING_PRESETS_DIR_ENV = "BACKCHANNELING_PRESETS_DIR"
+PRE_CALL_WEBHOOK_DISPATCH_URL_ENV = "PRE_CALL_WEBHOOK_DISPATCH_URL"
+CALL_TRANSFER_WEBHOOK_URL_ENV = "CALL_TRANSFER_WEBHOOK_URL"
+
+#: Fallback model for voicemail detection.
+DEFAULT_VOICEMAIL_DETECTION_LLM = "gpt-4.1-mini"
+
+# --- Language identification ---
+LID_PROVIDER_ENV = "LID_PROVIDER"
+
+#: Fallback LID provider.
+DEFAULT_LID_PROVIDER = "sarvam"
+
+# --- RAG ---
+RAG_SERVER_URL_ENV = "RAG_SERVER_URL"
+
+#: Fallback RAG proxy server URL.
+DEFAULT_RAG_SERVER_URL = "http://localhost:8000"
+
+# --- S2S API keys ---
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+GOOGLE_API_KEY_ENV = "GOOGLE_API_KEY"
+OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+
+# --- Language-switch tuning (env key names) ---
+LANGUAGE_SWITCH_MAX_HOLD_S_ENV = "LANGUAGE_SWITCH_MAX_HOLD_S"
+LANGUAGE_SWITCH_DETECTOR_MIN_PROB_ENV = "LANGUAGE_SWITCH_DETECTOR_MIN_PROB"
+LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S_ENV = "LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S"
+LANGUAGE_SWITCH_DECIDE_TIMEOUT_S_ENV = "LANGUAGE_SWITCH_DECIDE_TIMEOUT_S"
+LANGUAGE_SWITCH_SETTLE_MS_ENV = "LANGUAGE_SWITCH_SETTLE_MS"
+LANGUAGE_SWITCH_AUDIO_GAP_S_ENV = "LANGUAGE_SWITCH_AUDIO_GAP_S"
+LANGUAGE_SWITCH_IDLE_FLUSH_S_ENV = "LANGUAGE_SWITCH_IDLE_FLUSH_S"
+LANGUAGE_SWITCH_MISMATCH_IDLE_FLUSH_S_ENV = "LANGUAGE_SWITCH_MISMATCH_IDLE_FLUSH_S"
+LANGUAGE_SWITCH_MIN_CONFIDENCE_ENV = "LANGUAGE_SWITCH_MIN_CONFIDENCE"
+LANGUAGE_SWITCH_CORROBORATED_MIN_CONFIDENCE_ENV = "LANGUAGE_SWITCH_CORROBORATED_MIN_CONFIDENCE"
+LANGUAGE_SWITCH_EXPLICIT_MIN_CONFIDENCE_ENV = "LANGUAGE_SWITCH_EXPLICIT_MIN_CONFIDENCE"
+
+# --- Language-switch tuning (default values) ---
+#: String fallbacks mirroring the legacy per-call env defaults.
+DEFAULT_LANGUAGE_SWITCH_MAX_HOLD_S = str(LANGUAGE_SWITCH_MAX_HOLD_S)
+DEFAULT_LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S = str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S)
+DEFAULT_LANGUAGE_SWITCH_DECIDE_TIMEOUT_S = str(LANGUAGE_SWITCH_DECIDE_TIMEOUT_S)
+DEFAULT_LANGUAGE_SWITCH_SETTLE_MS = str(LANGUAGE_SWITCH_SETTLE_MS)
+DEFAULT_LANGUAGE_SWITCH_AUDIO_GAP_S = str(LANGUAGE_SWITCH_AUDIO_GAP_S)
+
+#: Literal-string fallbacks, identical to the legacy env defaults.
+DEFAULT_LANGUAGE_SWITCH_DETECTOR_MIN_PROB = "0.8"
+DEFAULT_LANGUAGE_SWITCH_IDLE_FLUSH_S = "2.0"
+DEFAULT_LANGUAGE_SWITCH_MISMATCH_IDLE_FLUSH_S = "1.2"
+DEFAULT_LANGUAGE_SWITCH_MIN_CONFIDENCE = "0.7"
+DEFAULT_LANGUAGE_SWITCH_CORROBORATED_MIN_CONFIDENCE = "0.55"

@@ -16,9 +16,9 @@ from voiceai.helpers.utils import (
 from .llm import BaseLLM
 from .message_models import MessageFormatAdapter, strip_internal_keys
 from .types import APIParams, LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments, redact_secrets
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Chat-completions models that reject response_format={"type": "json_object"}: the pre-1106 snapshots
 # and the first o1 previews. Every other model gets JSON mode when a caller asks for it.
@@ -50,19 +50,36 @@ def _clean_rescue_answer(answer: str) -> str | None:
     return cleaned if cleaned else None
 
 
-def _strip_server_injected_params(tools):
-    """Drop server-owned ids (call_sid/stream_sid) from each tool schema so the model can't echo them."""
+def _strip_server_injected_params(tools: list[dict] | None) -> list[dict]:
+    """Drop server-owned ids (call_sid/stream_sid) from each tool schema so the model can't echo them.
+
+    Handles both chat-completions tools (``{"function": {"parameters": ...}}``) and legacy
+    tools (``{"name": ..., "parameters": ...}``); other shapes pass through untouched.
+    """
+    if not tools:
+        return []
     cleaned = []
     for tool in tools:
-        params = tool.get("function", {}).get("parameters")
+        if not isinstance(tool, dict):
+            cleaned.append(tool)
+            continue
+        func = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        if func is not None:
+            params = func.get("parameters")
+        else:
+            params = tool.get("parameters")
         props = params.get("properties") if isinstance(params, dict) else None
         if not props or not any(k in props for k in SERVER_OWNED_CALL_IDENTIFIERS):
             cleaned.append(tool)
             continue
         tool = copy.deepcopy(tool)
-        params = tool["function"]["parameters"]
+        params = (tool.get("function") or {}).get("parameters") if func is not None else tool.get("parameters")
+        if not isinstance(params, dict):
+            cleaned.append(tool)
+            continue
         for key in SERVER_OWNED_CALL_IDENTIFIERS:
-            params["properties"].pop(key, None)
+            if isinstance(params.get("properties"), dict):
+                params["properties"].pop(key, None)
             if isinstance(params.get("required"), list) and key in params["required"]:
                 params["required"].remove(key)
         cleaned.append(tool)
@@ -307,6 +324,17 @@ class OpenAICompatibleLLM(BaseLLM):
         """
         return self.async_client
 
+    @staticmethod
+    def _is_ephemeral_system_message(content: str) -> bool:
+        """Trailing one-off system turns (RAG context, event hints) that must not chain.
+
+        With previous_response_id set, the server retains prior inputs, so resending a fresh RAG
+        block each turn accumulates stale contexts as residual, and a one-off event hint would persist
+        for every later turn. Both force a full-history turn.
+        """
+        text = content or ""
+        return text.startswith("Knowledge base for the latest user message:") or text.startswith("[Event:")
+
     def _build_responses_input(self, messages):
         """Build (instructions, input_items) for Responses API.
 
@@ -325,6 +353,15 @@ class OpenAICompatibleLLM(BaseLLM):
                 logger.info("Pending tool call outputs missing, sending full context")
                 self.previous_response_id = None
                 chained = False
+        if chained:
+            # Ephemeral trailing system (fresh RAG / one-off event hint) must not ride a chained delta:
+            # the RAG block would stack as residual and the event hint would persist server-side.
+            for m in messages:
+                if m.get("role") == ChatRole.SYSTEM and self._is_ephemeral_system_message(m.get("content") or ""):
+                    logger.info("Ephemeral system message present, sending full context")
+                    self.previous_response_id = None
+                    chained = False
+                    break
         if chained:
             instructions, input_items = self._extract_new_input(messages)
         else:

@@ -10,9 +10,7 @@ OWNER_PASSWORD = "correct-horse-1"
 
 async def signup_owner(client, email: str = OWNER_EMAIL):
     """Register the first (owner) user on a fresh app. Asserts success."""
-    resp = await client.post(
-        "/auth/signup", json={"email": email, "name": "Owner", "password": OWNER_PASSWORD}
-    )
+    resp = await client.post("/auth/signup", json={"email": email, "name": "Owner", "password": OWNER_PASSWORD})
     assert resp.status_code == 201, resp.text
     assert resp.json()["role"] == "owner"
     return resp.json()

@@ -1,4 +1,3 @@
-import os
 import json
 import re
 from urllib.parse import urlparse
@@ -18,15 +17,22 @@ from openai import (
 )
 
 from voiceai.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, canonical_model, default_reasoning_effort
+from voiceai.core.environment import get_str
 from voiceai.enums import Verbosity
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
+from .constants import (
+    AZURE_OPENAI_API_KEY_ENV,
+    AZURE_OPENAI_API_VERSION_ENV,
+    AZURE_OPENAI_ENDPOINT_ENV,
+    DEFAULT_AZURE_OPENAI_API_VERSION,
+)
 from .openai_base import OpenAICompatibleLLM
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import LLMStreamChunk, LatencyData
 from .message_models import strip_internal_keys
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -85,9 +91,9 @@ class AzureLLM(OpenAICompatibleLLM):
         self.model_args.update({max_tokens_key: self.max_tokens, "temperature": self.temperature, "model": self.model})
         self.model_args["service_tier"] = kwargs.get("service_tier", "default")
 
-        azure_endpoint = kwargs.get("base_url", os.getenv("AZURE_OPENAI_ENDPOINT"))
-        api_key = kwargs.get("llm_key", os.getenv("AZURE_OPENAI_API_KEY"))
-        api_version = kwargs.get("api_version", os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"))
+        azure_endpoint = kwargs.get("base_url", get_str(AZURE_OPENAI_ENDPOINT_ENV))
+        api_key = kwargs.get("llm_key", get_str(AZURE_OPENAI_API_KEY_ENV))
+        api_version = kwargs.get("api_version", get_str(AZURE_OPENAI_API_VERSION_ENV, DEFAULT_AZURE_OPENAI_API_VERSION))
 
         http_client = get_shared_http_client(base_url=azure_endpoint, http2=False)
 
@@ -245,7 +251,7 @@ class AzureLLM(OpenAICompatibleLLM):
                 first_token_time = now
                 self.started_streaming = True
                 latency_data = LatencyData(
-                    sequence_id=meta_info.get("sequence_id"),
+                    sequence_id=meta_info.get("sequence_id") if meta_info else None,
                     first_token_latency_ms=first_token_time - start_time,
                 )
 

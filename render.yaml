@@ -1,7 +1,9 @@
 # Render Blueprint — voiceai Talko trunk (free tier for testing).
 # Deploy: dashboard.render.com → New → Blueprint → point at this repo.
 # The trunk dials through talko-service; the engine reaches it via TALKO_TRUNK_URL.
-# NOTE: free services sleep after ~15 min idle (cold start 30-50s).
+# NOTE: free services sleep after ~15 min idle (cold start 30-50s) — testing only, not for
+# production traffic (use Starter+ with minInstances: 1 to avoid sleep/cold-start).
+# A12 rollback: if the free tier sleeps mid-demo, upgrade plan to `starter` (no code change).
 services:
   - type: web
     name: voiceai-talko-trunk
@@ -20,3 +22,14 @@ services:
         value: "917965263087"
       - key: TALKO_PARTNER_ID
         value: "2"
+      # Prod auth gates (fail-closed): dial needs a key, carrier callbacks need signatures.
+      - key: TELEPHONY_API_KEY
+        sync: false
+      - key: VOICE_STREAM_SECRET
+        sync: false
+      - key: CARRIER_VALIDATE_SIGNATURES
+        value: "1"
+      - key: ALLOW_OPEN_DIAL
+        value: "0"
+      - key: ALLOW_UNSIGNED_CARRIER_CALLBACK
+        value: "0"

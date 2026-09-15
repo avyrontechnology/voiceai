@@ -1,23 +1,24 @@
 import asyncio
 import json
-import os
 import audioop
 import time
 import uuid
 from dotenv import load_dotenv
 from .default import DefaultOutputHandler
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import calculate_audio_duration
+from voiceai.output_handlers.constants import DEFAULT_OUTPUT_SEND_TIMEOUT_S, OUTPUT_SEND_TIMEOUT_S_ENV
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # A carrier media socket can go half-dead (TCP stops delivering ACKs, no close
 # frame ever arrives) without raising — a bare `websocket.send_text()` then
 # never returns. Bound every send so a dead socket fails fast instead of
 # freezing the caller (e.g. __cleanup_downstream_tasks) forever.
-OUTPUT_SEND_TIMEOUT_S = float(os.getenv("OUTPUT_SEND_TIMEOUT_S", "5"))
+OUTPUT_SEND_TIMEOUT_S = float(get_str(OUTPUT_SEND_TIMEOUT_S_ENV, DEFAULT_OUTPUT_SEND_TIMEOUT_S))
 
 _odd_pcm_chunks = 0
 

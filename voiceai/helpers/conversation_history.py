@@ -1,8 +1,8 @@
 import copy
 from voiceai.enums import ChatRole
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 _UNHEARD_ROLES = frozenset({ChatRole.ASSISTANT, ChatRole.TOOL})
 
@@ -278,8 +278,11 @@ class ConversationHistory:
         return None
 
     def get_copy(self) -> list[dict]:
-        self._sanitize_tool_messages(self._messages)
-        return copy.deepcopy([m for m in self._messages if not m.get("exclude_from_llm")])
+        # Sanitize a deep copy: _sanitize_tool_messages pops tool_calls and drops rows in place,
+        # which must never mutate the live self._messages (callers hold the history across turns).
+        working = copy.deepcopy(self._messages)
+        self._sanitize_tool_messages(working)
+        return [m for m in working if not m.get("exclude_from_llm")]
 
     @staticmethod
     def _sanitize_tool_messages(msgs: list[dict]):

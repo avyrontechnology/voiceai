@@ -1,4 +1,3 @@
-import os
 import time
 import asyncio
 import threading
@@ -10,11 +9,11 @@ from google.cloud import speech_v1p1beta1 as speech
 
 from .base_transcriber import BaseTranscriber
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class GoogleTranscriber(BaseTranscriber):
@@ -63,6 +62,11 @@ class GoogleTranscriber(BaseTranscriber):
         self._audio_q = queue.Queue()
         self._running = False
         self._grpc_thread = None
+        # Session rotation (Live-API-cap style): set on EOS so the transcribe loop
+        # knows a stream end is teardown, not a cap to rotate over.
+        self._eos_received = False
+        # Last interim text for _flush_pending_final on rotation (mid-turn cap).
+        self._last_interim = ""
 
         # Connection state management
         self.connection_start_time = None
@@ -155,8 +159,8 @@ class GoogleTranscriber(BaseTranscriber):
 
             self._running = True
 
-            # Create transcription task like Deepgram
-            self.transcription_task = asyncio.create_task(self._transcribe_wrapper())
+            # Create transcription task like Deepgram (rotation-aware transcribe loop).
+            self.transcription_task = asyncio.create_task(self.transcribe())
 
         except Exception as e:
             logger.exception(f"Error starting GoogleTranscriber: {e}")
@@ -166,26 +170,78 @@ class GoogleTranscriber(BaseTranscriber):
             meta["connection_error"] = self.connection_error
             await self.transcriber_output_queue.put(create_ws_data_packet("transcriber_connection_closed", meta))
 
-    async def _transcribe_wrapper(self):
-        """Wrapper to make gRPC streaming fit async pattern better"""
+    async def transcribe(self):
+        """Stream until eos/shutdown, rotating the gRPC session while connection_on.
+
+        Mirrors GeminiTranscriber.transcribe: the sender runs once outside the loop
+        feeding _audio_q, each loop iteration runs one blocking streaming_recognize
+        session in a thread, and a server-side stream end (cap/transient) flushes the
+        pending turn and rotates instead of ending the call.
+        """
+        sender_task = None
         try:
-            # spawn the blocking gRPC consumer in a background thread
-            self._grpc_thread = threading.Thread(target=self._run_grpc_stream, daemon=True)
-            self._grpc_thread.start()
+            sender_task = asyncio.create_task(self._send_audio_to_transcriber())
+            while self.connection_on and not self._eos_received:
+                loop = asyncio.get_event_loop()
+                try:
+                    await loop.run_in_executor(None, self._run_grpc_session_once)
+                except Exception as e:
+                    logger.error(f"Error in Google gRPC session: {e}")
+                    self.connection_error = str(e)
+                # Server closed the stream (cap/transient) but the call is alive:
+                # flush the mid-turn partial so no words are lost, then rotate.
+                reconnect = self.connection_on and not self._eos_received and not self.connection_error
+                # A session error without connection_on cleared is also a transient to
+                # rotate over (cap/unavailable), unless EOS already arrived.
+                if self.connection_error and self.connection_on and not self._eos_received:
+                    # Classify for observability (task_manager turns connection_error
+                    # into TranscriberError); keep raw string on connection_error.
+                    try:
+                        from voiceai.transcriber.exceptions import classify_exception as _classify
 
-            # spawn async sender to read from input_queue
-            await self._send_audio_to_transcriber()
-
+                        _classified = _classify(
+                            Exception(self.connection_error),
+                            component="transcriber",
+                            provider="google",
+                            model=self.model,
+                        )
+                        logger.warning(f"Google transient classified as {_classified.code}: {self.connection_error}")
+                    except Exception:
+                        pass
+                    self.connection_error = None
+                    reconnect = True
+                if reconnect:
+                    flushed = self._flush_pending_final()
+                    if flushed is not None:
+                        self._enqueue_output(flushed["data"], meta=flushed["meta"])
+                    logger.info("Rotating Google Speech session (cap reached or transient drop)")
+                    continue
+                break
         except Exception as e:
-            logger.error(f"Error in transcription wrapper: {e}")
+            logger.error(f"Error in Google transcribe loop: {e}")
             await self.toggle_connection()
         finally:
-            # Ensure cleanup
+            if sender_task is not None and not sender_task.done():
+                sender_task.cancel()
             if hasattr(self, "transcription_task") and self.transcription_task:
                 try:
-                    self.transcription_task.cancel()
+                    current = asyncio.current_task()
+                    if self.transcription_task is not current:
+                        self.transcription_task.cancel()
                 except Exception:
                     pass
+            # Push terminal sentinel like the other providers.
+            try:
+                meta = dict(self.meta_info or {})
+                if self.connection_error:
+                    meta["connection_error"] = self.connection_error
+                self._enqueue_output("transcriber_connection_closed", meta=meta)
+            except Exception:
+                pass
+
+    async def _transcribe_wrapper(self):
+        """Legacy entry: delegate to the rotation-aware transcribe loop."""
+        await self.transcribe()
 
     async def _send_audio_to_transcriber(self):
         """Reads packets from input_queue and forwards to gRPC thread via _audio_q."""
@@ -212,6 +268,7 @@ class GoogleTranscriber(BaseTranscriber):
 
                 # check EOS
                 if ws_data_packet.get("meta_info", {}).get("eos") is True:
+                    self._eos_received = True
                     # put sentinel so blocking generator ends gracefully
                     self._audio_q.put(None)
                     break
@@ -276,10 +333,12 @@ class GoogleTranscriber(BaseTranscriber):
                 }
                 if final_transcript:
                     entry["final_transcript"] = final_transcript
-                self.turn_latencies.append(entry)
-                # also expose on meta_info for immediate consumption
+                self._upsert_turn_latency(entry)
+                # also expose on meta_info for immediate consumption (copy, not alias)
                 try:
-                    self.meta_info["turn_latencies"] = self.turn_latencies
+                    import copy as _copy
+
+                    self.meta_info["turn_latencies"] = _copy.deepcopy(self.turn_latencies)
                 except Exception:
                     pass
                 # reset turn tracking
@@ -289,9 +348,33 @@ class GoogleTranscriber(BaseTranscriber):
         except Exception:
             logger.exception("Error appending turn latency")
 
-    def _run_grpc_stream(self):
+    def _flush_pending_final(self):
+        """On session rotation mid-turn, don't lose the partial: publish it as the turn.
+
+        Mirrors GeminiTranscriber._flush_pending_final. Returns {"data","meta"} or None.
         """
-        Enhanced gRPC streaming with better error handling.
+        text = (self._last_interim or "").strip()
+        if text and self.current_turn_id is not None and not self.is_transcript_sent_for_processing:
+            try:
+                self._append_turn_latency(text)
+            except Exception:
+                pass
+            data = {"type": "transcript", "content": text, "force_finalized": True}
+            meta = dict(self.meta_info or {})
+            # Mark claimed so a late final for the rotated session cannot duplicate.
+            self.is_transcript_sent_for_processing = True
+            self._last_interim = ""
+            return {"data": data, "meta": meta}
+        return None
+
+    def _run_grpc_stream(self):
+        """Legacy single-entry wrapper: one session (rotation lives in transcribe())."""
+        return self._run_grpc_session_once()
+
+    def _run_grpc_session_once(self):
+        """
+        One blocking streaming_recognize session (no terminal sentinel).
+        The transcribe() loop decides rotate-vs-teardown and emits the sentinel.
         Blocking thread target that runs google streaming_recognize and iterates responses.
         Pushes interim and final transcripts back onto transcriber_output_queue (thread-safely).
         """
@@ -337,7 +420,7 @@ class GoogleTranscriber(BaseTranscriber):
 
                 # iterate responses synchronously
                 for response in responses:
-                    if not self._running:
+                    if not self._running or not self.connection_on:
                         break
                     if not response.results:
                         continue
@@ -375,28 +458,21 @@ class GoogleTranscriber(BaseTranscriber):
 
                             # append to turn_latencies (A)
                             self._append_turn_latency(transcript)
+                            self._last_interim = ""
 
                             data = {"type": "transcript", "content": transcript}
                             self._enqueue_output(data, meta=self.meta_info)
                         else:
+                            self._last_interim = transcript
                             data = {"type": "interim_transcript_received", "content": transcript}
                             self._enqueue_output(data, meta=self.meta_info)
 
-                # After streaming ends on Google side, send transcriber_connection_closed sentinel
-                closed_meta = (self.meta_info or {}).copy()
-                if "transcriber_total_stream_duration" not in closed_meta and "transcriber_start_time" in closed_meta:
-                    try:
-                        closed_meta["transcriber_total_stream_duration"] = (
-                            time.perf_counter() - closed_meta["transcriber_start_time"]
-                        )
-                    except Exception:
-                        pass
-                if self.connection_error:
-                    closed_meta["connection_error"] = self.connection_error
-                self._enqueue_output("transcriber_connection_closed", meta=closed_meta)
+                # No terminal sentinel here: transcribe() owns rotate-vs-teardown so a
+                # mid-call cap rotates instead of ending the call.
 
             except Exception as stream_error:
-                # Specific gRPC error handling
+                # Specific gRPC error handling — no terminal sentinel here: transcribe()
+                # owns rotate-vs-teardown (a cap must rotate, not end the call).
                 error_msg = f"Google streaming error: {stream_error}"
                 logger.error(error_msg)
 
@@ -406,24 +482,13 @@ class GoogleTranscriber(BaseTranscriber):
                 elif "unavailable" in str(stream_error).lower():
                     logger.warning("Service unavailable - connection issue")
 
-                # Send error to output
                 self.connection_error = str(stream_error)
-                err_meta = (self.meta_info or {}).copy()
-                err_meta["error"] = str(stream_error)
-                err_meta["error_type"] = "streaming_error"
-                err_meta["connection_error"] = self.connection_error
-                self._enqueue_output("transcriber_connection_closed", meta=err_meta)
                 return
 
         except Exception as e:
-            # Configuration or setup error
+            # Configuration or setup error — transcribe() emits the single sentinel.
             logger.exception(f"Google transcriber setup error: {e}")
             self.connection_error = str(e)
-            err_meta = (self.meta_info or {}).copy()
-            err_meta["error"] = str(e)
-            err_meta["error_type"] = "setup_error"
-            err_meta["connection_error"] = self.connection_error
-            self._enqueue_output("transcriber_connection_closed", meta=err_meta)
         finally:
             self.connection_authenticated = False
 
@@ -434,6 +499,7 @@ class GoogleTranscriber(BaseTranscriber):
         """
         logger.info("toggle_connection called on GoogleTranscriber")
         self._running = False
+        self.connection_on = False
         self.connection_authenticated = False
 
         # Cancel transcription task if running
@@ -449,10 +515,11 @@ class GoogleTranscriber(BaseTranscriber):
         except Exception:
             pass
 
-        # Wait for thread cleanup with timeout
+        # Wait for thread cleanup with timeout — join() blocks up to 2s, so it must
+        # run off the event loop or every other call on this worker stalls.
         if hasattr(self, "_grpc_thread") and self._grpc_thread and self._grpc_thread.is_alive():
             try:
-                self._grpc_thread.join(timeout=2.0)
+                await asyncio.to_thread(self._grpc_thread.join, 2.0)
                 if self._grpc_thread.is_alive():
                     logger.warning("gRPC thread did not terminate within timeout")
             except Exception as e:
@@ -466,6 +533,7 @@ class GoogleTranscriber(BaseTranscriber):
         """
         try:
             self._running = False
+            self.connection_on = False
             self.connection_authenticated = False
 
             # Signal thread to stop

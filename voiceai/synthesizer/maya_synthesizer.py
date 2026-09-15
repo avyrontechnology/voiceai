@@ -7,7 +7,6 @@ An utterance ends with exactly one terminator: `end`, or `cancelled` if interrup
 
 import asyncio
 import json
-import os
 import re
 import time
 
@@ -17,12 +16,18 @@ from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
 from voiceai.constants import MAYA_TTS_SUPPORTED_LANGUAGES, MAYA_TTS_SUPPORTED_VOICES
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import pcm_to_ulaw, pcm_to_wav_bytes, resample
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEFAULT_MAYA_API_HOST,
+    MAYA_API_HOST_ENV,
+    MAYA_API_KEY_ENV,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 MAYA_NATIVE_SAMPLE_RATE = 24000
 MULAW_SAMPLE_RATE = 8000
@@ -53,7 +58,7 @@ class MayaSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["MAYA_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(MAYA_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         # voice_id accepted so configs shaped like the other providers still resolve.
         self.voice = self._normalise_voice(voice_id or voice)
         self.model = model
@@ -66,7 +71,7 @@ class MayaSynthesizer(StreamSynthesizer):
         self.target_sample_rate = MULAW_SAMPLE_RATE if self.use_mulaw else int(sampling_rate)
         self.sampling_rate = self.target_sample_rate
 
-        self.maya_host = os.getenv("MAYA_API_HOST", "tts.mayaresearch.ai")
+        self.maya_host = get_str(MAYA_API_HOST_ENV, DEFAULT_MAYA_API_HOST)
         self.api_url = f"https://{self.maya_host}/v1/tts"
         self.ws_url = f"wss://{self.maya_host}/v1/tts/stream"
 
@@ -187,49 +192,50 @@ class MayaSynthesizer(StreamSynthesizer):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                return
-
-            await self._wait_for_ws()
-
-            # The wait above can span a barge-in, which retires this sequence without
-            # cancelling the task. Re-check before anything reaches the socket, including the
-            # flush branch: priming opens an utterance, so Maya would answer it with `end`.
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
-                await self.flush_synthesizer_stream()
-                return
-
-            if text != "":
-                try:
-                    if self.ws_send_time is None:
-                        self.ws_send_time = time.perf_counter()
-                    self._discard_audio = False
-                    await self._send_json(self.form_payload(text))
-                    self._turn_has_text = True
-                except Exception as e:
-                    logger.error(f"Error sending chunk to Maya: {e}")
-                    self.connection_error = str(e)
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
                     return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                # Reset before sending: a stale True would make the next empty turn skip priming.
-                needs_priming = not self._turn_has_text
-                self._turn_has_text = False
-                try:
-                    if needs_priming:
-                        # Maya only answers a flush with `end` when an utterance is open, and an
-                        # empty text frame does not open one -- whitespace does, with no audio.
-                        await self._send_json(self.form_payload(" "))
-                    await self._send_json({"type": "flush"})
+                await self._wait_for_ws()
+
+                # The wait above can span a barge-in, which retires this sequence without
+                # cancelling the task. Re-check before anything reaches the socket, including the
+                # flush branch: priming opens an utterance, so Maya would answer it with `end`.
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing (inner): sequence_id {sequence_id} not current")
+                    await self.flush_synthesizer_stream()
+                    return
+
+                if text != "":
+                    try:
+                        if self.ws_send_time is None:
+                            self.ws_send_time = time.perf_counter()
+                        self._discard_audio = False
+                        await self._send_json(self.form_payload(text))
+                        self._turn_has_text = True
+                    except Exception as e:
+                        logger.error(f"Error sending chunk to Maya: {e}")
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    # Reset before sending: a stale True would make the next empty turn skip priming.
+                    needs_priming = not self._turn_has_text
                     self._turn_has_text = False
-                except Exception as e:
-                    logger.error(f"Error sending flush to Maya: {e}")
-                    self.connection_error = str(e)
+                    try:
+                        if needs_priming:
+                            # Maya only answers a flush with `end` when an utterance is open, and an
+                            # empty text frame does not open one -- whitespace does, with no audio.
+                            await self._send_json(self.form_payload(" "))
+                        await self._send_json({"type": "flush"})
+                        self._turn_has_text = False
+                    except Exception as e:
+                        logger.error(f"Error sending flush to Maya: {e}")
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Maya sender task was cancelled.")

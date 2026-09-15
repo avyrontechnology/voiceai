@@ -10,6 +10,9 @@ _lock = threading.Lock()
 
 
 def get_shared_http_client(base_url: str | None = None, http2: bool = True) -> httpx.AsyncClient:
+    # base_url is part of the key so a customer endpoint never shares a pool with the
+    # platform endpoint (isolation), but it is not passed to AsyncClient: the SDKs use
+    # absolute URLs, so a client-level base_url would only break them.
     key = (base_url, http2)
     client = _pool.get(key)
     if client is None:
@@ -61,3 +64,39 @@ async def get_shared_aiohttp_session() -> aiohttp.ClientSession:
             if dead_id != loop_id and dead.closed:
                 _aiohttp_sessions.pop(dead_id, None)
     return session
+
+
+async def aclose_shared_http_clients() -> None:
+    """Close every pooled async client (process teardown / tests). Clears the pool."""
+    with _lock:
+        clients = list(_pool.values())
+        _pool.clear()
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
+def close_shared_sync_clients() -> None:
+    """Close every pooled sync client. Clears the pool."""
+    with _lock:
+        clients = list(_sync_pool.values())
+        _sync_pool.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+async def aclose_shared_aiohttp_sessions() -> None:
+    """Close every pooled aiohttp session (loop teardown)."""
+    sessions = list(_aiohttp_sessions.values())
+    _aiohttp_sessions.clear()
+    for session in sessions:
+        try:
+            if not session.closed:
+                await session.close()
+        except Exception:
+            pass

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 import traceback
 from dotenv import load_dotenv
@@ -9,7 +8,9 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
-from voiceai.helpers.logger_config import configure_logger
+from .constants import SONIOX_API_KEY_ENV_KEY, SONIOX_HOST_ENV_KEY
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import build_soniox_config, create_ws_data_packet, soniox_ws_url, timestamp_ms
 from voiceai.enums import TelephonyProvider
@@ -20,7 +21,7 @@ from voiceai.constants import (
     SONIOX_WEBSOCKET_HOST,
 )
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -55,8 +56,8 @@ class SonioxTranscriber(BaseTranscriber):
         self.transcriber_output_queue = output_queue
         self.connected_via_dashboard = kwargs.get("enforce_streaming", True)
 
-        self.api_key = kwargs.get("transcriber_key", os.getenv("SONIOX_API_KEY"))
-        self.soniox_host = os.getenv("SONIOX_HOST", SONIOX_WEBSOCKET_HOST)
+        self.api_key = kwargs.get("transcriber_key", get_str(SONIOX_API_KEY_ENV_KEY))
+        self.soniox_host = get_str(SONIOX_HOST_ENV_KEY, SONIOX_WEBSOCKET_HOST)
 
         # Soniox uses semantic endpoint detection (not a pure silence timer). Leave its own
         # default delay (~2s) unless explicitly tuned, so a brief pause mid-thought isn't cut off.
@@ -228,7 +229,7 @@ class SonioxTranscriber(BaseTranscriber):
         self.current_turn_interim_details = []
         self.final_transcript = ""
         self.is_transcript_sent_for_processing = False
-        self.turn_latencies.append(
+        self._upsert_turn_latency(
             {
                 "turn_id": self.current_turn_id,
                 "asr_start_epoch_ms": self.current_turn_start_time,

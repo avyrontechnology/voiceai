@@ -1,13 +1,14 @@
 import asyncio
 import json
-import os
 import requests
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
+from voiceai.core.environment import get_str
+from voiceai.input_handlers.constants import VOBIZ_API_KEY_ENV, VOBIZ_API_SECRET_ENV
 from voiceai.input_handlers.telephony import TelephonyInputHandler
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -53,8 +54,8 @@ class VobizInputHandler(TelephonyInputHandler):
                 except Exception as stop_err:
                     logger.info(f"Could not send vobiz stop event: {stop_err}")
 
-            api_key = self.auth_credentials.get("auth_id") or os.getenv("VOBIZ_API_KEY")
-            api_secret = self.auth_credentials.get("auth_token") or os.getenv("VOBIZ_API_SECRET")
+            api_key = self.auth_credentials.get("auth_id") or get_str(VOBIZ_API_KEY_ENV)
+            api_secret = self.auth_credentials.get("auth_token") or get_str(VOBIZ_API_SECRET_ENV)
             call_uuid = self.call_sid
 
             if api_key and call_uuid:

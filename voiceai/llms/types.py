@@ -6,8 +6,9 @@ from typing import Any, List, Mapping, Optional, Union
 from pydantic import BaseModel, ConfigDict
 
 from voiceai.enums import ToolScope
+from voiceai.otobaai_logger import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class APIParams(BaseModel):
@@ -186,3 +187,60 @@ class LLMStreamChunk(BaseModel):
     cached_tokens: Optional[int] = None
     overflowed: bool = False
     reasoning_content: Optional[str] = None
+
+
+def repair_tool_history(messages: list) -> list:
+    """Drop orphaned tool turns left by a fixed-window slice.
+
+    ``history[-50:]`` can cut between an assistant ``tool_calls`` turn and its
+    ``tool`` outputs (orphan at the slice head) or leave a trailing assistant
+    tool request with no outputs (400 on chat completions). Repair by dropping
+    leading ``tool`` messages with no parent assistant in the window, stripping
+    intermediate assistant ``tool_calls`` with no outputs, and dropping a trailing
+    orphan assistant tool request. Never raises; returns the repaired list.
+    """
+    if not messages:
+        return messages
+    assistant_ids = {
+        tc.get("id")
+        for m in messages
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")
+        for tc in (m.get("tool_calls") or [])
+        if isinstance(tc, dict) and tc.get("id")
+    }
+    start = 0
+    while start < len(messages):
+        head = messages[start]
+        if not isinstance(head, dict) or head.get("role") != "tool":
+            break
+        if head.get("tool_call_id") in assistant_ids:
+            break
+        start += 1
+    repaired = list(messages[start:])
+    if not repaired:
+        return repaired
+    tool_ids = {m.get("tool_call_id") for m in repaired if isinstance(m, dict) and m.get("role") == "tool"}
+    # Strip intermediate assistant tool_calls with no outputs (keep text if any).
+    cleaned: list = []
+    for m in repaired:
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls"):
+            ids = {tc.get("id") for tc in (m.get("tool_calls") or []) if isinstance(tc, dict)}
+            if ids and not (ids & tool_ids):
+                # Trailing position: drop the whole turn; intermediate: keep text only.
+                if m.get("content"):
+                    cleaned.append({k: v for k, v in m.items() if k != "tool_calls"})
+                continue
+        cleaned.append(m)
+    # A trailing assistant tool request that survived (e.g. empty content) is still
+    # invalid without outputs — drop it so the request never 400s.
+    while (
+        cleaned
+        and isinstance(cleaned[-1], dict)
+        and cleaned[-1].get("role") == "assistant"
+        and cleaned[-1].get("tool_calls")
+    ):
+        ids = {tc.get("id") for tc in (cleaned[-1].get("tool_calls") or []) if isinstance(tc, dict)}
+        if ids & tool_ids:
+            break
+        cleaned = cleaned[:-1]
+    return cleaned

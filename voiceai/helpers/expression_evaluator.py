@@ -8,9 +8,9 @@ import operator as op
 from typing import Any, Optional
 
 from voiceai.enums import ExpressionOperator, ExpressionLogic, EdgeConditionType, VariableType
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 _MISSING = object()
 
@@ -25,9 +25,26 @@ _COMPARISON_OPS = {
 
 
 def resolve_variable(context_data: dict, path: str) -> Any:
-    """Dot-notation lookup. Returns _MISSING if not found."""
+    """Dot/bracket lookup unified on utils.resolve_variable_path. Returns _MISSING if not found.
+
+    Delegates to the prompt renderer so ``a.b.0``, ``a[b][0]`` and JSON-string containers resolve
+    identically in routing and in prompts. Dict membership (``part not in current``) is the shared
+    primitive on both sides.
+    """
+    try:
+        from voiceai.helpers.utils import resolve_variable_path as _resolve_path
+    except ImportError:
+        _resolve_path = None
+    if _resolve_path is not None:
+        try:
+            found, value = _resolve_path(path, context_data if isinstance(context_data, dict) else {})
+            return value if found else _MISSING
+        except Exception:
+            return _MISSING
     current = context_data
-    for segment in path.split("."):
+    for segment in (path or "").replace("[", ".").replace("]", "").split("."):
+        if not segment:
+            continue
         if isinstance(current, dict) and segment in current:
             current = current[segment]
         else:

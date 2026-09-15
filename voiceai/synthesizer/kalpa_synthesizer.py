@@ -27,7 +27,6 @@ Flow
 import asyncio
 import base64
 import json
-import os
 import time
 from collections import deque
 
@@ -36,12 +35,18 @@ import websockets
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import audio_to_mulaw8k, pcm_to_ulaw, resample
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEFAULT_KALPA_API_HOST,
+    KALPA_API_HOST_ENV,
+    KALPA_API_KEY_ENV,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # The session's true rate arrives in sessionCreated; this is the documented default.
 KALPA_NATIVE_SAMPLE_RATE = 24000
@@ -98,7 +103,7 @@ class KalpaSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["KALPA_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(KALPA_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         if not self.api_key:
             raise ValueError("Kalpa API key is required, either as synthesizer_key or KALPA_API_KEY")
 
@@ -134,7 +139,7 @@ class KalpaSynthesizer(StreamSynthesizer):
         if caching:
             self.cache = InmemoryScalarCache()
 
-        self.kalpa_host = os.getenv("KALPA_API_HOST", "api.kalpalabs.ai")
+        self.kalpa_host = get_str(KALPA_API_HOST_ENV, DEFAULT_KALPA_API_HOST)
 
         # Fail fast on a misconfigured agent rather than mid-call.
         self._validate_options()
@@ -843,7 +848,12 @@ class KalpaSynthesizer(StreamSynthesizer):
             self.connection_error = str(e)
             return None
         except InvalidHandshake as e:
-            logger.error(f"Kalpa TTS handshake failed: {e}")
+            error_msg = str(e)
+            if "401" in error_msg or "403" in error_msg:
+                logger.error(f"Kalpa TTS authentication failed: {e}")
+            else:
+                logger.error(f"Kalpa TTS handshake failed: {e}")
+            self.connection_error = str(e)
             return None
         except Exception as e:
             logger.error(f"Failed to connect to Kalpa TTS: {e}")

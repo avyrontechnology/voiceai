@@ -2,10 +2,10 @@ import json
 import time
 import uuid
 from dotenv import load_dotenv
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseTranscriber:

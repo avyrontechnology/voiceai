@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-import os
 import json
 import base64
 import time
@@ -11,14 +10,16 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, ConnectionClosed
 
 from .base_transcriber import BaseTranscriber
+from .constants import DEFAULT_ELEVENLABS_API_HOST, ELEVENLABS_API_HOST_ENV_KEY, ELEVENLABS_API_KEY_ENV_KEY
 from voiceai.constants import ELEVENLABS_REALTIME_MAX_KEYTERMS
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -53,8 +54,8 @@ class ElevenLabsTranscriber(BaseTranscriber):
         self.model = model
         self.sampling_rate = 16000
         self.encoding = encoding
-        self.api_key = kwargs.get("transcriber_key", os.getenv("ELEVENLABS_API_KEY"))
-        self.elevenlabs_host = os.getenv("ELEVENLABS_API_HOST", "api.elevenlabs.io")
+        self.api_key = kwargs.get("transcriber_key", get_str(ELEVENLABS_API_KEY_ENV_KEY))
+        self.elevenlabs_host = get_str(ELEVENLABS_API_HOST_ENV_KEY, DEFAULT_ELEVENLABS_API_HOST)
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
         self.transcription_cursor = 0.0
@@ -224,11 +225,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                 self.current_turn_interim_details
             )
 
-            self.turn_latencies.append(
+            self._upsert_turn_latency(
                 {
                     "turn_id": self.current_turn_id,
                     "sequence_id": self.current_turn_id,
-                    "interim_details": self.current_turn_interim_details,
+                    "interim_details": list(self.current_turn_interim_details),
                     "first_interim_to_final_ms": first_interim_to_final_ms,
                     "last_interim_to_final_ms": last_interim_to_final_ms,
                     "force_finalized": True,
@@ -469,11 +470,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
 
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "asr_start_epoch_ms": self.speech_start_time,
@@ -519,11 +520,11 @@ class ElevenLabsTranscriber(BaseTranscriber):
                                 self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
                             )
 
-                            self.turn_latencies.append(
+                            self._upsert_turn_latency(
                                 {
                                     "turn_id": self.current_turn_id,
                                     "sequence_id": self.current_turn_id,
-                                    "interim_details": self.current_turn_interim_details,
+                                    "interim_details": list(self.current_turn_interim_details),
                                     "first_interim_to_final_ms": first_interim_to_final_ms,
                                     "last_interim_to_final_ms": last_interim_to_final_ms,
                                     "words": words,

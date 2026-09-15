@@ -50,7 +50,10 @@ async def test_dial_posts_agent_and_number(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     execution = await dial_via_talko(
-        store, agent_id="agent_1", to_number="+9191", from_number="91804",
+        store,
+        agent_id="agent_1",
+        to_number="+9191",
+        from_number="91804",
         trunk_url="http://trunk:8004",
     )
     assert execution.status == ExecutionStatus.IN_PROGRESS
@@ -70,7 +73,10 @@ async def test_dial_forwards_per_request_api_key(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     await dial_via_talko(
-        store, agent_id="a", to_number="+9191", talko_api_key="tkp_live_ui",
+        store,
+        agent_id="a",
+        to_number="+9191",
+        talko_api_key="tkp_live_ui",
     )
     assert FakeAsyncClient.posted[0]["json"]["talko_api_key"] == "tkp_live_ui"
 
@@ -103,14 +109,22 @@ async def test_run_batch_talko_dials_entries(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     batch = Batch(
-        batch_id="b1", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
+        batch_id="b1",
+        agent_id="agent_1",
+        name="t",
+        status=BatchStatus.DRAFT,
         entries=[BatchEntry(to_number="+911"), BatchEntry(to_number="+912")],
-        provider="talko", from_number="91804",
+        provider="talko",
+        from_number="91804",
     )
     await store.save_batch(batch)
     out = await run_batch(store, "b1")
     assert out is not None and out.status.value == "completed"
-    assert out.stats.completed == 2 and out.stats.failed == 0
+    # Talko-accepted dials stay IN_PROGRESS (stats.pending): media outcome lives
+    # in Talko's CDR and flips to completed only via the Talko->voiceai
+    # completion callback (not yet wired — see simulation.run_batch). This
+    # assertion pins that contract; update it when the callback lands.
+    assert out.stats.pending == 2 and out.stats.completed == 0 and out.stats.failed == 0
     assert len(FakeAsyncClient.posted) == 2
 
 
@@ -118,7 +132,10 @@ async def test_run_batch_simulated_unchanged(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     batch = Batch(
-        batch_id="b2", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
+        batch_id="b2",
+        agent_id="agent_1",
+        name="t",
+        status=BatchStatus.DRAFT,
         entries=[BatchEntry(to_number="+911")],
     )
     await store.save_batch(batch)

@@ -1,14 +1,15 @@
 import io
-import os
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .base_synthesizer import BaseSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import convert_audio_to_wav, resample
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import OPENAI_API_KEY_ENV
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -21,7 +22,7 @@ class OPENAISynthesizer(BaseSynthesizer):
         self.model = model
         self.sample_rate = int(sampling_rate) if isinstance(sampling_rate, str) else sampling_rate
         self.stream = False
-        api_key = kwargs.get("synthesizer_key", os.getenv("OPENAI_API_KEY"))
+        api_key = kwargs.get("synthesizer_key", get_str(OPENAI_API_KEY_ENV))
         self.async_client = AsyncOpenAI(api_key=api_key)
 
     def supports_websocket(self):

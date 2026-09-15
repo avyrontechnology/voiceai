@@ -1,6 +1,6 @@
 from datetime import datetime
 from functools import lru_cache
-from typing import Union, Optional
+from typing import Any, Union, Optional
 import json
 import asyncio
 import time
@@ -21,7 +21,15 @@ from contextlib import AsyncExitStack
 from enum import Enum
 from dotenv import load_dotenv
 from pydantic import create_model
-from .logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import (
+    BUCKET_NAME_ENV,
+    DEFAULT_SONIOX_HOST_PROTOCOL,
+    RECORDING_BUCKET_NAME_ENV,
+    RECORDING_BUCKET_URL_ENV,
+    SONIOX_HOST_PROTOCOL_ENV,
+)
+from voiceai.otobaai_logger import get_logger
 from voiceai.constants import (
     PREPROCESS_DIR,
     PRE_FUNCTION_CALL_MESSAGE,
@@ -33,15 +41,51 @@ from voiceai.prompts import DATE_PROMPT
 from pydub import AudioSegment
 import audioop
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
-BUCKET_NAME = os.getenv("BUCKET_NAME")
-RECORDING_BUCKET_NAME = os.getenv("RECORDING_BUCKET_NAME")
-RECORDING_BUCKET_URL = os.getenv("RECORDING_BUCKET_URL")
+BUCKET_NAME = get_str(BUCKET_NAME_ENV)
+RECORDING_BUCKET_NAME = get_str(RECORDING_BUCKET_NAME_ENV)
+RECORDING_BUCKET_URL = get_str(RECORDING_BUCKET_URL_ENV)
 
 _LOG_DIR = "./logs"
 os.makedirs(_LOG_DIR, exist_ok=True)
-_log_header_written = set()
+_log_header_written: set[str] = set()
+# Bound the per-run header tracker so long-lived processes cannot grow it without limit.
+_MAX_TRACKED_RUN_IDS = 2048
+# Per-run trace cap; oversized traces rotate to "<run>.csv.1" instead of growing unbounded.
+_MAX_LOG_FILE_BYTES = 10 * 1024 * 1024
+_RUN_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _sanitize_run_id(run_id: Any) -> str:
+    """Filesystem-safe trace name: None/empty -> "unknown", traversal neutralised, length capped."""
+    if not isinstance(run_id, str) or not run_id.strip():
+        return "unknown"
+    cleaned: str = _RUN_ID_SAFE_RE.sub("_", run_id.strip())
+    cleaned = cleaned.strip("._") or "unknown"
+    return cleaned[:64]
+
+
+def _redact_for_csv(value: Any) -> Any:
+    """Apply redact_secrets to dicts/lists; JSON strings are parsed, redacted, and re-encoded."""
+    # Local import: voiceai.llms pulls helpers.utils at package import, so a top-level
+    # import would be circular. Deferred until first use, when both modules are loaded.
+    from voiceai.llms.types import redact_secrets as _redact
+
+    if isinstance(value, str):
+        stripped: str = value.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                parsed: Any = json.loads(stripped)
+            except (ValueError, TypeError):
+                return value
+            if isinstance(parsed, (dict, list)):
+                try:
+                    return json.dumps(_redact(parsed), ensure_ascii=False)
+                except (TypeError, ValueError):
+                    return value
+        return value
+    return _redact(value)
 
 
 class DictWithMissing(dict):
@@ -298,6 +342,33 @@ async def delete_s3_file_by_prefix(bucket_name, file_key):
             return error
 
 
+def _store_file_local_sync(dir_name: str, file_key: str, file_data: Any, content_type: str) -> None:
+    """Blocking local write body for ``store_file`` — always run via ``asyncio.to_thread``."""
+    if content_type == "json":
+        with open(f"{dir_name}/{file_key}", "w") as f:
+            f.write(json.dumps(file_data))
+    elif content_type in ["csv"]:
+        with open(f"{dir_name}/{file_key}", "w") as f:
+            f.write(file_data)
+    else:
+        with open(f"{dir_name}/{file_key}", "wb") as f:
+            f.write(file_data)
+
+
+def _read_local_file_sync(file_name: str) -> Optional[bytes]:
+    """Blocking local read body — always run via ``asyncio.to_thread``."""
+    if not os.path.isfile(file_name):
+        return None
+    with open(file_name, "rb") as file:
+        return file.read()
+
+
+def _load_local_prompts_sync(source: str) -> Any:
+    """Blocking prompts read body — always run via ``asyncio.to_thread``."""
+    with open(source, "r") as json_file:
+        return json.load(json_file)
+
+
 async def store_file(
     bucket_name=None, file_key=None, file_data=None, content_type="json", local=False, preprocess_dir=None
 ):
@@ -320,21 +391,12 @@ async def store_file(
     if local:
         dir_name = PREPROCESS_DIR if preprocess_dir is None else preprocess_dir
         directory_path = os.path.join(dir_name, os.path.dirname(file_key))
+        # os.makedirs is fast but still a syscall: keep it on the loop, the file write goes to a thread.
         os.makedirs(directory_path, exist_ok=True)
         try:
             logger.info(f"Writing to {dir_name}/{file_key} ")
-            if content_type == "json":
-                with open(f"{dir_name}/{file_key}", "w") as f:
-                    data = json.dumps(file_data)
-                    f.write(data)
-            elif content_type in ["csv"]:
-                with open(f"{dir_name}/{file_key}", "w") as f:
-                    data = file_data
-                    f.write(data)
-            else:
-                with open(f"{dir_name}/{file_key}", "wb") as f:
-                    data = file_data
-                    f.write(data)
+            # Sync open()/write() blocks the loop on slow disks — offload it.
+            await asyncio.to_thread(_store_file_local_sync, dir_name, file_key, file_data, content_type)
         except Exception as e:
             logger.error(f"Could not save local file {e}")
 
@@ -349,12 +411,8 @@ async def get_raw_audio_bytes(
             file_name = f"{PREPROCESS_DIR}/{agent_name}/{audio_format}/{filename}.{audio_format}"
         else:
             file_name = filename
-        if os.path.isfile(file_name):
-            with open(file_name, "rb") as file:
-                # Read the entire file content into a variable
-                audio_data = file.read()
-        else:
-            audio_data = None
+        # Sync open()/read() blocks the loop — offload it (audio fetch is on the call path).
+        audio_data = await asyncio.to_thread(_read_local_file_sync, file_name)
     else:
         if not is_location:
             object_key = f"{assistant_id}/audio/{filename}.{audio_format}"
@@ -484,8 +542,8 @@ async def get_prompt_responses(assistant_id, local=False):
         source = f"{PREPROCESS_DIR}/{assistant_id}/conversation_details.json"
         logger.info(f"Loading up the conversation details from the local file {source}")
         try:
-            with open(source, "r") as json_file:
-                data = json.load(json_file)
+            # Sync open()/json.load() blocks the loop — offload it.
+            data = await asyncio.to_thread(_load_local_prompts_sync, source)
         except Exception as e:
             logger.warning(f"Could not load prompts from {source} ({e}); using empty prompts")
             return {}
@@ -692,11 +750,13 @@ Message type
 """
 
 
-async def write_request_logs(message, run_id):
-    component_details = [None, None, None, None, None]
-    message_data = message.get("data", "")
+async def write_request_logs(message: dict[str, Any], run_id: Any) -> None:
+    component_details: list[Any] = [None, None, None, None, None]
+    message_data: Any = message.get("data", "")
     if message_data is None:
         message_data = ""
+    # Secrets must never land in the trace CSV; transcripts stay (dashboard needs them).
+    message_data = _redact_for_csv(message_data)
 
     row = [
         message["time"],
@@ -742,11 +802,15 @@ async def write_request_logs(message, run_id):
         ]
         metadata = message.get("transcriber_metadata", {})
     elif message["component"] == LogComponent.SYNTHESIZER:
+        try:
+            char_count = len(message_data) if message_data else 0
+        except TypeError:
+            char_count = 0
         component_details = [
             message_data,
             None,
             None,
-            len(message_data),
+            char_count,
             message.get("latency", None),
             message["cached"],
             None,
@@ -787,19 +851,49 @@ async def write_request_logs(message, run_id):
         component_details = [message_data, None, None, None, message.get("latency", None), False, None, None]
         metadata = message.get("warning_metadata", {})
 
-    metadata_str = None
+    if metadata is None:
+        metadata = {}
+    elif metadata:
+        redacted_meta: Any = _redact_for_csv(metadata)
+        metadata = redacted_meta if isinstance(redacted_meta, dict) else {}
+    metadata_str: Any = None
     if metadata:
         metadata_str = json.dumps(metadata, ensure_ascii=False)
     row = row + component_details + [metadata_str]
 
     header = "Time,Component,Direction,Leg ID,Sequence ID,Model,Data,Input Tokens,Output Tokens,Characters,Latency,Cached,Final Transcript,Engine,Metadata\n"
     log_string = ",".join(['"' + str(item).replace('"', '""') + '"' if item is not None else "" for item in row]) + "\n"
-    log_file_path = f"{_LOG_DIR}/{run_id}.csv"
-    if run_id not in _log_header_written:
-        _log_header_written.add(run_id)
-        write_header = not os.path.exists(log_file_path)
+    safe_run_id: str = _sanitize_run_id(run_id)
+    log_file_path: str = f"{_LOG_DIR}/{safe_run_id}.csv"
+    if safe_run_id not in _log_header_written:
+        if len(_log_header_written) >= _MAX_TRACKED_RUN_IDS:
+            try:
+                _log_header_written.pop()
+            except KeyError:
+                pass
+        _log_header_written.add(safe_run_id)
+        write_header: bool = not os.path.exists(log_file_path)
     else:
         write_header = False
+
+    rotated: bool = False
+    try:
+        if os.path.exists(log_file_path) and os.path.getsize(log_file_path) >= _MAX_LOG_FILE_BYTES:
+            rotated_path: str = log_file_path + ".1"
+            try:
+                if os.path.exists(rotated_path):
+                    os.remove(rotated_path)
+            except OSError:
+                pass
+            try:
+                os.replace(log_file_path, rotated_path)
+                rotated = True
+            except OSError:
+                pass
+    except OSError:
+        pass
+    if rotated:
+        write_header = True
 
     async with aiofiles.open(log_file_path, mode="a") as log_file:
         if write_header:
@@ -808,71 +902,75 @@ async def write_request_logs(message, run_id):
             await log_file.write(log_string)
 
 
+def _build_stereo_wav_bytes_sync(conversation_recording, sampling_rate: int = 24000) -> bytes:
+    """CPU-bound stereo mix (input + output) -> WAV bytes. Runs via asyncio.to_thread.
+
+    Deliberately torch/torchaudio-free: those wheels are ~800MB and absent from requirements.txt,
+    and the previous path crashed with NameError on every call. pydub + numpy + stdlib wave cover
+    the mix with no extra dependency.
+    """
+    outputs = (conversation_recording or {}).get("output") or []
+    if not outputs:
+        raise ValueError("conversation_recording has no output frames")
+    metadata = (conversation_recording or {}).get("metadata") or {}
+    started = metadata.get("started")
+    if started is None:
+        raise ValueError("conversation_recording metadata lacks 'started'")
+    last_end = outputs[0].get("start_time", 0)
+    initial_gap = max(0.0, (last_end - started)) * 1000
+    combined = AudioSegment.silent(duration=initial_gap, frame_rate=sampling_rate)
+    for frame in outputs:
+        start = frame.get("start_time", last_end)
+        if last_end < start:
+            combined += AudioSegment.silent(duration=(start - last_end) * 1000, frame_rate=sampling_rate)
+        data = frame.get("data")
+        if data is None:
+            raise ValueError("output frame is missing audio data")
+        if isinstance(data, (bytes, bytearray)):
+            raw = bytes(data)
+        elif isinstance(data, io.BytesIO):
+            raw = data.getvalue()
+        else:
+            raise ValueError(f"output frame data must be bytes, got {type(data).__name__}")
+        combined += AudioSegment.from_file(io.BytesIO(raw), format="wav")
+        last_end = start + frame.get("duration", 0)
+
+    input_data = ((conversation_recording or {}).get("input") or {}).get("data")
+    if input_data is None:
+        raise ValueError("conversation_recording has no input audio")
+    if isinstance(input_data, io.BytesIO):
+        input_data = input_data.getvalue()
+    inbound = AudioSegment.from_file(io.BytesIO(bytes(input_data)))
+    inbound = inbound.set_frame_rate(sampling_rate).set_channels(1).set_sample_width(2)
+    outbound = combined.set_frame_rate(sampling_rate).set_channels(1).set_sample_width(2)
+    left = np.frombuffer(inbound.raw_data, dtype=np.int16).astype(np.int32)
+    right = np.frombuffer(outbound.raw_data, dtype=np.int16).astype(np.int32)
+    width = max(len(left), len(right))
+    left = np.pad(left, (0, width - len(left)))
+    right = np.pad(right, (0, width - len(right)))
+    stereo = np.empty((width * 2,), dtype=np.int16)
+    stereo[0::2] = np.clip(left, -32768, 32767).astype(np.int16)
+    stereo[1::2] = np.clip(right, -32768, 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sampling_rate)
+        wav_file.writeframes(stereo.tobytes())
+    return buf.getvalue()
+
+
 async def save_audio_file_to_s3(conversation_recording, sampling_rate=24000, assistant_id=None, run_id=None):
-    last_frame_end_time = conversation_recording["output"][0]["start_time"]
-    logger.info(f"LENGTH OF OUTPUT AUDIO {len(conversation_recording['output'])}")
-    initial_gap = (last_frame_end_time - conversation_recording["metadata"]["started"]) * 1000
-    logger.info(f"Initial gap {initial_gap}")
-    combined_audio = AudioSegment.silent(duration=initial_gap, frame_rate=sampling_rate)
-    for i, frame in enumerate(conversation_recording["output"]):
-        frame_start_time = frame["start_time"]
-        logger.info(
-            f"Processing frame {i}, fram start time = {last_frame_end_time}, frame start time= {frame_start_time}"
-        )
-        if last_frame_end_time < frame_start_time:
-            gap_duration_samples = frame_start_time - last_frame_end_time
-            silence = AudioSegment.silent(duration=gap_duration_samples * 1000, frame_rate=sampling_rate)
-            combined_audio += silence
-        last_frame_end_time = frame_start_time + frame["duration"]
-        frame_as = AudioSegment.from_file(io.BytesIO(frame["data"]), format="wav")
-        combined_audio += frame_as
+    from voiceai.helpers.exceptions import InvalidRequestError
 
-    webm_segment = AudioSegment.from_file(io.BytesIO(conversation_recording["input"]["data"]))
-    wav_bytes = io.BytesIO()
-    webm_segment.export(wav_bytes, format="wav")
-    wav_bytes.seek(0)  # Reset the pointer to the start
-    waveform, sample_rate = torchaudio.load(wav_bytes)
-    resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=sampling_rate)
-    downsampled_waveform = resampler(waveform)
-    torchaudio_wavio = io.BytesIO()
-    torchaudio.save(torchaudio_wavio, downsampled_waveform, sampling_rate, format="wav")
-    audio_segment_bytes = io.BytesIO()
-    combined_audio.export(audio_segment_bytes, format="wav")
-    audio_segment_bytes.seek(0)
-    waveform_audio_segment, sample_rate = torchaudio.load(audio_segment_bytes)
-
-    if waveform_audio_segment.shape[0] > 1:
-        waveform_audio_segment = waveform_audio_segment[:1, :]
-
-    # Adjust shapes to be [1, N] if not already
-    downsampled_waveform = (
-        downsampled_waveform.unsqueeze(0) if downsampled_waveform.dim() == 1 else downsampled_waveform
-    )
-    waveform_audio_segment = (
-        waveform_audio_segment.unsqueeze(0) if waveform_audio_segment.dim() == 1 else waveform_audio_segment
-    )
-
-    # Ensure both waveforms have the same length
-    max_length = max(downsampled_waveform.size(1), waveform_audio_segment.size(1))
-    downsampled_waveform_padded = torch.nn.functional.pad(
-        downsampled_waveform, (0, max_length - downsampled_waveform.size(1))
-    )
-    waveform_audio_segment_padded = torch.nn.functional.pad(
-        waveform_audio_segment, (0, max_length - waveform_audio_segment.size(1))
-    )
-    stereo_waveform = torch.cat((downsampled_waveform_padded, waveform_audio_segment_padded), 0)
-
-    # Verify the stereo waveform shape is [2, M]
-    assert stereo_waveform.shape[0] == 2, "Stereo waveform should have 2 channels."
-    key = f"{assistant_id + run_id}.wav"
-
-    audio_buffer = io.BytesIO()
-    torchaudio.save(audio_buffer, stereo_waveform, 24000, format="wav")
-    audio_buffer.seek(0)
-
+    if not isinstance(conversation_recording, dict):
+        raise InvalidRequestError("conversation_recording must be a dict", component="storage")
+    if not assistant_id or not run_id:
+        raise InvalidRequestError("assistant_id and run_id are required", component="storage")
+    wav_bytes = await asyncio.to_thread(_build_stereo_wav_bytes_sync, conversation_recording, sampling_rate)
+    key = f"{assistant_id}{run_id}.wav"
     logger.info(f"Storing in {RECORDING_BUCKET_URL}{key}")
-    await store_file(bucket_name=RECORDING_BUCKET_NAME, file_key=key, file_data=audio_buffer, content_type="wav")
-
+    await store_file(bucket_name=RECORDING_BUCKET_NAME, file_key=key, file_data=wav_bytes, content_type="wav")
     return f"{RECORDING_BUCKET_URL}{key}"
 
 
@@ -1035,7 +1133,13 @@ def convert_to_request_log(
                 )
                 log["llm_metadata"] = llm_metadata
     log["engine"] = engine
-    asyncio.create_task(write_request_logs(log, run_id))
+    try:
+        from voiceai.core.resilience import safe_task as _safe_task
+
+        _safe_task(write_request_logs(log, run_id), name="write_request_logs", logger=logger)
+    except RuntimeError:
+        # No running loop (sync context / interpreter shutdown): drop the trace rather than crash.
+        logger.warning("write_request_logs skipped: no running event loop")
 
 
 async def process_task_cancellation(asyncio_task, task_name):
@@ -1140,7 +1244,7 @@ def audio_to_pcm(audio, *, target_sample_rate, rate_hint=8000, format_hint=""):
 
 def soniox_ws_url(host):
     """Soniox realtime WS endpoint — single source of truth for transcriber + LID tap."""
-    protocol = os.getenv("SONIOX_HOST_PROTOCOL", "wss")
+    protocol = get_str(SONIOX_HOST_PROTOCOL_ENV, DEFAULT_SONIOX_HOST_PROTOCOL) or DEFAULT_SONIOX_HOST_PROTOCOL
     return f"{protocol}://{host}/transcribe-websocket"
 
 

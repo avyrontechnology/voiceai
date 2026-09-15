@@ -1,24 +1,25 @@
 import asyncio
 import json
 import logging
-import os
 import uuid
 import time
 import base64
 from dotenv import load_dotenv
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS, UNCOMPRESSED_AUDIO_FORMATS, WEBCALL_TTS_SAMPLE_RATE
-from voiceai.errors import classify_exception, summarize_exception
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.output_handlers.constants import DEFAULT_OUTPUT_SEND_TIMEOUT_S, OUTPUT_SEND_TIMEOUT_S_ENV
+from voiceai.output_handlers.exceptions import classify_exception, summarize_exception
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import calculate_audio_duration
 from voiceai.output_handlers.socket_errors import is_socket_closed_error
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # A media socket can go half-dead (TCP stops delivering ACKs, no close frame ever
 # arrives) without raising — a bare `websocket.send_*()` then never returns. Bound
 # every send so a dead socket fails fast instead of freezing the caller forever.
-OUTPUT_SEND_TIMEOUT_S = float(os.getenv("OUTPUT_SEND_TIMEOUT_S", "5"))
+OUTPUT_SEND_TIMEOUT_S = float(get_str(OUTPUT_SEND_TIMEOUT_S_ENV, DEFAULT_OUTPUT_SEND_TIMEOUT_S))
 
 # Identical failures are logged in full once, then only every Nth occurrence (or once
 # per interval), so a synthesizer emitting bad chunks at 50/s cannot flood the log.
@@ -103,9 +104,7 @@ class DefaultOutputHandler:
     def _mark_socket_closed(self, exc, what):
         """The socket is gone: every later send would fail the same way, so stop trying."""
         self._closed = True
-        logger.info(
-            "%s output socket closed during %s: %s", self.io_provider, what, summarize_exception(exc)
-        )
+        logger.info("%s output socket closed during %s: %s", self.io_provider, what, summarize_exception(exc))
 
     def _report_dropped(self, exc, what):
         """Log a non-fatal failure with its error id: in full the first time, rate-limited after."""
@@ -117,11 +116,7 @@ class DefaultOutputHandler:
         counts[key] = count
         now = time.monotonic()
         first = count == 1
-        due = (
-            first
-            or count % _REPEAT_LOG_EVERY == 0
-            or now - last_log.get(key, now) >= _REPEAT_LOG_INTERVAL_S
-        )
+        due = first or count % _REPEAT_LOG_EVERY == 0 or now - last_log.get(key, now) >= _REPEAT_LOG_INTERVAL_S
         if due:
             last_log[key] = now
             logger.log(
@@ -140,9 +135,7 @@ class DefaultOutputHandler:
     def _on_send_error(self, exc, what):
         """Apply the transient-vs-dead policy to a failed send. Returns True if the socket is gone."""
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-            logger.warning(
-                "%s output %s send timed out, packet dropped, socket kept open", self.io_provider, what
-            )
+            logger.warning("%s output %s send timed out, packet dropped, socket kept open", self.io_provider, what)
             return False
         if self._is_socket_closed_error(exc):
             self._mark_socket_closed(exc, what)
@@ -190,10 +183,9 @@ class DefaultOutputHandler:
         fails immediately and re-latches — bounded and fully logged.
         """
         if self._closed:
-            logger.warning(
-                "%s output handler reopening (%s)", self.io_provider, reason or "new turn"
-            )
+            logger.warning("%s output handler reopening (%s)", self.io_provider, reason or "new turn")
             self._closed = False
+
     def hangup_sent(self):
         return self.is_last_hangup_chunk_sent
 
@@ -238,9 +230,7 @@ class DefaultOutputHandler:
                 if payload is None or (packet_type == "audio" and not payload):
                     # Nothing to encode and nothing to mark; a raise here used to latch the
                     # handler closed and mute the rest of the call.
-                    logger.warning(
-                        "%s output handler skipping %s packet without data", self.io_provider, packet_type
-                    )
+                    logger.warning("%s output handler skipping %s packet without data", self.io_provider, packet_type)
                     return
                 if packet_type == "audio":
                     logger.info(f"Sending audio")
@@ -260,10 +250,7 @@ class DefaultOutputHandler:
                     await self._send_text(json.dumps(mark_message))
 
                 logger.info(f"Sending to the frontend {len(data)}")
-                if (
-                    meta_info.get("message_category") == "agent_welcome_message"
-                    and not self.welcome_message_sent_ts
-                ):
+                if meta_info.get("message_category") == "agent_welcome_message" and not self.welcome_message_sent_ts:
                     self.welcome_message_sent_ts = time.time() * 1000
 
                 response = {"data": data, "type": packet_type}

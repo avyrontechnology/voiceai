@@ -1,0 +1,55 @@
+# Import-linter contracts: machine-enforced layering (Constitution I, V).
+# `lint-imports` runs in pre-commit and the gate workflow. The layers
+# contract for migrated modules (controllers>services>repositories) lands
+# with US2 (platform pilot); foundation isolation applies from now on.
+
+[importlinter]
+root_package = voiceai
+include_external_packages = false
+exclude_type_checking_imports = true
+
+[importlinter:contract:foundation-common-isolation]
+name = foundation: common imports nothing internal
+type = forbidden
+source_modules =
+    voiceai.common
+forbidden_modules =
+    voiceai.core
+    voiceai.database
+
+[importlinter:contract:foundation-database-isolation]
+name = foundation: database imports nothing internal
+type = forbidden
+source_modules =
+    voiceai.database
+forbidden_modules =
+    voiceai.core
+    voiceai.common
+
+[importlinter:contract:foundation-core-never-imports-common]
+name = foundation: core/database never import common
+type = forbidden
+source_modules =
+    voiceai.core
+    voiceai.database
+forbidden_modules =
+    voiceai.common
+
+[importlinter:contract:platform-layers]
+name = platform: controllers above services above repositories (incl. store backends)
+type = layers
+layers =
+    voiceai.platform.controllers
+    voiceai.platform.services
+    voiceai.platform.repositories
+    voiceai.platform.mongo_store
+    voiceai.platform.store
+
+[importlinter:contract:platform-controllers-never-touch-repositories]
+name = platform: controllers never import repositories (must go through services)
+type = forbidden
+source_modules =
+    voiceai.platform.controllers
+forbidden_modules =
+    voiceai.platform.repositories
+allow_indirect_imports = true

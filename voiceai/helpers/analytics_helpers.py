@@ -1,17 +1,18 @@
 from litellm import token_counter
-import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from dateutil import parser
 import copy
 from .utils import format_messages
-from .logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import CHECK_FOR_COMPLETION_LLM_ENV
+from voiceai.otobaai_logger import get_logger
 from voiceai.prompts import CHECK_FOR_COMPLETION_PROMPT
 from voiceai.constants import HIGH_LEVEL_ASSISTANT_ANALYTICS_DATA
 
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 def calculate_total_cost_of_llm_from_transcript(
@@ -28,7 +29,7 @@ def calculate_total_cost_of_llm_from_transcript(
     total_output_tokens = 0
     completion_check_input_tokens = 0
     completion_check_output_tokens = 0
-    completion_model = os.getenv("CHECK_FOR_COMPLETION_LLM")
+    completion_model = get_str(CHECK_FOR_COMPLETION_LLM_ENV)
     completion_wrong_answer_tokens = token_counter(model=model, text="{'answer': 'No'}")
     completion_right_answer_tokens = token_counter(model=model, text="{'answer': 'Yes'}")
     llm_token_usage = dict()

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 import uuid
 
@@ -10,11 +9,17 @@ import websockets
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    CARTESIA_API_HOST_ENV,
+    CARTESIA_API_KEY_ENV,
+    DEFAULT_CARTESIA_API_HOST,
+)
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class CartesiaSynthesizer(StreamSynthesizer):
@@ -39,7 +44,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["CARTESIA_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(CARTESIA_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.model = model
         self.language = language
@@ -48,7 +53,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
         self.use_mulaw = kwargs.get("use_mulaw", True)  # web/freeswitch pass False → raw PCM @sampling_rate
         self.stream = True
 
-        self.cartesia_host = os.getenv("CARTESIA_API_HOST", "api.cartesia.ai")
+        self.cartesia_host = get_str(CARTESIA_API_HOST_ENV, DEFAULT_CARTESIA_API_HOST)
         self.ws_url = f"wss://{self.cartesia_host}/tts/websocket?api_key={self.api_key}&cartesia_version=2024-06-10"
         self.api_url = f"https://{self.cartesia_host}/tts/bytes"
 
@@ -139,42 +144,46 @@ class CartesiaSynthesizer(StreamSynthesizer):
 
     async def sender(self, text, sequence_id, end_of_llm_stream=False):
         try:
-            if self.conversation_ended:
-                return
-            if not self.should_synthesize_response(sequence_id):
-                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
-                return
-
-            await self._wait_for_ws()
-
-            if text != "":
-                try:
-                    if self.ws_send_time is None:
-                        self.ws_send_time = time.perf_counter()
-                    payload = self.form_payload(text)
-                    logger.info(
-                        f"Cartesia sender context_id={self.context_id} text_len={len(text)} request_id={self.ws_request_id}"
-                    )
-                    await self._send_json(payload)
-                except Exception as e:
-                    logger.error(
-                        f"Error sending chunk context_id={self.context_id} request_id={self.ws_request_id}: {e}"
-                    )
-                    self.connection_error = str(e)
+            async with self._send_lock:
+                if self.conversation_ended:
+                    return
+                if not self.should_synthesize_response(sequence_id):
+                    logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
                     return
 
-            if end_of_llm_stream:
-                self.last_text_sent = True
-                logger.info(
-                    f"Cartesia sender end_of_llm_stream context_id={self.context_id} request_id={self.ws_request_id}"
-                )
-                try:
-                    await self._send_json(self.form_payload(""))
-                except Exception as e:
-                    logger.error(
-                        f"Error sending end-of-stream signal context_id={self.context_id} request_id={self.ws_request_id}: {e}"
+                await self._wait_for_ws()
+
+                if text != "":
+                    try:
+                        if self.ws_send_time is None:
+                            self.ws_send_time = time.perf_counter()
+                        payload = self.form_payload(text)
+                        logger.info(
+                            f"Cartesia sender context_id={self.context_id} text_len={len(text)} "
+                            f"request_id={self.ws_request_id}"
+                        )
+                        await self._send_json(payload)
+                    except Exception as e:
+                        logger.error(
+                            f"Error sending chunk context_id={self.context_id} request_id={self.ws_request_id}: {e}"
+                        )
+                        self.connection_error = str(e)
+                        return
+
+                if end_of_llm_stream:
+                    self.last_text_sent = True
+                    logger.info(
+                        f"Cartesia sender end_of_llm_stream context_id={self.context_id} "
+                        f"request_id={self.ws_request_id}"
                     )
-                    self.connection_error = str(e)
+                    try:
+                        await self._send_json(self.form_payload(""))
+                    except Exception as e:
+                        logger.error(
+                            f"Error sending end-of-stream signal context_id={self.context_id} "
+                            f"request_id={self.ws_request_id}: {e}"
+                        )
+                        self.connection_error = str(e)
 
         except asyncio.CancelledError:
             logger.info("Sender task was cancelled.")
