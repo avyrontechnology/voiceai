@@ -1,4 +1,3 @@
-import os
 import sys
 import asyncio
 import time
@@ -6,12 +5,14 @@ import json
 from azure.cognitiveservices.speech import AudioStreamWaveFormat, AudioStreamContainerFormat
 from dotenv import load_dotenv
 from .base_transcriber import BaseTranscriber
+from .constants import AZURE_SPEECH_KEY_ENV_KEY, AZURE_SPEECH_REGION_ENV_KEY
 import azure.cognitiveservices.speech as speechsdk
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -21,8 +22,8 @@ class AzureTranscriber(BaseTranscriber):
     ):
         super().__init__(input_queue)
         self.transcription_task = None
-        self.subscription_key = os.getenv("AZURE_SPEECH_KEY")
-        self.service_region = os.getenv("AZURE_SPEECH_REGION")
+        self.subscription_key = get_str(AZURE_SPEECH_KEY_ENV_KEY)
+        self.service_region = get_str(AZURE_SPEECH_REGION_ENV_KEY)
         self.push_stream = None
         self.recognizer = None
         self.transcriber_output_queue = output_queue

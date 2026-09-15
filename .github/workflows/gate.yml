@@ -1,0 +1,90 @@
+name: Gate
+
+# SonarQube-equivalent quality gate (001-submodule-restructure, Constitution VIII).
+# Mirrors .pre-commit-config.yaml. Required before any task is marked complete.
+# mypy scope widens module-by-module as migrations land (see pyproject [tool.mypy]).
+
+on:
+  pull_request:
+    branches: [master, main]
+  push:
+    branches: [master, main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping')\""
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      MONGO_DB: voiceai_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10.13'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff lint
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: '0.16.6'
+
+      - name: Ruff format check
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: '0.16.6'
+          args: 'format --check --diff'
+
+      - name: Mypy (new layout)
+        run: mypy voiceai/core voiceai/common voiceai/database voiceai/otobaai_logger voiceai/agent_manager/utils.py voiceai/agent_manager/static_methods.py voiceai/platform/controllers voiceai/platform/services voiceai/platform/repositories voiceai/platform/mongo_store voiceai/platform/helpers voiceai/platform/utils voiceai/platform/static_methods voiceai/platform/constants voiceai/platform/errors voiceai/platform/exceptions
+
+      - name: Bandit
+        run: bandit -r voiceai --severity-level medium --confidence-level high --exclude tests,build,examples,local_setup
+
+      - name: Import contracts
+        run: lint-imports
+
+      - name: No stray os.environ
+        # tests/ set env deliberately (offline doubles) and live outside voiceai/.
+        run: |
+          offending=$(grep -rn "os\.environ\|os\.getenv" voiceai/ --include='*.py' | grep -v "voiceai/core/environment.py" | grep -v -F -f .env-allowlist.txt || true)
+          if [ -n "$offending" ]; then
+            echo "os.environ/os.getenv outside voiceai/core/environment.py:"; echo "$offending"; exit 1;
+          fi
+
+      - name: No hardcoded secrets
+        run: |
+          hits=$(grep -rEn "AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{10,}|gho_[A-Za-z0-9]{10,}|xox[bap]-[A-Za-z0-9-]{10,}|sk-live-[A-Za-z0-9]{8,}|-----BEGIN (.* )?PRIVATE KEY" voiceai/ --include='*.py' | grep -v __pycache__ || true)
+          if [ -n "$hits" ]; then
+            echo "possible hardcoded secrets:"; echo "$hits"; exit 1;
+          fi
+
+      - name: No new shim-path imports
+        run: |
+          stale=$(grep -rn "platform\.router import\|platform import router\|helpers\.resilience import\|helpers import resilience" --include='*.py' voiceai/ tests/ local_setup/ scripts/ examples/ 2>/dev/null | grep -v __pycache__ | grep -v "voiceai/platform/router.py:\|voiceai/helpers/resilience.py:" || true)
+          if [ -n "$stale" ]; then
+            echo "old shim paths still imported (use the canonical modules, see SHIMS.md):"; echo "$stale"; exit 1;
+          fi
+
+      - name: Pytest
+        run: pytest -q

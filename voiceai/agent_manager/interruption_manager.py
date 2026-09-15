@@ -1,8 +1,8 @@
 import time
 from typing import Dict, List, Optional, Set, Tuple
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class InterruptionManager:

@@ -3,18 +3,19 @@ import audioop
 import base64
 import io
 import json
-import os
 import wave
 
 from dotenv import load_dotenv
 
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
 from .base import LIDBackend
+from .constants import DEFAULT_SARVAM_API_KEY, DEFAULT_SARVAM_HOST, SARVAM_API_KEY_ENV, SARVAM_HOST_ENV
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class SarvamLID(LIDBackend):
@@ -35,8 +36,8 @@ class SarvamLID(LIDBackend):
 
     def __init__(self, on_language, config):
         super().__init__(on_language, config)
-        self._api_key = config.get("sarvam_api_key") or os.getenv("SARVAM_API_KEY", "")
-        self._host = config.get("sarvam_host") or os.getenv("SARVAM_HOST", "api.sarvam.ai")
+        self._api_key = config.get("sarvam_api_key") or get_str(SARVAM_API_KEY_ENV, DEFAULT_SARVAM_API_KEY)
+        self._host = config.get("sarvam_host") or get_str(SARVAM_HOST_ENV, DEFAULT_SARVAM_HOST)
         # Per-agent override via the language_switch_saaras_v4_lid feature flag.
         self._model = config.get("sarvam_model") or "saaras:v3"
         self._telephony = config.get("telephony_provider", "")

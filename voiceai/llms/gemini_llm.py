@@ -1,4 +1,3 @@
-import os
 import json
 import uuid
 import base64
@@ -6,18 +5,20 @@ from typing import Any, AsyncIterable
 from google import genai
 from google.genai import types
 from voiceai.constants import default_thinking_level
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import (
     now_ms,
     compute_function_pre_call_message,
     convert_to_request_log,
     clean_gemini_schema,
 )
+from .constants import GEMINI_API_KEY_ENV, GOOGLE_API_KEY_ENV
 from .llm import BaseLLM
 from .openai_base import _strip_server_injected_params
 from .types import LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 GEMINI_THINKING_MIN_OUTPUT_TOKENS: int = 512
 
@@ -115,7 +116,7 @@ class GeminiLLM(BaseLLM):
 
         self.temperature = temperature
         # S2S and the transcriber accept GEMINI_API_KEY; accept it here too so one key works everywhere.
-        api_key = kwargs.get("llm_key", os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        api_key = kwargs.get("llm_key", get_str(GEMINI_API_KEY_ENV) or get_str(GOOGLE_API_KEY_ENV))
         self.client = genai.Client(api_key=api_key)
 
         self.api_params = kwargs.get("api_tools", {}).get("tools_params", {})

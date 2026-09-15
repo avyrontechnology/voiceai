@@ -16,9 +16,9 @@ from voiceai.helpers.utils import (
 from .llm import BaseLLM
 from .message_models import MessageFormatAdapter, strip_internal_keys
 from .types import APIParams, LLMStreamChunk, LatencyData, FunctionCallPayload, apply_tool_arguments, redact_secrets
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Chat-completions models that reject response_format={"type": "json_object"}: the pre-1106 snapshots
 # and the first o1 previews. Every other model gets JSON mode when a caller asks for it.

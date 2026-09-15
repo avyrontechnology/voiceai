@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 
 import aiohttp
@@ -10,10 +9,12 @@ from collections import deque
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import require_str
 from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import SMALLEST_API_KEY_ENV
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class SmallestSynthesizer(StreamSynthesizer):
@@ -38,7 +39,7 @@ class SmallestSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["SMALLEST_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(SMALLEST_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.model = model
         self.sampling_rate = int(sampling_rate)

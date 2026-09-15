@@ -1,8 +1,8 @@
 from .base_cache import BaseCache
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 import time
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class InmemoryScalarCache(BaseCache):

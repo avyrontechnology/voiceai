@@ -1,4 +1,3 @@
-import os
 import asyncio
 import json
 import re
@@ -22,17 +21,19 @@ import websockets
 from websockets.protocol import State as WSState
 
 from voiceai.constants import DEFAULT_LANGUAGE_CODE, GPT5_MODEL_PREFIX, default_reasoning_effort
+from voiceai.core.environment import get_str
 from voiceai.enums import ResponseStreamEvent, ResponseItemType, Verbosity
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import compute_function_pre_call_message, now_ms
 from voiceai.helpers.function_calling_helpers import guard_llm_base_url
+from .constants import OPENAI_API_KEY_ENV
 from .openai_base import OpenAICompatibleLLM
 from .message_models import strip_internal_keys
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import APIParams, LLMStreamChunk, LatencyData
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -187,7 +188,7 @@ class OpenAiLLM(OpenAICompatibleLLM):
             api_key = kwargs.get("llm_key", None)
             self.async_client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
         else:
-            llm_key = kwargs.get("llm_key", os.getenv("OPENAI_API_KEY"))
+            llm_key = kwargs.get("llm_key", get_str(OPENAI_API_KEY_ENV))
             base_url = kwargs.get("base_url")
             if base_url:
                 self.async_client = AsyncOpenAI(base_url=base_url, api_key=llm_key, http_client=http_client)

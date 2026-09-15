@@ -28,7 +28,7 @@ DEEPGRAM_FLUX_TURN_STALL_FLOOR_S = 3.0
 STALL_HANGUP_FLOOR_S = 20.0
 
 # LLM-driven language-switch defaults, all overridable by the matching LANGUAGE_SWITCH_* env.
-# Read via os.getenv(..., CONSTANT) at call time, never frozen at import (load_dotenv runs later).
+# Read via the environment accessors at call time, never frozen at import (load_dotenv runs later).
 # Ceiling on the Switch-LLM decide. The detector buffer is drained BEFORE the decide, so a
 # timeout loses that utterance — keep above the observed decide tail (~5.9s seen in QA).
 LANGUAGE_SWITCH_DECIDE_TIMEOUT_S = 6.0

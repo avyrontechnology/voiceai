@@ -23,12 +23,12 @@ from collections import deque
 import websockets
 
 from .base_synthesizer import BaseSynthesizer
-from voiceai.errors import SynthesizerError, classify_exception, summarize_exception
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import TaskRegistry, call_soft
+from voiceai.core.resilience import TaskRegistry, call_soft
 from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.exceptions import SynthesizerError, classify_exception, summarize_exception
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Maximum consecutive connection failures before giving up
 MAX_CONNECTION_FAILURES = 3

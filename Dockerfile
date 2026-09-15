@@ -23,6 +23,8 @@ WORKDIR /voiceai
 # docker/pyproject.toml + docker/poetry.lock mirror requirements.txt and are
 # used only to install deps in the image — voiceai's own packaging (published
 # to PyPI) stays on setuptools/requirements.txt, untouched by this.
+# When adding a runtime dep, add it in BOTH places and re-lock
+# (poetry lock needs Python <3.11: run it via a python:3.10 container).
 COPY docker/pyproject.toml docker/poetry.lock ./
 
 RUN --mount=type=cache,target=/root/.cache/pypoetry \

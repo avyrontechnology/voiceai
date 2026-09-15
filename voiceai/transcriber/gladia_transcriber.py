@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 from typing import Optional
@@ -13,13 +12,15 @@ from websockets.exceptions import ConnectionClosedError, InvalidHandshake, Conne
 from dotenv import load_dotenv
 
 from .base_transcriber import BaseTranscriber
+from .constants import DEFAULT_GLADIA_HOST, GLADIA_API_KEY_ENV_KEY, GLADIA_HOST_ENV_KEY
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class GladiaTranscriber(BaseTranscriber):
@@ -68,8 +69,8 @@ class GladiaTranscriber(BaseTranscriber):
         self.model = model
 
         # API configuration
-        self.api_key = kwargs.get("transcriber_key", os.getenv("GLADIA_API_KEY"))
-        self.gladia_host = os.getenv("GLADIA_HOST", "api.gladia.io")
+        self.api_key = kwargs.get("transcriber_key", get_str(GLADIA_API_KEY_ENV_KEY))
+        self.gladia_host = get_str(GLADIA_HOST_ENV_KEY, DEFAULT_GLADIA_HOST)
         self.session_url = f"https://{self.gladia_host}/v2/live"
 
         # Queues

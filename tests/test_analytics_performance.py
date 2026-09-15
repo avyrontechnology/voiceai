@@ -95,7 +95,7 @@ async def test_list_page_deserializes_only_page_not_full_scan(monkeypatch):
     """N+1 elimination: limit=20 on N=500 must not validate N Execution objects."""
     store = MemoryStore()
     await _seed(store, 500)
-    import voiceai.platform.store as store_mod
+    import voiceai.platform.repositories.memory as store_mod
 
     constructed = {"n": 0}
     OrigExecution = store_mod.Execution

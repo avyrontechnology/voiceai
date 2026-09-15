@@ -1,4 +1,3 @@
-import os
 import json
 import time
 import logging
@@ -7,16 +6,22 @@ from litellm.exceptions import AuthenticationError, RateLimitError, APIError, AP
 from dotenv import load_dotenv
 
 from voiceai.constants import DEFAULT_LANGUAGE_CODE, llm_failure_spoken_message
+from voiceai.core.environment import get_str
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message, now_ms
+from .constants import (
+    LITELLM_MODEL_API_BASE_ENV,
+    LITELLM_MODEL_API_KEY_ENV,
+    LITELLM_MODEL_API_VERSION_ENV,
+)
 from .llm import BaseLLM
 from .openai_base import _strip_server_injected_params
 from .tool_call_accumulator import ToolCallAccumulator
 from .types import LLMStreamChunk, LatencyData, redact_secrets
 from .message_models import strip_internal_keys
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
@@ -32,9 +37,9 @@ class LiteLLM(BaseLLM):
 
         self.language = language
         self.model_args = {"max_tokens": max_tokens, "temperature": temperature, "model": self.model}
-        self.api_key = kwargs.get("llm_key", os.getenv("LITELLM_MODEL_API_KEY"))
-        self.api_base = kwargs.get("base_url", os.getenv("LITELLM_MODEL_API_BASE"))
-        self.api_version = kwargs.get("api_version", os.getenv("LITELLM_MODEL_API_VERSION"))
+        self.api_key = kwargs.get("llm_key", get_str(LITELLM_MODEL_API_KEY_ENV))
+        self.api_base = kwargs.get("base_url", get_str(LITELLM_MODEL_API_BASE_ENV))
+        self.api_version = kwargs.get("api_version", get_str(LITELLM_MODEL_API_VERSION_ENV))
         if self.api_key:
             self.model_args["api_key"] = self.api_key
         if self.api_base:

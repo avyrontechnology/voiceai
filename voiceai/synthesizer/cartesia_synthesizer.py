@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 import uuid
 
@@ -10,11 +9,17 @@ import websockets
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    CARTESIA_API_HOST_ENV,
+    CARTESIA_API_KEY_ENV,
+    DEFAULT_CARTESIA_API_HOST,
+)
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class CartesiaSynthesizer(StreamSynthesizer):
@@ -39,7 +44,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["CARTESIA_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(CARTESIA_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.model = model
         self.language = language
@@ -48,7 +53,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
         self.use_mulaw = kwargs.get("use_mulaw", True)  # web/freeswitch pass False → raw PCM @sampling_rate
         self.stream = True
 
-        self.cartesia_host = os.getenv("CARTESIA_API_HOST", "api.cartesia.ai")
+        self.cartesia_host = get_str(CARTESIA_API_HOST_ENV, DEFAULT_CARTESIA_API_HOST)
         self.ws_url = f"wss://{self.cartesia_host}/tts/websocket?api_key={self.api_key}&cartesia_version=2024-06-10"
         self.api_url = f"https://{self.cartesia_host}/tts/bytes"
 

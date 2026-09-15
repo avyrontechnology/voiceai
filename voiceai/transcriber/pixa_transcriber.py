@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 import traceback
 from dotenv import load_dotenv
@@ -9,12 +8,14 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, ConnectionClosed
 
 from .base_transcriber import BaseTranscriber
-from voiceai.helpers.logger_config import configure_logger
+from .constants import DEFAULT_PIXA_WS_HOST, PIXA_API_KEY_ENV_KEY, PIXA_WS_HOST_ENV_KEY
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class PixaTranscriber(BaseTranscriber):
@@ -54,8 +55,8 @@ class PixaTranscriber(BaseTranscriber):
         self.sampling_rate = int(sampling_rate)
 
         # API credentials
-        self.api_key = kwargs.get("transcriber_key", os.getenv("PIXA_API_KEY"))
-        self.ws_host = os.getenv("PIXA_WS_HOST", "transcript.heypixa.ai")
+        self.api_key = kwargs.get("transcriber_key", get_str(PIXA_API_KEY_ENV_KEY))
+        self.ws_host = get_str(PIXA_WS_HOST_ENV_KEY, DEFAULT_PIXA_WS_HOST)
 
         # Output queue
         self.transcriber_output_queue = output_queue

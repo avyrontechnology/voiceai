@@ -5,10 +5,10 @@ import re
 
 from pydub import AudioSegment
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS
-from voiceai.helpers.logger_config import configure_logger
 from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseSynthesizer:

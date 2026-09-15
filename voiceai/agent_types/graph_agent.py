@@ -1,5 +1,4 @@
 import asyncio
-import os
 import re
 import time
 from openai import OpenAI, AzureOpenAI, APIStatusError, APIConnectionError
@@ -8,7 +7,29 @@ import json
 
 from voiceai.models import *
 from voiceai.agent_types.base_agent import BaseAgent
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.agent_types.constants import (
+    AZURE_OPENAI_API_KEY_ENV,
+    AZURE_OPENAI_API_VERSION_ENV,
+    AZURE_OPENAI_ENDPOINT_ENV,
+    CHECK_FOR_COMPLETION_LLM_ENV,
+    DEFAULT_AZURE_OPENAI_API_VERSION,
+    DEFAULT_RAG_SERVER_URL,
+    DEFAULT_ROUTING_MODEL_AZURE,
+    DEFAULT_ROUTING_MODEL_AZURE_ENV,
+    DEFAULT_ROUTING_MODEL_GROQ,
+    DEFAULT_ROUTING_MODEL_GROQ_ENV,
+    DEFAULT_ROUTING_MODEL_OPENAI,
+    DEFAULT_ROUTING_MODEL_OPENAI_ENV,
+    DEFAULT_VOICEMAIL_DETECTION_LLM,
+    GPT5_ROUTING_REASONING_EFFORT_ENV,
+    GROQ_API_KEY_ENV,
+    OPENAI_API_KEY_ENV,
+    RAG_SERVER_URL_ENV,
+    VOICEMAIL_DETECTION_LLM_ENV,
+)
+from voiceai.agent_types.exceptions import classify_exception, summarize_exception
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
 from voiceai.helpers.function_calling_helpers import guard_llm_base_url
 from voiceai.helpers.utils import (
@@ -35,8 +56,7 @@ from voiceai.constants import (
     default_reasoning_effort,
     llm_failure_spoken_message,
 )
-from voiceai.errors import classify_exception, summarize_exception
-from voiceai.helpers.resilience import log_ignored, with_timeout
+from voiceai.core.resilience import log_ignored, with_timeout
 
 from typing import List, Tuple, AsyncGenerator, Optional, Dict, Any
 
@@ -50,7 +70,7 @@ except ImportError:
     Groq = None
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 _DETERMINISTIC_REASONING_PREFIX = "deterministic:"
 _ROUTER_REASONING_PREFIX = f"{_DETERMINISTIC_REASONING_PREFIX}router:"
@@ -84,7 +104,7 @@ class GraphAgent(BaseAgent):
         self.llm_model = self.config.get("model")
 
         # Get credentials from config (injected by task_manager) or fall back to env vars
-        self.llm_key = self.config.get("llm_key") or os.getenv("OPENAI_API_KEY")
+        self.llm_key = self.config.get("llm_key") or get_str(OPENAI_API_KEY_ENV)
         self.base_url = self.config.get("base_url")
         self._base_url_validated = False
 
@@ -111,7 +131,7 @@ class GraphAgent(BaseAgent):
         self._last_rag_fingerprint: Optional[str] = None
         self.rag_configs = self.initialize_rag_configs()
         self.global_rag_config = self._initialize_global_rag_config()
-        self.rag_server_url = os.getenv("RAG_SERVER_URL", "http://localhost:8000")
+        self.rag_server_url = get_str(RAG_SERVER_URL_ENV, DEFAULT_RAG_SERVER_URL)
 
         # Cache transition tools per node for faster routing (bounded to prevent unbounded growth)
         self._transition_tools_cache: Dict[str, List[dict]] = {}
@@ -133,9 +153,9 @@ class GraphAgent(BaseAgent):
         self.llm = self._initialize_llm()
 
         self.conversation_completion_llm = self._create_aux_llm(
-            os.getenv("CHECK_FOR_COMPLETION_LLM", (self.config.get("aux_model") or self.llm_model or "gpt-4o-mini"))
+            get_str(CHECK_FOR_COMPLETION_LLM_ENV, (self.config.get("aux_model") or self.llm_model or "gpt-4o-mini"))
         )
-        self.voicemail_llm = self._create_aux_llm(os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
+        self.voicemail_llm = self._create_aux_llm(get_str(VOICEMAIL_DETECTION_LLM_ENV, DEFAULT_VOICEMAIL_DETECTION_LLM))
 
     def _create_aux_llm(self, model: str):
         """Aux (hangup/voicemail) LLM on the correct backend: Azure stays on Azure, custom keeps its base_url.
@@ -150,8 +170,8 @@ class GraphAgent(BaseAgent):
             provider = "azure"
         aux_model = (model or "").split("/", 1)[-1] if isinstance(model, str) and "/" in str(model) else model
         if provider == "azure":
-            azure_key = self.config.get("llm_key") or os.getenv("AZURE_OPENAI_API_KEY")
-            azure_endpoint = self.config.get("base_url") or os.getenv("AZURE_OPENAI_ENDPOINT")
+            azure_key = self.config.get("llm_key") or get_str(AZURE_OPENAI_API_KEY_ENV)
+            azure_endpoint = self.config.get("base_url") or get_str(AZURE_OPENAI_ENDPOINT_ENV)
             if azure_key and azure_endpoint:
                 from voiceai.llms.azure_llm import AzureLLM
 
@@ -160,9 +180,9 @@ class GraphAgent(BaseAgent):
                     llm_key=azure_key,
                     base_url=azure_endpoint,
                     api_version=self.config.get("api_version")
-                    or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+                    or get_str(AZURE_OPENAI_API_VERSION_ENV, DEFAULT_AZURE_OPENAI_API_VERSION),
                 )
-            platform_key = os.getenv("OPENAI_API_KEY")
+            platform_key = get_str(OPENAI_API_KEY_ENV)
             if platform_key:
                 logger.info("Azure aux LLM falling back to platform OpenAI key (no Azure endpoint)")
                 return OpenAiLLM(model=aux_model or "gpt-4o-mini", llm_key=platform_key)
@@ -181,7 +201,7 @@ class GraphAgent(BaseAgent):
             return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
         # OpenAI (+ EU base_url routing): keep the agent's endpoint only when it is an OpenAI one.
         kwargs = {}
-        openai_key = self.config.get("llm_key") or os.getenv("OPENAI_API_KEY") or self.llm_key
+        openai_key = self.config.get("llm_key") or get_str(OPENAI_API_KEY_ENV) or self.llm_key
         if openai_key:
             kwargs["llm_key"] = openai_key
         base_url = self.config.get("base_url") or self.base_url
@@ -191,7 +211,7 @@ class GraphAgent(BaseAgent):
 
     def _initialize_llm(self):
         """Initialize LLM with api_tools support (same pattern as KnowledgeBaseAgent)."""
-        from voiceai.errors import ConfigurationError as _ConfigurationError
+        from voiceai.agent_types.exceptions import ConfigurationError as _ConfigurationError
 
         provider = self.config.get("provider") or self.config.get("llm_provider", "openai")
         if provider not in SUPPORTED_LLM_PROVIDERS:
@@ -329,7 +349,7 @@ class GraphAgent(BaseAgent):
 
     def _init_routing_client(self):
         """Initialize routing client. Uses Groq if available, else OpenAI."""
-        groq_available = GROQ_AVAILABLE and os.getenv("GROQ_API_KEY")
+        groq_available = GROQ_AVAILABLE and get_str(GROQ_API_KEY_ENV)
 
         # Auto-detect provider if not specified
         if not self.routing_provider:
@@ -348,10 +368,10 @@ class GraphAgent(BaseAgent):
         conv_provider = str(self.config.get("provider") or self.config.get("llm_provider") or "openai").lower()
         if self.routing_provider == "groq":
             if groq_available:
-                self.routing_client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=10.0)
+                self.routing_client = Groq(api_key=get_str(GROQ_API_KEY_ENV), timeout=10.0)
                 # Default to llama-3.3-70b-versatile (best for multilingual routing)
                 if not self.routing_model:
-                    self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_GROQ", "llama-3.3-70b-versatile")
+                    self.routing_model = get_str(DEFAULT_ROUTING_MODEL_GROQ_ENV, DEFAULT_ROUTING_MODEL_GROQ)
                 logger.info(f"Routing initialized with Groq ({self.routing_model}) - fast mode ~200ms")
             else:
                 logger.warning(
@@ -359,20 +379,22 @@ class GraphAgent(BaseAgent):
                 )
                 self.routing_client = self.openai
                 self.routing_provider = "openai"
-                self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_OPENAI", "gpt-4.1-mini")
+                self.routing_model = get_str(DEFAULT_ROUTING_MODEL_OPENAI_ENV, DEFAULT_ROUTING_MODEL_OPENAI)
         elif self.routing_provider == "azure":
             # Routing creds come from the Azure env (or matching conversation creds when explicitly
             # routed to the conversation backend) — never the conversation's OpenAI/custom key.
             routed_to_conv = bool(self.config.get("route_routing_to_conversation")) and conv_provider == "azure"
             if routed_to_conv:
-                azure_endpoint = self.base_url or os.getenv("AZURE_OPENAI_ENDPOINT")
-                azure_key = self.llm_key or os.getenv("AZURE_OPENAI_API_KEY")
+                azure_endpoint = self.base_url or get_str(AZURE_OPENAI_ENDPOINT_ENV)
+                azure_key = self.llm_key or get_str(AZURE_OPENAI_API_KEY_ENV)
             else:
-                azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or (
+                azure_endpoint = get_str(AZURE_OPENAI_ENDPOINT_ENV) or (
                     self.base_url if conv_provider == "azure" else None
                 )
-                azure_key = os.getenv("AZURE_OPENAI_API_KEY") or (self.llm_key if conv_provider == "azure" else None)
-            api_version = self.config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+                azure_key = get_str(AZURE_OPENAI_API_KEY_ENV) or (self.llm_key if conv_provider == "azure" else None)
+            api_version = self.config.get("api_version") or get_str(
+                AZURE_OPENAI_API_VERSION_ENV, DEFAULT_AZURE_OPENAI_API_VERSION
+            )
             overflow = self.config.get("overflow_llm") or {}
             # Built on first use: overflowing is rare, and an unused client still holds a pool.
             self._routing_overflow_cfg = (
@@ -390,12 +412,12 @@ class GraphAgent(BaseAgent):
             if self.routing_model:
                 self.routing_model = self.routing_model.split("/", 1)[-1]
             else:
-                self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_AZURE", "gpt-4.1-mini")
+                self.routing_model = get_str(DEFAULT_ROUTING_MODEL_AZURE_ENV, DEFAULT_ROUTING_MODEL_AZURE)
             logger.info(f"Routing initialized with Azure ({self.routing_model})")
         else:
             self.routing_client = self.openai
             if not self.routing_model:
-                self.routing_model = os.getenv("DEFAULT_ROUTING_MODEL_OPENAI", "gpt-4.1-mini")
+                self.routing_model = get_str(DEFAULT_ROUTING_MODEL_OPENAI_ENV, DEFAULT_ROUTING_MODEL_OPENAI)
             logger.info(f"Routing initialized with OpenAI ({self.routing_model})")
 
     async def check_for_completion(self, messages, check_for_completion_prompt, meta_info=None):
@@ -996,7 +1018,7 @@ class GraphAgent(BaseAgent):
                 routing_kwargs["max_completion_tokens"] = self.routing_max_tokens or 150
                 routing_kwargs["reasoning_effort"] = (
                     self.routing_reasoning_effort
-                    or os.getenv("GPT5_ROUTING_REASONING_EFFORT")
+                    or get_str(GPT5_ROUTING_REASONING_EFFORT_ENV)
                     or default_reasoning_effort(routing_model)
                 )
             else:

@@ -1,23 +1,28 @@
 import json
-import os
 import time
 from dotenv import load_dotenv
 from .base_agent import BaseAgent
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import format_messages
 from voiceai.llms import OpenAiLLM
 from voiceai.prompts import CHECK_FOR_COMPLETION_PROMPT, VOICEMAIL_DETECTION_PROMPT
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
+from .constants import (
+    CHECK_FOR_COMPLETION_LLM_ENV,
+    DEFAULT_VOICEMAIL_DETECTION_LLM,
+    VOICEMAIL_DETECTION_LLM_ENV,
+)
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class StreamingContextualAgent(BaseAgent):
     def __init__(self, llm):
         super().__init__()
         self.llm = llm
-        self.conversation_completion_llm = OpenAiLLM(model=os.getenv("CHECK_FOR_COMPLETION_LLM", llm.model))
-        self.voicemail_llm = OpenAiLLM(model=os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
+        self.conversation_completion_llm = OpenAiLLM(model=get_str(CHECK_FOR_COMPLETION_LLM_ENV, llm.model))
+        self.voicemail_llm = OpenAiLLM(model=get_str(VOICEMAIL_DETECTION_LLM_ENV, DEFAULT_VOICEMAIL_DETECTION_LLM))
         self.history = [{"content": ""}]
 
     async def check_for_completion(self, messages, check_for_completion_prompt, meta_info=None):

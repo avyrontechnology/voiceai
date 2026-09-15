@@ -6,7 +6,7 @@ from typing import AsyncGenerator, List, Optional
 
 import websockets
 
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import clean_gemini_schema
 from .base_s2s import MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_S, BaseS2SProvider
 from .events import (
@@ -24,7 +24,7 @@ from .events import (
     TranscriptDelta,
 )
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 GEMINI_LIVE_URL = (
     "wss://generativelanguage.googleapis.com/ws/"

@@ -6,16 +6,28 @@ Ref: https://docs.asterisk.org/Configuration/Channel-Drivers/WebSocket/
 
 import asyncio
 import json
-import os
 import time
 import traceback
+from voiceai.core.environment import get_str
+from voiceai.input_handlers.constants import (
+    DEFAULT_SIP_DTMF_INTERDIGIT_TIMEOUT_S,
+    DEFAULT_SIP_HANGUP_DRAIN_MAX_WAIT_S,
+    DEFAULT_SIP_HANGUP_DRAIN_SETTLE_S,
+    DEFAULT_SIP_HANGUP_DRAIN_TIMEOUT_S,
+    DEFAULT_SIP_HANGUP_SETTLE_S,
+    SIP_DTMF_INTERDIGIT_TIMEOUT_S_ENV,
+    SIP_HANGUP_DRAIN_MAX_WAIT_S_ENV,
+    SIP_HANGUP_DRAIN_SETTLE_S_ENV,
+    SIP_HANGUP_DRAIN_TIMEOUT_S_ENV,
+    SIP_HANGUP_SETTLE_S_ENV,
+)
 from voiceai.input_handlers.telephony import TelephonyInputHandler
 from voiceai.helpers.utils import create_ws_data_packet
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # Asterisk ulaw: 160 bytes per 20ms frame
@@ -27,24 +39,24 @@ AUDIO_BATCH_MS = 80
 
 # How long to wait after sending HANGUP before closing the WebSocket, giving Asterisk
 # time to act on it. Overridable via env.
-HANGUP_SETTLE_S = float(os.environ.get("SIP_HANGUP_SETTLE_S", "0.5"))
+HANGUP_SETTLE_S = float(get_str(SIP_HANGUP_SETTLE_S_ENV, DEFAULT_SIP_HANGUP_SETTLE_S))
 
 # Grace on top of the unplayed-audio estimate when waiting for Asterisk to confirm
 # (QUEUE_DRAINED) that it has played out everything we sent, before HANGUP cuts the
 # tail off the goodbye. Overridable via env.
-HANGUP_DRAIN_TIMEOUT_S = float(os.environ.get("SIP_HANGUP_DRAIN_TIMEOUT_S", "2.0"))
+HANGUP_DRAIN_TIMEOUT_S = float(get_str(SIP_HANGUP_DRAIN_TIMEOUT_S_ENV, DEFAULT_SIP_HANGUP_DRAIN_TIMEOUT_S))
 
 # Hard ceiling on the whole teardown drain (finish writing + play out). Asterisk's own
 # frame queue caps at ~24s of audio, so anything beyond this is a stuck signal, not a
 # long goodbye. Overridable via env.
-HANGUP_DRAIN_MAX_WAIT_S = float(os.environ.get("SIP_HANGUP_DRAIN_MAX_WAIT_S", "30.0"))
+HANGUP_DRAIN_MAX_WAIT_S = float(get_str(SIP_HANGUP_DRAIN_MAX_WAIT_S_ENV, DEFAULT_SIP_HANGUP_DRAIN_MAX_WAIT_S))
 
 # Extra wait after QUEUE_DRAINED for the far-end jitter buffer. Overridable via env.
-HANGUP_DRAIN_SETTLE_S = float(os.environ.get("SIP_HANGUP_DRAIN_SETTLE_S", "0.5"))
+HANGUP_DRAIN_SETTLE_S = float(get_str(SIP_HANGUP_DRAIN_SETTLE_S_ENV, DEFAULT_SIP_HANGUP_DRAIN_SETTLE_S))
 
 # Submit accumulated DTMF digits after this much inter-digit silence (reset on each
 # keypress), or immediately when '#' is pressed. Overridable via env.
-DTMF_INTERDIGIT_TIMEOUT_S = float(os.environ.get("SIP_DTMF_INTERDIGIT_TIMEOUT_S", "3"))
+DTMF_INTERDIGIT_TIMEOUT_S = float(get_str(SIP_DTMF_INTERDIGIT_TIMEOUT_S_ENV, DEFAULT_SIP_DTMF_INTERDIGIT_TIMEOUT_S))
 
 
 def _parse_asterisk_control_message(text: str) -> dict:

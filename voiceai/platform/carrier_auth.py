@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
-import os
 from typing import List, Mapping, Optional, Union
 
 from fastapi import Header, Request
@@ -48,7 +47,9 @@ _DEFAULT_TRUSTED_CIDRS = ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12
 
 
 def telephony_api_keys() -> List[str]:
-    raw = os.getenv(TELEPHONY_API_KEY_ENV, "")
+    from voiceai.core.environment import get_str
+
+    raw = get_str(TELEPHONY_API_KEY_ENV, "") or ""
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
@@ -57,7 +58,9 @@ def telephony_api_key_configured() -> bool:
 
 
 def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in _TRUTHY
+    from voiceai.core.environment import get_str
+
+    return (get_str(name, "") or "").strip().lower() in _TRUTHY
 
 
 def allow_open_dial() -> bool:
@@ -144,7 +147,9 @@ def is_loopback_request(request: Optional[Request]) -> bool:
 
 def trusted_proxy_nets() -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
     """Networks whose X-Forwarded-* headers are trusted (default: loopback + RFC1918)."""
-    raw = os.getenv(TRUSTED_PROXIES_ENV, "").strip()
+    from voiceai.core.environment import get_str
+
+    raw = (get_str(TRUSTED_PROXIES_ENV, "") or "").strip()
     cidrs = [c.strip() for c in raw.split(",") if c.strip()] if raw else list(_DEFAULT_TRUSTED_CIDRS)
     nets = []
     for cidr in cidrs:
@@ -223,7 +228,9 @@ def public_url_for(request: Request) -> str:
     """The URL the carrier signed: explicit base wins, else proxy headers only from trusted peers."""
     path = request.url.path
     query = f"?{request.url.query}" if request.url.query else ""
-    explicit = os.getenv(TELEPHONY_PUBLIC_URL_ENV, "").strip().rstrip("/")
+    from voiceai.core.environment import get_str
+
+    explicit = (get_str(TELEPHONY_PUBLIC_URL_ENV, "") or "").strip().rstrip("/")
     if explicit:
         return f"{explicit}{path}{query}"
     if client_via_trusted_proxy(request):

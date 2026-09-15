@@ -6,8 +6,8 @@ from typing import AsyncGenerator, List, Optional
 
 import websockets
 
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import log_ignored
+from voiceai.otobaai_logger import get_logger
+from voiceai.core.resilience import log_ignored
 from .base_s2s import MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY_S, BaseS2SProvider
 from .events import (
     AudioDelta,
@@ -22,7 +22,7 @@ from .events import (
     TranscriptDelta,
 )
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 

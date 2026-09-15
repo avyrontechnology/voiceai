@@ -24,7 +24,6 @@ The pool is in-memory and therefore per-process: run uvicorn with
 """
 
 import asyncio
-import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -32,7 +31,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from voiceai.errors import ConfigurationError, classify_exception, is_cancellation, summarize_exception
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import log_ignored, safe_task
+from voiceai.core.resilience import log_ignored, safe_task
 
 logger = configure_logger(__name__)
 
@@ -41,22 +40,28 @@ _PING_JSON = {"type": "ping"}
 
 
 def _env_int(name: str, default: int) -> int:
+    from voiceai.core.environment import get_str
+
     try:
-        return int(os.getenv(name, str(default)) or default)
+        return int(get_str(name, str(default)) or default)
     except (TypeError, ValueError):
         return default
 
 
 def _env_float(name: str, default: float) -> float:
+    from voiceai.core.environment import get_str
+
     try:
-        return float(os.getenv(name, str(default)) or default)
+        return float(get_str(name, str(default)) or default)
     except (TypeError, ValueError):
         return default
 
 
 def is_warm_pool_enabled() -> bool:
     """True only when ``WARM_POOL_ENABLED=1``; anything else is direct-dial."""
-    return (os.getenv("WARM_POOL_ENABLED", "0") or "0").strip() == "1"
+    from voiceai.core.environment import get_str
+
+    return (get_str("WARM_POOL_ENABLED", "0") or "0").strip() == "1"
 
 
 def warm_pool_max_per_voice() -> int:
@@ -513,24 +518,28 @@ class WarmPool:
 
 def default_tts_keys() -> List[TTSKey]:
     """One standby per default voice (lifespan prewarm)."""
+    from voiceai.core.environment import get_str
+
     return [
         TTSKey(
-            model=os.getenv("WARM_POOL_TTS_MODEL", "bulbul:v3"),
-            speaker=os.getenv("WARM_POOL_TTS_SPEAKER", "shubh"),
-            lang=os.getenv("WARM_POOL_TTS_LANG", "hi-IN"),
+            model=get_str("WARM_POOL_TTS_MODEL", "bulbul:v3") or "bulbul:v3",
+            speaker=get_str("WARM_POOL_TTS_SPEAKER", "shubh") or "shubh",
+            lang=get_str("WARM_POOL_TTS_LANG", "hi-IN") or "hi-IN",
             rate=_env_int("WARM_POOL_TTS_RATE", 8000),
-            codec=os.getenv("WARM_POOL_TTS_CODEC", "mulaw"),
+            codec=get_str("WARM_POOL_TTS_CODEC", "mulaw") or "mulaw",
         )
     ]
 
 
 def default_stt_keys() -> List[STTKey]:
+    from voiceai.core.environment import get_str
+
     return [
         STTKey(
-            model=os.getenv("WARM_POOL_STT_MODEL", "saaras:v3"),
-            lang=os.getenv("WARM_POOL_STT_LANG", "hi-IN"),
-            mode=os.getenv("WARM_POOL_STT_MODE", "transcribe"),
-            vad=os.getenv("WARM_POOL_STT_VAD", "high"),
+            model=get_str("WARM_POOL_STT_MODEL", "saaras:v3") or "saaras:v3",
+            lang=get_str("WARM_POOL_STT_LANG", "hi-IN") or "hi-IN",
+            mode=get_str("WARM_POOL_STT_MODE", "transcribe") or "transcribe",
+            vad=get_str("WARM_POOL_STT_VAD", "high") or "high",
         )
     ]
 

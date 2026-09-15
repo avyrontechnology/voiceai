@@ -26,7 +26,6 @@ Env:
 """
 
 import asyncio
-import os
 from typing import Any, Dict, Optional
 
 import httpx
@@ -35,11 +34,13 @@ from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import Execution, ExecutionStatus, new_id, utcnow
 from voiceai.platform.store import MemoryStore
 
+from voiceai.core.environment import get_str
+
 logger = configure_logger(__name__)
 
-TRUNK_URL = os.getenv("TALKO_TRUNK_URL", "http://talko-app:8004").rstrip("/")
-TRUNK_TIMEOUT_S = float(os.getenv("TALKO_TRUNK_TIMEOUT_S", "20"))
-DIAL_CONCURRENCY = int(os.getenv("TALKO_DIAL_CONCURRENCY", "3"))
+TRUNK_URL = (get_str("TALKO_TRUNK_URL", "http://talko-app:8004") or "http://talko-app:8004").rstrip("/")
+TRUNK_TIMEOUT_S = float(get_str("TALKO_TRUNK_TIMEOUT_S", "20") or "20")
+DIAL_CONCURRENCY = int(get_str("TALKO_DIAL_CONCURRENCY", "3") or "3")
 
 
 def _trunk_headers() -> Dict[str, str]:
@@ -48,7 +49,7 @@ def _trunk_headers() -> Dict[str, str]:
     Read at call time (not import time) so tests and late `load_dotenv()` calls are honoured;
     the first configured key is the one this engine presents.
     """
-    keys = [k.strip() for k in os.getenv("TELEPHONY_API_KEY", "").split(",") if k.strip()]
+    keys = [k.strip() for k in (get_str("TELEPHONY_API_KEY", "") or "").split(",") if k.strip()]
     return {"X-API-Key": keys[0]} if keys else {}
 
 
@@ -71,7 +72,7 @@ async def dial_via_talko(
     Cancellation (batch stop) propagates; timeouts become FAILED with a classified cause.
     """
     from voiceai.errors import is_cancellation
-    from voiceai.helpers.resilience import with_timeout
+    from voiceai.core.resilience import with_timeout
 
     execution = Execution(
         execution_id=new_id("exec"),

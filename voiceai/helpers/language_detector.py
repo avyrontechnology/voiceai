@@ -1,4 +1,3 @@
-import os
 import json
 import time
 import asyncio
@@ -7,9 +6,11 @@ from voiceai.llms import OpenAiLLM
 from voiceai.prompts import LANGUAGE_DETECTION_PROMPT
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import DEFAULT_LANGUAGE_DETECTION_LLM, LANGUAGE_DETECTION_LLM_ENV
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class LanguageDetector:
@@ -30,7 +31,7 @@ class LanguageDetector:
         self.detected_at_epoch_ms = None
 
         if self.turns_threshold > 0:
-            self._llm = OpenAiLLM(model=os.getenv("LANGUAGE_DETECTION_LLM", "gpt-4.1-mini"))
+            self._llm = OpenAiLLM(model=get_str(LANGUAGE_DETECTION_LLM_ENV, DEFAULT_LANGUAGE_DETECTION_LLM))
 
     @property
     def dominant_language(self) -> str | None:
@@ -64,7 +65,7 @@ class LanguageDetector:
         if len(self._transcripts) >= self.turns_threshold:
             self._in_progress = True
             try:
-                from voiceai.helpers.resilience import safe_task as _safe_task
+                from voiceai.core.resilience import safe_task as _safe_task
 
                 self._task = _safe_task(self._run_detection(), name="language_detector", logger=logger)
             except RuntimeError:

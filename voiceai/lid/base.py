@@ -2,9 +2,9 @@ import asyncio
 import time
 from typing import Awaitable, Callable, Optional
 
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Undrained buffer age bound: segments older than this are evicted at accumulate time so a
 # skipped/retained generation cannot lend its duration or text to a later turn.

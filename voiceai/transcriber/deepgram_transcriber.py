@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-import os
 import json
 import aiohttp
 import time
@@ -11,7 +10,17 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, ConnectionClosed
 
 from .base_transcriber import BaseTranscriber
-from voiceai.helpers.logger_config import configure_logger
+from .constants import (
+    DEEPGRAM_AUTH_TOKEN_ENV_KEY,
+    DEEPGRAM_FLUX_HOST_ENV_KEY,
+    DEEPGRAM_HOST_ENV_KEY,
+    DEEPGRAM_HOST_PROTOCOL_ENV_KEY,
+    DEFAULT_DEEPGRAM_FLUX_HOST,
+    DEFAULT_DEEPGRAM_HOST,
+    DEFAULT_DEEPGRAM_HOST_PROTOCOL,
+)
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 from voiceai.enums import TelephonyProvider
@@ -23,7 +32,7 @@ from voiceai.constants import (
 )
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -59,9 +68,9 @@ class DeepgramTranscriber(BaseTranscriber):
         self.model = model
         self.sampling_rate = int(sampling_rate) if isinstance(sampling_rate, (str, int)) else 16000
         self.encoding = encoding
-        self.api_key = kwargs.get("transcriber_key", os.getenv("DEEPGRAM_AUTH_TOKEN"))
-        self.deepgram_host = os.getenv("DEEPGRAM_HOST", "api.deepgram.com")
-        self.deepgram_flux_host = os.getenv("DEEPGRAM_FLUX_HOST", "api.deepgram.com")
+        self.api_key = kwargs.get("transcriber_key", get_str(DEEPGRAM_AUTH_TOKEN_ENV_KEY))
+        self.deepgram_host = get_str(DEEPGRAM_HOST_ENV_KEY, DEFAULT_DEEPGRAM_HOST)
+        self.deepgram_flux_host = get_str(DEEPGRAM_FLUX_HOST_ENV_KEY, DEFAULT_DEEPGRAM_FLUX_HOST)
         self.transcriber_output_queue = output_queue
         self.transcription_task = None
         self.keywords = keywords
@@ -213,7 +222,9 @@ class DeepgramTranscriber(BaseTranscriber):
             dg_params["tag"] = self.run_id
             dg_params["extra"] = f"run_id:{self.run_id}"
 
-        websocket_api = "{}://{}/v1/listen?".format(os.getenv("DEEPGRAM_HOST_PROTOCOL", "wss"), self.deepgram_host)
+        websocket_api = "{}://{}/v1/listen?".format(
+            get_str(DEEPGRAM_HOST_PROTOCOL_ENV_KEY, DEFAULT_DEEPGRAM_HOST_PROTOCOL), self.deepgram_host
+        )
         websocket_url = websocket_api + urlencode(dg_params)
 
         if self.keywords:
@@ -272,7 +283,9 @@ class DeepgramTranscriber(BaseTranscriber):
         if self.run_id:
             dg_params["tag"] = self.run_id
 
-        websocket_api = "{}://{}/v2/listen?".format(os.getenv("DEEPGRAM_HOST_PROTOCOL", "wss"), self.deepgram_flux_host)
+        websocket_api = "{}://{}/v2/listen?".format(
+            get_str(DEEPGRAM_HOST_PROTOCOL_ENV_KEY, DEFAULT_DEEPGRAM_HOST_PROTOCOL), self.deepgram_flux_host
+        )
         websocket_url = websocket_api + urlencode(dg_params, doseq=True)
         return websocket_url
 

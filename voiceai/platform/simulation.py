@@ -19,9 +19,8 @@ Batch reliability notes (A10):
 """
 
 import asyncio
-import os
 from datetime import timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
@@ -37,6 +36,9 @@ from voiceai.platform.models import (
     utcnow,
 )
 from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:  # Annotation-only (no runtime cycle)
+    from voiceai.platform.repositories import PlatformRepository
 from voiceai.platform.talko_dialer import DIAL_CONCURRENCY, dial_via_talko
 
 logger = configure_logger(__name__)
@@ -106,10 +108,10 @@ def is_within_calling_hours(now: Any, window: CallingHours) -> bool:
 
 
 def _batch_limit() -> int:
-    try:
-        return max(1, int(os.getenv("BATCH_MAX_ENTRIES", str(BATCH_MAX_ENTRIES))))
-    except ValueError:
-        return BATCH_MAX_ENTRIES
+    from voiceai.core import environment as _environment
+    from voiceai.platform.models import BATCH_MAX_ENTRIES as _DEFAULT
+
+    return _environment.get_batch_max_entries(_DEFAULT)
 
 
 async def _is_batch_cancelled(store: MemoryStore, batch_id: str) -> bool:
@@ -176,7 +178,7 @@ def finalize_execution(execution: Execution) -> Execution:
 
 
 async def run_simulated_call(
-    store: MemoryStore,
+    store: "PlatformRepository",
     *,
     agent_id: str,
     to_number: str,
@@ -249,7 +251,7 @@ async def run_simulated_call(
 
 
 async def progress_simulated_call(
-    store: MemoryStore,
+    store: "PlatformRepository",
     execution_id: str,
     delay_scale: float = 0.5,
 ) -> Optional[Execution]:
@@ -293,7 +295,7 @@ async def progress_simulated_call(
     return execution
 
 
-async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5) -> Optional[Batch]:
+async def run_batch(store: "PlatformRepository", batch_id: str, delay_scale: float = 0.5) -> Optional[Batch]:
     """Drive every entry of a batch, honouring stop and calling windows.
 
     `provider="talko"` dials each entry for real via the Talko trunk
@@ -309,7 +311,7 @@ async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5)
       COMPLETED counts as completed; trunk refusals count FAILED.
     """
     from voiceai.errors import ConflictError, InvalidRequestError, is_cancellation
-    from voiceai.helpers.resilience import with_timeout
+    from voiceai.core.resilience import with_timeout
 
     batch = await store.get_batch(batch_id)
     if batch is None or batch.status not in (BatchStatus.DRAFT, BatchStatus.SCHEDULED, BatchStatus.RUNNING):
