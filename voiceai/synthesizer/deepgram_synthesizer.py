@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import json
-import os
 import time
 import traceback
 from collections import deque
@@ -12,14 +11,20 @@ from dotenv import load_dotenv
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import convert_audio_to_wav, create_ws_data_packet
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEEPGRAM_AUTH_TOKEN_ENV,
+    DEEPGRAM_HOST_ENV,
+    DEFAULT_DEEPGRAM_HOST,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
-DEEPGRAM_HOST = os.getenv("DEEPGRAM_HOST", "api.deepgram.com")
+DEEPGRAM_HOST = get_str(DEEPGRAM_HOST_ENV, DEFAULT_DEEPGRAM_HOST)
 DEEPGRAM_TTS_URL = f"https://{DEEPGRAM_HOST}/v1/speak"
 DEEPGRAM_TTS_WS_URL = f"wss://{DEEPGRAM_HOST}/v1/speak"
 
@@ -47,7 +52,7 @@ class DeepgramSynthesizer(StreamSynthesizer):
         self.voice_id = voice_id
         self.sample_rate = str(sampling_rate)
         self.model = model
-        self.api_key = kwargs.get("transcriber_key", os.getenv("DEEPGRAM_AUTH_TOKEN"))
+        self.api_key = kwargs.get("transcriber_key", get_str(DEEPGRAM_AUTH_TOKEN_ENV))
 
         self.use_mulaw = kwargs.get("use_mulaw", False)
         # mu-law is only valid at 8 kHz telephony; web (24 kHz) must stay PCM even

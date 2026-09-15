@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import re
 import time
 import uuid
@@ -11,12 +10,18 @@ import aiohttp
 import websockets
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str, require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, resample
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEFAULT_ELEVENLABS_API_HOST,
+    ELEVENLABS_API_HOST_ENV,
+    ELEVENLABS_API_KEY_ENV,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ElevenlabsBase(StreamSynthesizer):
@@ -45,7 +50,7 @@ class ElevenlabsBase(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["ELEVENLABS_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(ELEVENLABS_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice = voice_id
         self.model = model
         self.stream = True
@@ -60,7 +65,7 @@ class ElevenlabsBase(StreamSynthesizer):
         if self.caching:
             self.cache = InmemoryScalarCache()
 
-        self.elevenlabs_host = os.getenv("ELEVENLABS_API_HOST", "api.elevenlabs.io")
+        self.elevenlabs_host = get_str(ELEVENLABS_API_HOST_ENV, DEFAULT_ELEVENLABS_API_HOST)
         # Set from the x-trace-id response header on connect; both sockets log against it.
         self.ws_trace_id = None
         if self.use_mulaw:

@@ -1,6 +1,6 @@
 """build_lid_decision_record — the per-firing LID telemetry record (persisted to lid_detection_events)."""
 
-from voiceai.agent_manager.task_manager import build_lid_decision_record
+from voiceai.agent_manager.static_methods import build_lid_decision_record
 
 DECISION = {
     "target_language": "en",

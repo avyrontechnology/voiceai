@@ -1,11 +1,10 @@
 import base64
 import json
-import os
 from dotenv import load_dotenv
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.output_handlers.telephony import TelephonyOutputHandler, lin16_to_mulaw
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 

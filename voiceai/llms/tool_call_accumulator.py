@@ -1,10 +1,10 @@
 import json
 from voiceai.constants import END_CALL_FUNCTION_PREFIX
 from voiceai.helpers.utils import convert_to_request_log, compute_function_pre_call_message
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from .types import FunctionCallPayload, apply_tool_arguments, redact_secrets
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ToolCallAccumulator:

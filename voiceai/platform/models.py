@@ -13,6 +13,10 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer
+from pymongo import IndexModel
+
+from voiceai.database.base import BaseDocument
+from voiceai.database.constants import COLLECTIONS
 
 
 def _to_decimal(value: Any) -> Decimal:
@@ -73,7 +77,11 @@ class LatencyBreakdown(BaseModel):
     e2e_ms: int = 0
 
 
-class Execution(BaseModel):
+class Execution(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["EXECUTIONS"]
+        indexes = [IndexModel([("org_id", 1), ("agent_id", 1), ("started_at", -1)])]
+
     execution_id: str
     agent_id: str
     batch_id: Optional[str] = None
@@ -190,7 +198,7 @@ class CreateBatchRequest(BaseModel):
     )
 
 
-class Batch(BaseModel):
+class Batch(BaseDocument):
     """A dial batch. Lifecycle: DRAFT/SCHEDULED -> RUNNING -> COMPLETED/STOPPED.
 
     Start uses compare-and-set (only DRAFT/SCHEDULED may move to RUNNING) with an optional
@@ -200,6 +208,10 @@ class Batch(BaseModel):
     (execution IN_PROGRESS, completion arrives via Talko CDR callback — not yet wired, see
     talko_dialer) rather than `stats.completed`.
     """
+
+    class Settings:
+        name = COLLECTIONS["BATCHES"]
+        indexes = [IndexModel([("org_id", 1), ("agent_id", 1)])]
 
     batch_id: str
     agent_id: str
@@ -238,7 +250,10 @@ class AssignNumberRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
 
 
-class PhoneNumber(BaseModel):
+class PhoneNumber(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["PHONE_NUMBERS"]
+
     number_id: str
     number: str
     provider: PhoneNumberProvider = "simulated"
@@ -266,7 +281,10 @@ class AttachKBRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
 
 
-class KnowledgeBase(BaseModel):
+class KnowledgeBase(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["KNOWLEDGE_BASES"]
+
     kb_id: str
     name: str
     sources: List[KBSource] = Field(default_factory=list)
@@ -287,7 +305,10 @@ class CreateToolRequest(BaseModel):
     enabled: bool = True
 
 
-class Tool(BaseModel):
+class Tool(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["TOOLS"]
+
     tool_id: str
     agent_id: Optional[str] = None
     name: str
@@ -309,7 +330,10 @@ class CreateWebhookRequest(BaseModel):
     enabled: bool = True
 
 
-class Webhook(BaseModel):
+class Webhook(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WEBHOOKS"]
+
     webhook_id: str
     agent_id: Optional[str] = None
     url: str
@@ -323,13 +347,16 @@ class WebhookListResponse(BaseModel):
     webhooks: List[Webhook]
 
 
-class Wallet(BaseModel):
+class Wallet(BaseDocument):
     """Topup-only decorative balance (no debit path calls it yet; `debit` ledger type is reserved).
 
     Amounts are Decimal internally (serialized as float for API compat) and topups are
     atomic via the store lock; Redis multi-worker deployments need a Lua/WATCH transaction
     for the same guarantee (see MemoryStore.topup_wallet_credits).
     """
+
+    class Settings:
+        name = COLLECTIONS["WALLETS"]
 
     balance_credits: CreditAmount = Field(default=Decimal("0"))
     currency: str = "credits"
@@ -341,7 +368,10 @@ class TopUpRequest(BaseModel):
     reason: Optional[str] = None
 
 
-class LedgerEntry(BaseModel):
+class LedgerEntry(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["LEDGER_ENTRIES"]
+
     entry_id: str
     type: Literal["topup", "debit"]
     amount_credits: CreditAmount
@@ -385,7 +415,10 @@ class NotificationPrefs(BaseModel):
     channel_webhook: bool = False
 
 
-class Organization(BaseModel):
+class Organization(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["ORGANIZATIONS"]
+
     org_id: str = "default"
     name: str = "Acme Neural Corp"
     support_email: str = "ops@acmeneural.io"
@@ -405,7 +438,11 @@ class UpdateOrganizationRequest(BaseModel):
     notifications: Optional[NotificationPrefs] = None
 
 
-class ApiKey(BaseModel):
+class ApiKey(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["API_KEYS"]
+        indexes = [IndexModel([("key_hash", 1)], unique=True)]
+
     key_id: str
     name: str
     prefix: str
@@ -490,7 +527,11 @@ ROLE_SCOPES: Dict[str, List[str]] = {
 ROLE_RANK: Dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
 
 
-class User(BaseModel):
+class User(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["USERS"]
+        indexes = [IndexModel([("email", 1)], unique=True)]
+
     user_id: str
     email: str = Field(..., pattern=EMAIL_PATTERN)
     name: Optional[str] = None
@@ -535,7 +576,11 @@ class InviteRequest(BaseModel):
     role: UserRole = "member"
 
 
-class Invite(BaseModel):
+class Invite(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INVITES"]
+        indexes = [IndexModel([("token_hash", 1)], unique=True)]
+
     invite_id: str
     email: str
     name: Optional[str] = None
@@ -574,7 +619,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-class SessionRecord(BaseModel):
+class SessionRecord(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["SESSIONS"]
+        indexes = [IndexModel([("token_hash", 1)], unique=True), IndexModel([("expires_at", 1)], expireAfterSeconds=0)]
+
     token_hash: str
     user_id: str
     org_id: str = "default"
@@ -593,7 +642,10 @@ class WsTicketResponse(BaseModel):
     expires_in: int = 60
 
 
-class AuthEvent(BaseModel):
+class AuthEvent(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["AUTH_EVENTS"]
+
     event_id: str
     type: str
     user_id: Optional[str] = None
@@ -629,7 +681,10 @@ class Member(BaseModel):
     added_at: datetime = Field(default_factory=utcnow)
 
 
-class SubAccount(BaseModel):
+class SubAccount(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["SUB_ACCOUNTS"]
+
     sub_id: str
     name: str
     concurrency_cap: Optional[int] = None
@@ -652,7 +707,10 @@ class SubAccountListResponse(BaseModel):
     sub_accounts: List[SubAccount]
 
 
-class Integration(BaseModel):
+class Integration(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INTEGRATIONS"]
+
     integration_id: str
     kind: Literal[
         "twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"
@@ -714,7 +772,10 @@ def strip_masked_values(config: Dict[str, Any]) -> Dict[str, Any]:
     return {field: value for field, value in config.items() if value != MASKED_SECRET}
 
 
-class InboundConfig(BaseModel):
+class InboundConfig(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["INBOUND_CONFIGS"]
+
     agent_id: str
     assigned_number_id: Optional[str] = None
     greeting: Optional[str] = None
@@ -743,7 +804,10 @@ class CreateVoiceRequest(BaseModel):
     language: Optional[str] = None
 
 
-class VoiceEntry(BaseModel):
+class VoiceEntry(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["VOICES"]
+
     voice_id: str
     agent_id: Optional[str] = None
     name: str
@@ -758,13 +822,16 @@ class VoiceListResponse(BaseModel):
     voices: List[VoiceEntry]
 
 
-class VectorStoreConfig(BaseModel):
+class VectorStoreConfig(BaseDocument):
     """Manual vector-store connection for knowledge/graph agents.
 
     Persisted per agent in the platform store (never silently dropped).
     `connection_string` holds credentials: GETs return the masked literal,
     PUTs with the masked literal preserve the stored secret (never clobber).
     """
+
+    class Settings:
+        name = COLLECTIONS["VECTOR_STORES"]
 
     provider: Literal["mongodb", "lancedb"] = "mongodb"
     connection_string: Optional[str] = None
@@ -797,7 +864,10 @@ class VectorStoreConfig(BaseModel):
         return self
 
 
-class GraphDoc(BaseModel):
+class GraphDoc(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["GRAPHS"]
+
     graph_id: str
     name: str
     agent_id: Optional[str] = None
@@ -806,7 +876,10 @@ class GraphDoc(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class GraphVersion(BaseModel):
+class GraphVersion(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["GRAPH_VERSIONS"]
+
     version_id: str
     graph_id: str
     version_number: int
@@ -848,7 +921,10 @@ class NodeReport(BaseModel):
     at: str = ""
 
 
-class WorkflowRun(BaseModel):
+class WorkflowRun(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_RUNS"]
+
     run_id: str
     workflow_id: str
     campaign_id: Optional[str] = None
@@ -863,7 +939,10 @@ class WorkflowRunListResponse(BaseModel):
     runs: List[WorkflowRun]
 
 
-class WorkflowDoc(BaseModel):
+class WorkflowDoc(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOWS"]
+
     workflow_id: str
     name: str
     definition: Dict[str, Any] = Field(default_factory=dict)
@@ -871,7 +950,10 @@ class WorkflowDoc(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class WorkflowVersion(BaseModel):
+class WorkflowVersion(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_VERSIONS"]
+
     version_id: str
     workflow_id: str
     version_number: int
@@ -925,7 +1007,10 @@ class WorkflowCampaignStatus(str, Enum):
     STOPPED = "stopped"
 
 
-class WorkflowCampaign(BaseModel):
+class WorkflowCampaign(BaseDocument):
+    class Settings:
+        name = COLLECTIONS["WORKFLOW_CAMPAIGNS"]
+
     campaign_id: str
     workflow_id: str
     name: str
@@ -966,3 +1051,32 @@ class LatencyStats(BaseModel):
     p95_e2e_ms: Optional[int] = None
     by_stage: Dict[str, int] = Field(default_factory=dict)
     buckets: List[LatencyBucket] = Field(default_factory=list)
+
+
+ALL_DOCUMENT_MODELS: list = [
+    Execution,
+    Batch,
+    PhoneNumber,
+    KnowledgeBase,
+    Tool,
+    Webhook,
+    InboundConfig,
+    VoiceEntry,
+    VectorStoreConfig,
+    SubAccount,
+    Integration,
+    GraphDoc,
+    GraphVersion,
+    WorkflowDoc,
+    WorkflowVersion,
+    WorkflowRun,
+    WorkflowCampaign,
+    Organization,
+    ApiKey,
+    User,
+    SessionRecord,
+    Invite,
+    AuthEvent,
+    Wallet,
+    LedgerEntry,
+]

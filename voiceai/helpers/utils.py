@@ -21,7 +21,15 @@ from contextlib import AsyncExitStack
 from enum import Enum
 from dotenv import load_dotenv
 from pydantic import create_model
-from .logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import (
+    BUCKET_NAME_ENV,
+    DEFAULT_SONIOX_HOST_PROTOCOL,
+    RECORDING_BUCKET_NAME_ENV,
+    RECORDING_BUCKET_URL_ENV,
+    SONIOX_HOST_PROTOCOL_ENV,
+)
+from voiceai.otobaai_logger import get_logger
 from voiceai.constants import (
     PREPROCESS_DIR,
     PRE_FUNCTION_CALL_MESSAGE,
@@ -33,11 +41,11 @@ from voiceai.prompts import DATE_PROMPT
 from pydub import AudioSegment
 import audioop
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
-BUCKET_NAME = os.getenv("BUCKET_NAME")
-RECORDING_BUCKET_NAME = os.getenv("RECORDING_BUCKET_NAME")
-RECORDING_BUCKET_URL = os.getenv("RECORDING_BUCKET_URL")
+BUCKET_NAME = get_str(BUCKET_NAME_ENV)
+RECORDING_BUCKET_NAME = get_str(RECORDING_BUCKET_NAME_ENV)
+RECORDING_BUCKET_URL = get_str(RECORDING_BUCKET_URL_ENV)
 
 _LOG_DIR = "./logs"
 os.makedirs(_LOG_DIR, exist_ok=True)
@@ -953,7 +961,7 @@ def _build_stereo_wav_bytes_sync(conversation_recording, sampling_rate: int = 24
 
 
 async def save_audio_file_to_s3(conversation_recording, sampling_rate=24000, assistant_id=None, run_id=None):
-    from voiceai.errors import InvalidRequestError
+    from voiceai.helpers.exceptions import InvalidRequestError
 
     if not isinstance(conversation_recording, dict):
         raise InvalidRequestError("conversation_recording must be a dict", component="storage")
@@ -1126,7 +1134,7 @@ def convert_to_request_log(
                 log["llm_metadata"] = llm_metadata
     log["engine"] = engine
     try:
-        from voiceai.helpers.resilience import safe_task as _safe_task
+        from voiceai.core.resilience import safe_task as _safe_task
 
         _safe_task(write_request_logs(log, run_id), name="write_request_logs", logger=logger)
     except RuntimeError:
@@ -1236,7 +1244,7 @@ def audio_to_pcm(audio, *, target_sample_rate, rate_hint=8000, format_hint=""):
 
 def soniox_ws_url(host):
     """Soniox realtime WS endpoint — single source of truth for transcriber + LID tap."""
-    protocol = os.getenv("SONIOX_HOST_PROTOCOL", "wss")
+    protocol = get_str(SONIOX_HOST_PROTOCOL_ENV, DEFAULT_SONIOX_HOST_PROTOCOL) or DEFAULT_SONIOX_HOST_PROTOCOL
     return f"{protocol}://{host}/transcribe-websocket"
 
 

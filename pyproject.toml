@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voiceai"
-version = "0.10.217"
+version = "0.11.0"
 readme = "README.md"
 authors = [
     { name = "Prateek Sachan", email = "ps@prateeksachan.com" }
@@ -24,7 +24,7 @@ dynamic = ["dependencies"]
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-dev = ["pip-tools", "pre-commit", "pytest", "pytest-asyncio", "ruff"]
+dev = ["pip-tools", "pre-commit", "pytest", "pytest-asyncio", "ruff", "mypy==1.18.2", "import-linter==2.15"]
 
 [tool.pytest.ini_options]
 # Coroutine tests need no @pytest.mark.asyncio decorator.
@@ -57,6 +57,110 @@ select = [
     "F821",  # undefined names
     "ISC",  # implicit string concatenation bugs
 ]
+
+[tool.mypy]
+# Gate baseline (001-submodule-restructure): top level stays lenient so
+# legacy modules keep passing exactly as before mypy existed; strictness
+# applies ONLY to the new layout via the override below. The gate runs
+# mypy on the new packages; scope widens module-by-module as migrations
+# land (each migrated module joins the override list).
+python_version = "3.10"
+ignore_missing_imports = true
+# typestubs/ shadows third-party stubs that cannot parse under 3.10
+# (numpy 2.x uses the 3.12 `type` statement); values type as Any there.
+mypy_path = "typestubs"
+
+[[tool.mypy.overrides]]
+module = ["voiceai.core.*", "voiceai.common.*", "voiceai.database.*", "voiceai.otobaai_logger.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# Followed legacy modules surface default-on errors (var-annotated, misc)
+# that predate mypy; silence them here so the gate judges new code only.
+# Narrow this list as modules migrate into the strict override above.
+[[tool.mypy.overrides]]
+module = ["voiceai.helpers.logger_config"]
+ignore_errors = true
+
+# US3-fleet legacy set: pulled into scope by new code that imports it
+# (package __init__ chains, audio helpers). Joins strictness module by
+# module in future migrations; new code stays strict regardless.
+[[tool.mypy.overrides]]
+module = [
+    "voiceai.agent_manager.interruption_manager",
+    "voiceai.agent_manager.task_manager",
+    "voiceai.agent_manager.voicemail_handler",
+    "voiceai.agent_types.graph_agent",
+    "voiceai.agent_types.graph_based_conversational_agent",
+    "voiceai.agent_types.knowledgebase_agent",
+    "voiceai.helpers.conversation_history",
+    "voiceai.helpers.expression_evaluator",
+    "voiceai.helpers.language_detector",
+    "voiceai.helpers.language_switcher",
+    "voiceai.helpers.mark_event_meta_data",
+    "voiceai.helpers.utils",
+    "voiceai.input_handlers.telephony_providers.sip_trunk",
+    "voiceai.llms.gemini_llm",
+    "voiceai.llms.openai_base",
+    "voiceai.llms.openai_llm",
+    "voiceai.llms.tool_call_accumulator",
+    "voiceai.models",
+    "voiceai.output_handlers.default",
+    "voiceai.output_handlers.socket_errors",
+    "voiceai.output_handlers.telephony",
+    "voiceai.output_handlers.telephony_providers.sip_trunk",
+    "voiceai.s2s.gemini_live_s2s",
+    "voiceai.s2s.openai_realtime_s2s",
+    "voiceai.synthesizer.kalpa_synthesizer",
+    "voiceai.transcriber.gladia_transcriber",
+    "voiceai.transcriber.pixa_transcriber",
+    "voiceai.transcriber.sarvam_transcriber",
+    "voiceai.transcriber.smallest_transcriber",
+    "voiceai.transcriber.transcriber_pool",
+]
+ignore_errors = true
+
+# Legacy platform files (pre-US2): silenced wholesale. The nine migrated
+# platform modules below stay strict; the rest join as US3+ lands.
+[[tool.mypy.overrides]]
+module = ["voiceai.platform.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "voiceai.agent_manager.utils",
+    "voiceai.agent_manager.static_methods",
+    "voiceai.platform.controllers",
+    "voiceai.platform.services",
+    "voiceai.platform.repositories",
+    "voiceai.platform.mongo_store",
+    "voiceai.platform.helpers",
+    "voiceai.platform.utils",
+    "voiceai.platform.static_methods",
+    "voiceai.platform.constants",
+    "voiceai.platform.errors",
+    "voiceai.platform.exceptions",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# Third-party stub chain (pymongo -> bson -> numpy) whose unguarded 3.12
+# syntax cannot parse under python_version 3.10. Treat as opaque Any at the
+# factory boundary instead of following into it.
+[[tool.mypy.overrides]]
+module = ["bson.*", "numpy.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.commitizen]
 name = "cz_conventional_commits"

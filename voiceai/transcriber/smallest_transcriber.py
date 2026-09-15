@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 import traceback
 from typing import Optional
@@ -12,13 +11,15 @@ from websockets.exceptions import ConnectionClosedError, InvalidHandshake, Conne
 from dotenv import load_dotenv
 
 from .base_transcriber import BaseTranscriber
+from .constants import DEFAULT_SMALLEST_HOST, SMALLEST_API_KEY_ENV_KEY, SMALLEST_HOST_ENV_KEY
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class SmallestTranscriber(BaseTranscriber):
@@ -65,8 +66,8 @@ class SmallestTranscriber(BaseTranscriber):
         self.process_interim_results = process_interim_results
 
         # API configuration
-        self.api_key = kwargs.get("transcriber_key", os.getenv("SMALLEST_API_KEY"))
-        self.smallest_host = os.getenv("SMALLEST_HOST", "api.smallest.ai")
+        self.api_key = kwargs.get("transcriber_key", get_str(SMALLEST_API_KEY_ENV_KEY))
+        self.smallest_host = get_str(SMALLEST_HOST_ENV_KEY, DEFAULT_SMALLEST_HOST)
 
         # Queues
         self.transcriber_output_queue = output_queue

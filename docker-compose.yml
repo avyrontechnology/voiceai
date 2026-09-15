@@ -11,6 +11,10 @@ services:
       - "5001:5001"
     env_file:
       - .env
+    environment:
+      # Container DNS: the compose mongo service (localhost would self-resolve).
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: voiceai
     volumes:
       - ./agent_data:/voiceai/agent_data
       # Optional host-only credential share (local dev): missing ~/.aws must not break `compose up`
@@ -20,6 +24,7 @@ services:
       - $HOME/.aws/config:/root/.aws/config:ro
     depends_on:
       - redis
+      - mongo
     networks:
       - voiceai
 
@@ -34,7 +39,6 @@ services:
       - .env
     depends_on:
       - redis
-      - ngrok
       - voiceai-app
     networks:
       - voiceai
@@ -50,7 +54,6 @@ services:
       - .env
     depends_on:
       - redis
-      - ngrok
       - voiceai-app
     networks:
       - voiceai
@@ -82,10 +85,34 @@ services:
     networks:
       - voiceai
 
+  mongo:
+    container_name: voiceai-mongo
+    image: mongo:8
+    restart: on-failure
+    ports:
+      - "27017:27017"
+    env_file:
+      - .env
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voiceai
+
   ngrok:
     container_name: voiceai-ngrok
     image: ngrok/ngrok:latest
-    restart: unless-stopped
+    # DETACHED (2026-09-15): excluded from plain `docker compose up` until we
+    # decide the tunnel strategy. Re-enable with:
+    #   docker compose --profile tunnel up -d ngrok
+    # `restart: "no"` so it can never crash-loop unattended (cf. ERR_NGROK_334).
+    profiles:
+      - tunnel
+    restart: "no"
     # NGROK_AUTHTOKEN comes from .env (see .env.sample); never commit the token.
     env_file:
       - .env
@@ -103,6 +130,7 @@ services:
 
 volumes:
   redisdata:
+  mongodata:
 
 networks:
   voiceai:

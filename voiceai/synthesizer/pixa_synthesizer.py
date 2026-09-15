@@ -8,18 +8,23 @@ import aiohttp
 import base64
 import json
 import audioop
-import os
 import traceback
 from collections import deque
 
-from voiceai.helpers.ssl_context import get_ssl_context
 from .base_synthesizer import BaseSynthesizer
-from voiceai.errors import SynthesizerError
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import TaskRegistry
+from voiceai.core.environment import get_str
+from voiceai.core.resilience import TaskRegistry
+from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    DEFAULT_PIXA_TTS_HOST,
+    PIXA_API_KEY_ENV,
+    PIXA_TTS_HOST_ENV,
+)
+from voiceai.synthesizer.exceptions import SynthesizerError
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class PixaSynthesizer(BaseSynthesizer):
@@ -39,7 +44,7 @@ class PixaSynthesizer(BaseSynthesizer):
         **kwargs,
     ):
         super().__init__(kwargs.get("task_manager_instance", None), stream, buffer_size)
-        self.api_key = os.environ.get("PIXA_API_KEY") if synthesizer_key is None else synthesizer_key
+        self.api_key = get_str(PIXA_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.voice_id = voice_id
         self.voice = voice
         self.model = model
@@ -80,7 +85,7 @@ class PixaSynthesizer(BaseSynthesizer):
         self.current_tts_start_ms = None
         self.current_text = ""
 
-        self.api_host = os.environ.get("PIXA_TTS_HOST", "hindi.heypixa.ai")
+        self.api_host = get_str(PIXA_TTS_HOST_ENV, DEFAULT_PIXA_TTS_HOST)
         self.ws_url = f"wss://{self.api_host}/api/v1/ws/synthesize"
 
     def get_engine(self):

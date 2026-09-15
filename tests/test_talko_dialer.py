@@ -120,7 +120,11 @@ async def test_run_batch_talko_dials_entries(monkeypatch):
     await store.save_batch(batch)
     out = await run_batch(store, "b1")
     assert out is not None and out.status.value == "completed"
-    assert out.stats.completed == 2 and out.stats.failed == 0
+    # Talko-accepted dials stay IN_PROGRESS (stats.pending): media outcome lives
+    # in Talko's CDR and flips to completed only via the Talko->voiceai
+    # completion callback (not yet wired — see simulation.run_batch). This
+    # assertion pins that contract; update it when the callback lands.
+    assert out.stats.pending == 2 and out.stats.completed == 0 and out.stats.failed == 0
     assert len(FakeAsyncClient.posted) == 2
 
 

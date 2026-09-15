@@ -8,14 +8,14 @@ import uuid
 from typing import Any
 from starlette.websockets import WebSocketDisconnect
 from dotenv import load_dotenv
-from voiceai.errors import summarize_exception
-from voiceai.helpers.resilience import LoopFailure, iteration_guard, safe_task
+from voiceai.input_handlers.exceptions import summarize_exception
+from voiceai.core.resilience import LoopFailure, iteration_guard, safe_task
 from voiceai.helpers.utils import create_ws_data_packet
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.output_handlers.default import OUTPUT_SEND_TIMEOUT_S
 from voiceai.output_handlers.socket_errors import is_socket_closed_error, is_teardown_race
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # Carrier media frames are 20 ms; batch this many (~200 ms) per transcriber packet.

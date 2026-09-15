@@ -7,13 +7,13 @@ from starlette.websockets import WebSocketDisconnect
 
 from dotenv import load_dotenv
 from voiceai.constants import IS_USER_ONLINE_MESSAGE
-from voiceai.errors import summarize_exception
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import LoopFailure, iteration_guard
+from voiceai.input_handlers.exceptions import summarize_exception
+from voiceai.otobaai_logger import get_logger
+from voiceai.core.resilience import LoopFailure, iteration_guard
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.output_handlers.socket_errors import is_socket_closed_error
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # A flood of unknown frames is logged in full for the first few and then only every Nth.

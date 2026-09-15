@@ -6,9 +6,9 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from voiceai.constants import IS_USER_ONLINE_MESSAGE
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 HIGH_DELAY_THRESHOLD = 2.0
 

@@ -25,9 +25,10 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Iterable, Optional, Set
 
-from voiceai.errors import ProviderTimeoutError, is_cancellation, summarize_exception, new_error_id
+from voiceai.helpers.exceptions import ProviderTimeoutError, is_cancellation, summarize_exception, new_error_id
+from voiceai.otobaai_logger import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class LoopFailure(RuntimeError):
@@ -84,7 +85,7 @@ class iteration_guard:
     async def __aenter__(self) -> "iteration_guard":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         if exc is None:
             self.failures = 0
             return False
@@ -173,7 +174,11 @@ class TaskRegistry:
 
     def track(self, task: asyncio.Task, *, name: str) -> asyncio.Task:
         self._tasks.add(task)
-        task.add_done_callback(lambda done, _name=name: self._on_done(done, _name))
+
+        def _done(done: asyncio.Task, _name: str = name) -> None:
+            self._on_done(done, _name)
+
+        task.add_done_callback(_done)
         return task
 
     def _on_done(self, task: asyncio.Task, name: str) -> None:
@@ -220,8 +225,12 @@ def safe_task(
         return registry.create(coro, name=name)
     holder = TaskRegistry(name, logger=logger)
     task = holder.create(coro, name=name)
+
     # Keep the registry alive as long as the task is: the callback closes over it.
-    task.add_done_callback(lambda _t, _h=holder: None)
+    def _retain(_t: asyncio.Task, _h: TaskRegistry = holder) -> None:
+        return None
+
+    task.add_done_callback(_retain)
     return task
 
 

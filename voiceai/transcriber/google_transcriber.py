@@ -1,4 +1,3 @@
-import os
 import time
 import asyncio
 import threading
@@ -10,11 +9,11 @@ from google.cloud import speech_v1p1beta1 as speech
 
 from .base_transcriber import BaseTranscriber
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class GoogleTranscriber(BaseTranscriber):
@@ -198,7 +197,7 @@ class GoogleTranscriber(BaseTranscriber):
                     # Classify for observability (task_manager turns connection_error
                     # into TranscriberError); keep raw string on connection_error.
                     try:
-                        from voiceai.errors import classify_exception as _classify
+                        from voiceai.transcriber.exceptions import classify_exception as _classify
 
                         _classified = _classify(
                             Exception(self.connection_error),

@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 
@@ -10,11 +9,13 @@ from dotenv import load_dotenv
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
+from .constants import GEMINI_API_KEY_ENV_KEY, GOOGLE_API_KEY_ENV_KEY
+from voiceai.core.environment import get_str
 from voiceai.enums import TelephonyProvider
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import create_ws_data_packet, resample, timestamp_ms, ulaw_to_pcm
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 GEMINI_LIVE_URL = (
@@ -65,7 +66,9 @@ class GeminiTranscriber(BaseTranscriber):
         self.connected_via_dashboard = kwargs.get("enforce_streaming", True)
 
         # GOOGLE_API_KEY is the same key GeminiLLM reads; accept either name.
-        self.api_key = kwargs.get("transcriber_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.api_key = (
+            kwargs.get("transcriber_key") or get_str(GEMINI_API_KEY_ENV_KEY) or get_str(GOOGLE_API_KEY_ENV_KEY)
+        )
 
         # SMART strips disfluencies and self-corrections; VERBATIM keeps every word. Left unset the
         # server default (VERBATIM) applies, which is what a downstream LLM should reason over.

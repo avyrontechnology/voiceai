@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 import time
+
+from voiceai.otobaai_logger import get_logger
 import uuid
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
@@ -41,7 +43,7 @@ class RAGServiceClient:
         self.base_url = rag_server_url.rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.session: Optional[aiohttp.ClientSession] = None
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # Skip RAG queries after repeated failures instead of blocking the LLM pipeline
         self._consecutive_failures = 0
@@ -320,9 +322,9 @@ class RAGServiceClientSingleton:
     @classmethod
     async def close_client(cls, rag_server_url: str | None = None):
         """Close one cached client, or all when no URL is given (back-compat)."""
-        from voiceai.helpers.resilience import log_ignored
+        from voiceai.core.resilience import log_ignored
 
-        _log = logging.getLogger(__name__)
+        _log = get_logger(__name__)
         if rag_server_url is None:
             for client in list(cls._clients.values()):
                 try:

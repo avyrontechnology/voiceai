@@ -19,7 +19,6 @@ The raw mapping is returned unchanged so the engine keeps consuming exactly what
 from __future__ import annotations
 
 import copy
-import os
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, List, Mapping, Optional
 
@@ -412,7 +411,9 @@ def _raise(issues: Iterable[ConfigIssue], *, prefix: str) -> None:
 
 
 def structural_strict() -> bool:
-    return os.getenv(STRICT_ENV, "").strip().lower() in ("1", "true", "yes")
+    from voiceai.core.environment import get_str
+
+    return (get_str(STRICT_ENV, "") or "").strip().lower() in ("1", "true", "yes")
 
 
 def validate_agent_config(raw: Any, *, structural: bool = True, name: Optional[str] = None) -> dict:

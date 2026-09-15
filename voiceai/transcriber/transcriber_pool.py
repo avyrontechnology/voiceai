@@ -1,21 +1,22 @@
 import asyncio
-import os
 import time
 from typing import Awaitable, Callable, Optional
 
-from voiceai.errors import summarize_exception
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import iteration_guard, log_ignored
+from .constants import DEFAULT_LID_MODE, LID_MODE_ENV_KEY
+from .exceptions import summarize_exception
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
+from voiceai.core.resilience import iteration_guard, log_ignored
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.lid import LIDProvider
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # Legacy-flow LID mode (only consulted when on_lid_switch is wired, i.e. the
 # LLM-driven switch flow is NOT enabled for this call).
 #   "shadow"  — log detections + suppressed_reason but never call on_lid_switch
 #   "active"  — live switching (opt-in)
-_LID_MODE = os.getenv("LID_MODE", "shadow").lower()
+_LID_MODE = get_str(LID_MODE_ENV_KEY, DEFAULT_LID_MODE).lower()
 
 
 class TranscriberPool:

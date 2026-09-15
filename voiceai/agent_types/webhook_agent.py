@@ -1,8 +1,8 @@
 import aiohttp
 from .base_agent import BaseAgent
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class WebhookAgent(BaseAgent):

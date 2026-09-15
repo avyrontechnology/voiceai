@@ -283,7 +283,7 @@ async def test_s2s_strips_reserved_args_before_trigger_api() -> None:
     params = {"url": CONFIGURED_URL, "method": "POST", "api_token": CONFIGURED_TOKEN, "param": None}
 
     with patch(
-        "voiceai.agent_manager.task_manager.trigger_api",
+        "voiceai.agent_manager.s2s_mixin.trigger_api",
         new=AsyncMock(return_value={"body": '{"ok":1}', "status_code": 200}),
     ) as api:
         result = await tm._s2s_call_api_tool(event, hostile, params, {"request_id": "q"})
@@ -308,7 +308,7 @@ async def test_s2s_non_dict_args_do_not_collide() -> None:
     params = {"url": CONFIGURED_URL, "method": "POST", "api_token": CONFIGURED_TOKEN, "param": None}
 
     with patch(
-        "voiceai.agent_manager.task_manager.trigger_api",
+        "voiceai.agent_manager.s2s_mixin.trigger_api",
         new=AsyncMock(return_value={"body": '{"ok":1}', "status_code": 200}),
     ) as api:
         result = await tm._s2s_call_api_tool(event, ["not", "an", "object"], params, {"request_id": "q"})

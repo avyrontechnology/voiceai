@@ -11,7 +11,7 @@ run_campaign enforces it directly so schedulers cannot bypass the HTTP start rou
 """
 
 import asyncio
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,9 @@ from voiceai.platform.models import (
 )
 from voiceai.platform.simulation import run_simulated_call
 from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:  # Annotation-only (no runtime cycle)
+    from voiceai.platform.repositories import PlatformRepository
 
 logger = configure_logger(__name__)
 
@@ -143,7 +146,7 @@ def _next_node(definition: WorkflowDefinition, current_id: str, last_ok: Optiona
 
 
 async def run_workflow(
-    store: MemoryStore,
+    store: "PlatformRepository",
     workflow_id: str,
     definition: WorkflowDefinition,
     contact: Dict[str, Any],
@@ -285,7 +288,7 @@ async def run_workflow(
     return run
 
 
-async def run_campaign(store: MemoryStore, campaign_id: str, delay_scale: float = 0) -> Any:
+async def run_campaign(store: "PlatformRepository", campaign_id: str, delay_scale: float = 0) -> Any:
     """Drive every campaign entry through its workflow. Honors stop and calling windows between entries."""
     import os
 
@@ -301,8 +304,10 @@ async def run_campaign(store: MemoryStore, campaign_id: str, delay_scale: float 
     ):
         return campaign
     try:
-        limit = max(1, int(os.getenv("CAMPAIGN_MAX_ENTRIES", str(CAMPAIGN_MAX_ENTRIES))))
-    except ValueError:
+        from voiceai.core import environment as _environment
+
+        limit = _environment.get_campaign_max_entries(CAMPAIGN_MAX_ENTRIES)
+    except Exception:
         limit = CAMPAIGN_MAX_ENTRIES
     if len(campaign.entries) > limit:
         raise InvalidRequestError(f"Campaign exceeds max entries ({limit})")

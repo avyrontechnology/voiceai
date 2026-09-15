@@ -1,13 +1,14 @@
 import asyncio
 import ipaddress
 import json
-import os
 import socket
 from urllib.parse import quote, urlsplit
 
 import aiohttp
 from yarl import URL
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.helpers.constants import TOOL_URL_HOST_ALLOWLIST_ENV
+from voiceai.otobaai_logger import get_logger
 from voiceai.enums import LogComponent, LogDirection
 from voiceai.helpers.utils import convert_to_request_log, format_error_message
 
@@ -34,14 +35,14 @@ def _redacted_params(params: dict | list | None) -> dict | list | None:
     return redacted if isinstance(redacted, (dict, list)) else params
 
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 ALLOWED_URL_SCHEMES = ("http", "https")
 
 # Hosts in VOICEAI_TOOL_URL_HOST_ALLOWLIST (comma-separated) bypass the SSRF block,
 # for deployments that legitimately call an internal endpoint from a tool.
 _ALLOWLISTED_HOSTS = frozenset(
-    h.strip().lower() for h in os.getenv("VOICEAI_TOOL_URL_HOST_ALLOWLIST", "").split(",") if h.strip()
+    h.strip().lower() for h in (get_str(TOOL_URL_HOST_ALLOWLIST_ENV, "") or "").split(",") if h.strip()
 )
 
 
@@ -371,13 +372,13 @@ def prepare_api_request(param, api_token, headers_data, **kwargs):
             try:
                 request_body = str(param) % DictWithMissing(escaped)
             except Exception as exc:
-                from voiceai.errors import InvalidRequestError
+                from voiceai.helpers.exceptions import InvalidRequestError
 
                 raise InvalidRequestError(f"Invalid API param template: {exc}", component="tool") from exc
             try:
                 api_params = json.loads(request_body)
             except Exception as exc:
-                from voiceai.errors import InvalidRequestError
+                from voiceai.helpers.exceptions import InvalidRequestError
 
                 raise InvalidRequestError(
                     "API param template rendered invalid JSON (use $var markers for values with quotes)",

@@ -31,7 +31,6 @@ import argparse
 import base64
 import hashlib
 import hmac
-import os
 import secrets
 import time
 from typing import Optional
@@ -49,7 +48,9 @@ _MIN_SECRET_LEN = 16
 
 
 def _secret(explicit: Optional[str] = None) -> Optional[str]:
-    value = (explicit if explicit is not None else os.getenv(SECRET_ENV, "")).strip()
+    from voiceai.core.environment import get_str
+
+    value = (explicit if explicit is not None else get_str(SECRET_ENV, "") or "").strip()
     return value or None
 
 

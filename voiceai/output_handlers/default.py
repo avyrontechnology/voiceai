@@ -1,24 +1,25 @@
 import asyncio
 import json
 import logging
-import os
 import uuid
 import time
 import base64
 from dotenv import load_dotenv
 from voiceai.constants import AUDIO_STREAM_END_SENTINELS, UNCOMPRESSED_AUDIO_FORMATS, WEBCALL_TTS_SAMPLE_RATE
-from voiceai.errors import classify_exception, summarize_exception
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.output_handlers.constants import DEFAULT_OUTPUT_SEND_TIMEOUT_S, OUTPUT_SEND_TIMEOUT_S_ENV
+from voiceai.output_handlers.exceptions import classify_exception, summarize_exception
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.utils import calculate_audio_duration
 from voiceai.output_handlers.socket_errors import is_socket_closed_error
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 # A media socket can go half-dead (TCP stops delivering ACKs, no close frame ever
 # arrives) without raising — a bare `websocket.send_*()` then never returns. Bound
 # every send so a dead socket fails fast instead of freezing the caller forever.
-OUTPUT_SEND_TIMEOUT_S = float(os.getenv("OUTPUT_SEND_TIMEOUT_S", "5"))
+OUTPUT_SEND_TIMEOUT_S = float(get_str(OUTPUT_SEND_TIMEOUT_S_ENV, DEFAULT_OUTPUT_SEND_TIMEOUT_S))
 
 # Identical failures are logged in full once, then only every Nth occurrence (or once
 # per interval), so a synthesizer emitting bad chunks at 50/s cannot flood the log.

@@ -17,19 +17,21 @@ Notes for operators:
 import hashlib
 import hmac
 import asyncio
-import os
 import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, List, Optional
+from typing import TYPE_CHECKING, Deque, Dict, List, Optional
 
 from fastapi import Depends, HTTPException, Request, Response
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import ROLE_RANK, ROLE_SCOPES, SessionRecord, User, new_id, utcnow
 from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:  # Annotation-only (no runtime cycle)
+    from voiceai.platform.repositories import PlatformRepository
 
 logger = configure_logger(__name__)
 
@@ -40,8 +42,10 @@ WS_TICKET_TTL_S = 60
 INVITE_TTL_S = 7 * 24 * 3600
 LOGIN_WINDOW_S = 60
 LOGIN_MAX_ATTEMPTS = 5
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
-COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax")
+from voiceai.core.environment import get_cookie_samesite, get_cookie_secure
+
+COOKIE_SECURE = get_cookie_secure()
+COOKIE_SAMESITE = get_cookie_samesite()
 
 _PBKDF2_ITERATIONS = 600_000
 
@@ -337,7 +341,7 @@ def client_ip(request: Request) -> str:
 
 
 async def audit(
-    store: MemoryStore,
+    store: "PlatformRepository",
     event_type: str,
     user_id: Optional[str] = None,
     email: Optional[str] = None,

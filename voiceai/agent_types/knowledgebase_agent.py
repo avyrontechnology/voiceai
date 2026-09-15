@@ -1,4 +1,3 @@
-import os
 import asyncio
 import json
 import time
@@ -7,8 +6,21 @@ from typing import List, Tuple, AsyncGenerator, Optional, Dict
 from voiceai.models import *
 from voiceai.agent_types.base_agent import BaseAgent
 from voiceai.constants import llm_failure_spoken_message
-from voiceai.errors import ConfigurationError, classify_exception, summarize_exception
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from .constants import (
+    AZURE_OPENAI_API_KEY_ENV,
+    AZURE_OPENAI_API_VERSION_ENV,
+    AZURE_OPENAI_ENDPOINT_ENV,
+    CHECK_FOR_COMPLETION_LLM_ENV,
+    DEFAULT_AZURE_OPENAI_API_VERSION,
+    DEFAULT_RAG_SERVER_URL,
+    DEFAULT_VOICEMAIL_DETECTION_LLM,
+    OPENAI_API_KEY_ENV,
+    RAG_SERVER_URL_ENV,
+    VOICEMAIL_DETECTION_LLM_ENV,
+)
+from .exceptions import ConfigurationError, classify_exception, summarize_exception
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.rag_service_client import RAGServiceClientSingleton
 from voiceai.helpers.function_calling_helpers import guard_llm_base_url
 from voiceai.helpers.utils import now_ms, format_messages, get_md5_hash
@@ -17,7 +29,7 @@ from voiceai.providers import SUPPORTED_LLM_PROVIDERS
 from voiceai.llms import OpenAiLLM
 from voiceai.prompts import VOICEMAIL_DETECTION_PROMPT
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class KnowledgeBaseAgent(BaseAgent):
@@ -43,11 +55,11 @@ class KnowledgeBaseAgent(BaseAgent):
 
         # Aux LLMs on the correct backend (same contract as GraphAgent): Azure stays on Azure with its
         # own key/endpoint, custom keeps its base_url — never an Azure endpoint on an OpenAI client.
-        self.conversation_completion_llm = self._create_aux_llm(os.getenv("CHECK_FOR_COMPLETION_LLM", self.llm_model))
-        self.voicemail_llm = self._create_aux_llm(os.getenv("VOICEMAIL_DETECTION_LLM", "gpt-4.1-mini"))
+        self.conversation_completion_llm = self._create_aux_llm(get_str(CHECK_FOR_COMPLETION_LLM_ENV, self.llm_model))
+        self.voicemail_llm = self._create_aux_llm(get_str(VOICEMAIL_DETECTION_LLM_ENV, DEFAULT_VOICEMAIL_DETECTION_LLM))
         # RAG configuration
         self.rag_config = self._initialize_rag_config()
-        self.rag_server_url = os.getenv("RAG_SERVER_URL", "http://localhost:8000")
+        self.rag_server_url = get_str(RAG_SERVER_URL_ENV, DEFAULT_RAG_SERVER_URL)
         self._last_rag_fingerprint: Optional[str] = None
 
         logger.info(f"KnowledgeBaseAgent initialized with RAG collections: {self.rag_config.get('collections', [])}")
@@ -64,8 +76,8 @@ class KnowledgeBaseAgent(BaseAgent):
             provider = "azure"
         aux_model = (model or "").split("/", 1)[-1] if isinstance(model, str) and "/" in str(model) else model
         if provider == "azure":
-            azure_key = self.config.get("llm_key") or os.getenv("AZURE_OPENAI_API_KEY")
-            azure_endpoint = self.config.get("base_url") or os.getenv("AZURE_OPENAI_ENDPOINT")
+            azure_key = self.config.get("llm_key") or get_str(AZURE_OPENAI_API_KEY_ENV)
+            azure_endpoint = self.config.get("base_url") or get_str(AZURE_OPENAI_ENDPOINT_ENV)
             if azure_key and azure_endpoint:
                 from voiceai.llms.azure_llm import AzureLLM
 
@@ -74,9 +86,9 @@ class KnowledgeBaseAgent(BaseAgent):
                     llm_key=azure_key,
                     base_url=azure_endpoint,
                     api_version=self.config.get("api_version")
-                    or os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+                    or get_str(AZURE_OPENAI_API_VERSION_ENV, DEFAULT_AZURE_OPENAI_API_VERSION),
                 )
-            platform_key = os.getenv("OPENAI_API_KEY")
+            platform_key = get_str(OPENAI_API_KEY_ENV)
             if platform_key:
                 return OpenAiLLM(model=aux_model or "gpt-4o-mini", llm_key=platform_key)
             kwargs: Dict = {}
@@ -92,7 +104,7 @@ class KnowledgeBaseAgent(BaseAgent):
                 kwargs["provider"] = "custom"
             return OpenAiLLM(model=aux_model or "gpt-4o-mini", **kwargs)
         kwargs = {}
-        openai_key = self.config.get("llm_key") or os.getenv("OPENAI_API_KEY")
+        openai_key = self.config.get("llm_key") or get_str(OPENAI_API_KEY_ENV)
         if openai_key:
             kwargs["llm_key"] = openai_key
         base_url = self.config.get("base_url")

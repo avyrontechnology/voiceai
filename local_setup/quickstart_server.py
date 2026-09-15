@@ -49,7 +49,7 @@ from voiceai.errors import (
     summarize_exception,
 )
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.helpers.resilience import call_soft
+from voiceai.core.resilience import call_soft
 from voiceai.helpers.utils import get_prompt_responses, store_file
 from voiceai.llms import LiteLLM
 from voiceai.models import AgentModel
@@ -557,7 +557,7 @@ async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read")
 # Platform layer (executions, batches, numbers, KBs, tools, webhooks, wallet, templates)
 #############################################################################################
 try:
-    from voiceai.platform.router import build_routers
+    from voiceai.platform.controllers import build_routers
     from voiceai.platform.store import RedisStore
 
     for _router in build_routers():

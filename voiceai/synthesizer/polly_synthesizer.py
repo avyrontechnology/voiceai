@@ -1,4 +1,3 @@
-import os
 import unicodedata
 
 from aiobotocore.session import AioSession
@@ -7,11 +6,17 @@ from contextlib import AsyncExitStack
 from dotenv import load_dotenv
 
 from .base_synthesizer import BaseSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import convert_audio_to_wav
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import (
+    AWS_ACCESS_KEY_ID_ENV,
+    AWS_REGION_ENV,
+    AWS_SECRET_ACCESS_KEY_ENV,
+)
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -52,13 +57,13 @@ class PollySynthesizer(BaseSynthesizer):
 
     @staticmethod
     async def _create_client(service, session, exit_stack):
-        if os.getenv("AWS_ACCESS_KEY_ID"):
+        if get_str(AWS_ACCESS_KEY_ID_ENV):
             return await exit_stack.enter_async_context(
                 session.create_client(
                     service,
-                    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                    region_name=os.getenv("AWS_REGION"),
+                    aws_access_key_id=get_str(AWS_ACCESS_KEY_ID_ENV),
+                    aws_secret_access_key=get_str(AWS_SECRET_ACCESS_KEY_ENV),
+                    region_name=get_str(AWS_REGION_ENV),
                 )
             )
         return await exit_stack.enter_async_context(session.create_client(service))

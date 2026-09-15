@@ -1,11 +1,12 @@
 import asyncio
-import os
 import plivo as plivosdk
 from dotenv import load_dotenv
+from voiceai.core.environment import get_str
+from voiceai.input_handlers.constants import PLIVO_AUTH_ID_ENV, PLIVO_AUTH_TOKEN_ENV
 from voiceai.input_handlers.telephony import TelephonyInputHandler
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.otobaai_logger import get_logger
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -32,8 +33,8 @@ class PlivoInputHandler(TelephonyInputHandler):
         )
         self.io_provider = "plivo"
         auth_credentials = auth_credentials or {}
-        auth_id = auth_credentials.get("auth_id") or os.getenv("PLIVO_AUTH_ID")
-        auth_token = auth_credentials.get("auth_token") or os.getenv("PLIVO_AUTH_TOKEN")
+        auth_id = auth_credentials.get("auth_id") or get_str(PLIVO_AUTH_ID_ENV)
+        auth_token = auth_credentials.get("auth_token") or get_str(PLIVO_AUTH_TOKEN_ENV)
         self.client = plivosdk.RestClient(auth_id, auth_token)
 
     async def call_start(self, packet):

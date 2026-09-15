@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 import uuid
@@ -11,13 +10,15 @@ from collections import deque
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, get_synth_audio_format, resample, wav_bytes_to_pcm
 from voiceai.llms.http_client_pool import get_shared_aiohttp_session
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import SARVAM_API_KEY_ENV
 from voiceai.constants import SARVAM_MODEL_SAMPLING_RATE_MAPPING, SARVAM_TTS_SUPPORTED_LANGUAGES
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 # bulbul:v2 only serves these speakers (per Sarvam 400 message); everything else needs bulbul:v3.
 BULBUL_V2_SPEAKERS = frozenset({"anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh"})
@@ -42,7 +43,7 @@ class SarvamSynthesizer(StreamSynthesizer):
             buffer_size=buffer_size,
             **kwargs,
         )
-        self.api_key = os.environ["SARVAM_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(SARVAM_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         # shubh (and the other 30+ bulbul:v3 personas) 400s on bulbul:v2, whose speakers are
         # only anushka/abhilash/manisha/vidya/arya/karun/hitesh. Stale agent records carry
         # voice_id=shubh + model=bulbul:v2; upgrade the model instead of killing the call.

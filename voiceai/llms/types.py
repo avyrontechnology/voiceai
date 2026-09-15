@@ -6,8 +6,9 @@ from typing import Any, List, Mapping, Optional, Union
 from pydantic import BaseModel, ConfigDict
 
 from voiceai.enums import ToolScope
+from voiceai.otobaai_logger import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class APIParams(BaseModel):

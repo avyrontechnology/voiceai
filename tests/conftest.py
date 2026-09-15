@@ -20,6 +20,48 @@ from tests.doubles.task_manager import bare_tm, stub, unbound_tm_attr
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _init_beanie_documents():
+    """Initialize Beanie documents once per session (lazy client, offline-safe).
+
+    Platform models are Beanie Documents: instantiation requires init, but
+    no live Mongo is needed until a Mongo-backed store is used. Sync wrapper
+    (asyncio.run) to avoid event-loop scope conflicts.
+    """
+    import asyncio
+
+    from pymongo import AsyncMongoClient
+
+    from voiceai.core import db as db_factory
+    from voiceai.core.environment import get_mongo_db
+    from voiceai.platform.models import ALL_DOCUMENT_MODELS
+
+    client_holder: dict = {}
+
+    async def _open() -> None:
+        # Best-effort: registers models + creates indexes when Mongo is up;
+        # warns and continues offline (construct-only tests need no server;
+        # mongo-backed tests skip via their own reachability probe).
+        # Pinned to localhost like MONGO_TEST_URL: session init must never
+        # dial Atlas/shared data (see tests/test_mongo_store.py).
+        import os
+
+        url = os.getenv("MONGO_TEST_URL", "mongodb://localhost:27017")
+        client = db_factory.create_mongo_client(url)
+        try:
+            await db_factory.ensure_indexes(client[get_mongo_db()], ALL_DOCUMENT_MODELS)
+        finally:
+            await db_factory.close_mongo_client(client)
+
+    async def _close() -> None:
+        return None
+
+    asyncio.run(_open())
+    yield
+    asyncio.run(_close())
+
+
 _SWITCH_DECISION = {"target_language": "mr", "target_confidence": 0.95, "reasoning": "clear Marathi"}
 
 

@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import traceback
 import audioop
@@ -14,16 +13,23 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import InvalidHandshake, ConnectionClosed, ConnectionClosedError
 
 from .base_transcriber import BaseTranscriber
+from .constants import (
+    DEFAULT_OPENAI_REALTIME_HOST,
+    OPENAI_API_KEY_ENV_KEY,
+    OPENAI_API_KEY_EU_ENV_KEY,
+    OPENAI_REALTIME_HOST_ENV_KEY,
+)
 from voiceai.constants import (
     OPENAI_TRANSCRIBER_HEARTBEAT_INTERVAL_S,
     OPENAI_TRANSCRIBER_UTTERANCE_TIMEOUT_S,
 )
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
+from voiceai.otobaai_logger import get_logger
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import create_ws_data_packet, timestamp_ms
 
 load_dotenv()
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAITranscriber(BaseTranscriber):
@@ -60,9 +66,11 @@ class OpenAITranscriber(BaseTranscriber):
         self.vad_threshold = float(vad_threshold)
         self.vad_prefix_padding_ms = int(vad_prefix_padding_ms)
 
-        self.api_host = kwargs.get("transcriber_host", os.getenv("OPENAI_REALTIME_HOST", "api.openai.com"))
-        _default_key_env = "OPENAI_API_KEY_EU" if "eu." in self.api_host else "OPENAI_API_KEY"
-        self.api_key = kwargs.get("transcriber_key", os.getenv(_default_key_env))
+        self.api_host = kwargs.get(
+            "transcriber_host", get_str(OPENAI_REALTIME_HOST_ENV_KEY, DEFAULT_OPENAI_REALTIME_HOST)
+        )
+        _default_key_env = OPENAI_API_KEY_EU_ENV_KEY if "eu." in self.api_host else OPENAI_API_KEY_ENV_KEY
+        self.api_key = kwargs.get("transcriber_key", get_str(_default_key_env))
 
         self.transcriber_output_queue = output_queue
         self.transcription_task = None

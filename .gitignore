@@ -186,3 +186,9 @@ scripts/
 docs/
 GRAPH_AGENT_GUIDE.md
 .env.example
+
+# Local-only tooling/session artifacts (never pushed)
+.opencode/
+.specify/
+specs/
+.ruff_cache/

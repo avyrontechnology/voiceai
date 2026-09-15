@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import time
 import uuid
 
@@ -11,12 +10,14 @@ from dotenv import load_dotenv
 from websockets.exceptions import InvalidHandshake
 
 from .stream_synthesizer import StreamSynthesizer
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import require_str
 from voiceai.helpers.ssl_context import get_ssl_context
 from voiceai.helpers.utils import convert_audio_to_wav
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import RIME_API_KEY_ENV
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -45,7 +46,7 @@ class RimeSynthesizer(StreamSynthesizer):
         self.voice_id = voice_id
         self.sample_rate = str(sampling_rate)
         self.model = model
-        self.api_key = os.environ["RIME_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.api_key = require_str(RIME_API_KEY_ENV) if synthesizer_key is None else synthesizer_key
         self.use_mulaw = True
         self.caching = caching
 

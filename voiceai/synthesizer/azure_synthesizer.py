@@ -1,4 +1,3 @@
-import os
 import asyncio
 import time
 import xml.sax.saxutils as sax
@@ -8,12 +7,14 @@ import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech import CancellationErrorCode
 
 from .base_synthesizer import BaseSynthesizer
-from voiceai.errors import SynthesizerError, classify_exception
-from voiceai.helpers.logger_config import configure_logger
+from voiceai.core.environment import get_str
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.memory.cache.inmemory_scalar_cache import InmemoryScalarCache
+from voiceai.otobaai_logger import get_logger
+from voiceai.synthesizer.constants import AZURE_SPEECH_KEY_ENV, AZURE_SPEECH_REGION_ENV
+from voiceai.synthesizer.exceptions import SynthesizerError, classify_exception
 
-logger = configure_logger(__name__)
+logger = get_logger(__name__)
 load_dotenv()
 
 
@@ -46,8 +47,8 @@ class AzureSynthesizer(BaseSynthesizer):
         # loop (or none) when the synth is built synchronously at call setup.
         self.loop = None
 
-        self.subscription_key = kwargs.get("synthesizer_key", os.getenv("AZURE_SPEECH_KEY"))
-        self.region = kwargs.get("region", os.getenv("AZURE_SPEECH_REGION"))
+        self.subscription_key = kwargs.get("synthesizer_key", get_str(AZURE_SPEECH_KEY_ENV))
+        self.region = kwargs.get("region", get_str(AZURE_SPEECH_REGION_ENV))
         self.speech_config = speechsdk.SpeechConfig(subscription=self.subscription_key, region=self.region)
         # Follow the transport's rate (telephony 8k, web/freeswitch 24k) — hardcoding 8k made
         # webcalls play Azure audio at 3x speed (the player runs raw PCM at 24k).
