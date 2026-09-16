@@ -345,6 +345,33 @@ input_handlers/telephony.py and transcriber/base_transcriber.py owned but unedit
 — TelephonyInputHandler inherits the setter from DefaultInputHandler, and the probe
 surface lives on the pool per the spec. make sec clean.)
 
+B3: check=green; test-all=7/2318/2325 (net-new: 0; reconciliation: no existing test
+removed or rewritten — purely additive: +38 arch tests in 4 new files under
+tests/arch/modules/voice/. The moves, all proven AST-identical (bodies + docstrings)
+against HEAD during the step: the six tm 124-272 pure functions →
+voiceai/modules/voice/static_methods.py with SAME-NAMED delegator bindings left in
+task_manager.py (spelled `from ... import name as name` so the legacy module stays an
+explicit re-exporter under mypy's no_implicit_reexport — tm remains the lookup/patch
+site, and welcome_pcm_upsampled keeps its one shared lru_cache because the binding IS
+the memoized object); elevenlabs_synthesizer + the nine SUPPORTED_* maps →
+adapters/synthesis.py and registry.py entry-for-entry; providers.py → 62-name
+`# legacy-shim(spec-0004)` star re-export of registry (surface + identity pinned by
+test_registry.py; test_provider_registry_parity untouched and green);
+ComponentLatencies → voice/models.py with the agent_manager/models.py pure-shim
+(only mechanical change: `Optional[float]` → `float | None`). adapters/ carries the
+five §3.1 factory modules (create_* over the live registry maps, unknown provider →
+UnknownComponentLabelError) plus the transition error aliases the errors.py TODO named
+(TranscriberError/SynthesizerError/LLMError/VoiceAIComponentError re-exported by
+identity), and the package surface re-exports resample + the END_CALL_* constants so
+static_methods imports no legacy itself (subprocess canary pins that no provider stack
+loads). Deviations, made loud: HANDOFF_CLIP_CACHE / HANDOFF_CLIP_CACHE_MAX /
+_NON_NODE_RESPONSE_CATEGORIES sit inside tm 124-272 but did NOT move — they are
+process-wide mutable state and module data, not pure functions (rule 1g), and they
+relocate with their owning subsystems (B8/B9); moved signatures gained type
+annotations (mechanical rule-6 accommodation; bodies verbatim); registry.py's
+docstring avoids the literal shim tag so the shim-purity AST scan does not misread it.
+make sec clean; make cov 98.60% (≥ 85%).)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
@@ -386,3 +413,15 @@ Strangler: every step green and revertible; quickstart remains the deployed entr
 flagged controller cutover (endgame spec). Endgame specs after B14: TaskManager rename/move
 to session/call_session.py; Category A/B/D wholesale conversion; llms relocation; helpers
 DSP move; platform strangler (spec 0005+); resilient-core merge.
+
+Shim burn-down (`# legacy-shim(spec-0004)` files; deletions happen at cutover, audited at
+B12d and B14):
+
+- `voiceai/providers.py` (B3) — star re-export of `voiceai.modules.voice.registry`,
+  which preserves the full 62-name star surface (classes, the five provider enums,
+  `elevenlabs_synthesizer`, the nine `SUPPORTED_*` maps) by identity for the star-import
+  consumers (task_manager.py:63, `voiceai/models.py`) and every direct importer
+  (tests/arch/modules/voice/test_registry.py pins the surface and the identity).
+- `voiceai/agent_manager/models.py` (B3) — pure re-export of `ComponentLatencies`,
+  which lives in `voiceai.modules.voice.models`; task_manager's `from .models import
+  ComponentLatencies` rides the shim unchanged.

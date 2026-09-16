@@ -6,8 +6,9 @@ those dict contracts as types without changing a single wire byte. The raw dicts
 flowing through the ports (the legacy classes conform structurally); new session code
 builds these views from them via `helpers`.
 
-`ComponentLatencies` stays in `voiceai/agent_manager/models.py` until step B3 moves it
-with a shim; typing `LatencyReport`'s component payloads waits for that move.
+`ComponentLatencies` moved here in step B3 (``voiceai/agent_manager/models.py`` is its
+``# legacy-shim(spec-0004)`` re-export); `LatencyReport`'s component payloads stay dicts
+until the report builders (step B6) tighten them.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from voiceai.enums import HangupReason
 
 __all__ = [
     "CallContext",
+    "ComponentLatencies",
     "HangupDetail",
     "LatencyReport",
     "LidDecisionRecord",
@@ -172,6 +174,28 @@ class LidDecisionRecord(BaseModel):
     inflight_activity: dict[str, Any] = Field(default_factory=dict)  # why: free-form response-state snapshot
 
 
+class ComponentLatencies(BaseModel):
+    """One engine component's latency bookkeeping (LLM / transcriber / synthesizer).
+
+    Moved verbatim from ``voiceai/agent_manager/models.py`` in step B3 (that path is now
+    a pure re-export shim, so ``task_manager.py:117`` keeps resolving); only the
+    ``Optional`` spelling was modernised (mechanical rule-6 accommodation). TaskManager
+    builds one per component at construction and appends to the lists as turns land;
+    the teardown snapshot persists each as its ``model_dump()`` dict
+    (`LatencyReport`'s three component payloads).
+
+    Attributes:
+        connection_latency_ms: Milliseconds the provider connect took, or ``None``
+            before (or without) a connection.
+        turn_latencies: Per-turn latency entries, in true conversation order.
+        other_latencies: Entries outside the turn cycle (reconnects, side channels).
+    """
+
+    connection_latency_ms: float | None = None
+    turn_latencies: list = Field(default_factory=list)  # why: free-form legacy latency rows (bare list preserved)
+    other_latencies: list = Field(default_factory=list)  # why: free-form legacy latency rows (bare list preserved)
+
+
 class UserBotLatency(BaseModel):
     """One caller-turn-to-agent-audio latency entry of the teardown report.
 
@@ -201,9 +225,9 @@ class UserBotLatency(BaseModel):
 class LatencyReport(BaseModel):
     """The ``latency_dict`` block of the teardown report, typed at its top level.
 
-    The three component payloads stay dicts until step B3 moves `ComponentLatencies`
-    (with a shim) out of ``voiceai/agent_manager/models.py``; the report builders
-    (step B6) will then tighten them.
+    The three component payloads stay dicts on purpose: the teardown snapshot emits
+    `ComponentLatencies.model_dump()` results, and the report builders (step B6) own
+    tightening them to the model itself.
 
     Attributes:
         llm_latencies: `ComponentLatencies.model_dump()` for the LLM.
@@ -219,9 +243,9 @@ class LatencyReport(BaseModel):
         synthesizer_chunk_marks: Per-mark wall-clock detail for audio analysis.
     """
 
-    llm_latencies: dict[str, Any] = Field(default_factory=dict)  # why: ComponentLatencies moves in B3
-    transcriber_latencies: dict[str, Any] = Field(default_factory=dict)  # why: ComponentLatencies moves in B3
-    synthesizer_latencies: dict[str, Any] = Field(default_factory=dict)  # why: ComponentLatencies moves in B3
+    llm_latencies: dict[str, Any] = Field(default_factory=dict)  # why: model_dump() dict until B6 tightens
+    transcriber_latencies: dict[str, Any] = Field(default_factory=dict)  # why: model_dump() dict until B6 tightens
+    synthesizer_latencies: dict[str, Any] = Field(default_factory=dict)  # why: model_dump() dict until B6 tightens
     rag_latencies: list[dict[str, Any]] = Field(default_factory=list)  # why: free-form retrieval entries
     routing_latencies: list[dict[str, Any]] = Field(default_factory=list)  # why: free-form routing entries
     welcome_message_sent_ts: float | None = None
