@@ -1,18 +1,17 @@
 import os
-import asyncio
 import copy
-import uuid
 import traceback
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
-from voiceai.helpers.utils import store_file, get_prompt_responses
-from voiceai.prompts import *
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
-from voiceai.llms import LiteLLM
 from voiceai.agent_manager.assistant_manager import AssistantManager
+from voiceai.common.constants import CONTAINER_KEY_REDIS
+from voiceai.core.container import Container
+from voiceai.modules.agents import AgentNotFoundError, AgentService
+from voiceai.modules.agents import register as register_agents_module
 from voiceai.platform.auth import (
     Principal,
     get_store as auth_store,
@@ -27,6 +26,47 @@ logger = configure_logger(__name__)
 redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
+
+
+class _AgentRedisSeam:
+    """``RedisLike`` facade over this module's live ``redis_client`` attribute (spec 0002, A5).
+
+    The agents repository holds THIS object instead of a captured client, so every command
+    resolves ``redis_client`` at call time: the monkeypatch target legacy tests have always
+    used (``quickstart_server.redis_client`` — e.g. tests/test_agent_prompts_endpoint.py)
+    keeps intercepting after the CRUD delegation, and no second client or pool is ever
+    constructed — every command runs on the one client this server already builds.
+    """
+
+    async def get(self, name: str) -> Optional[str]:
+        """Return the string stored at ``name``, or ``None`` when the key is absent."""
+        return await redis_client.get(name)
+
+    async def set(self, name: str, value: str) -> Any:
+        """Store ``value`` at ``name``, answering the driver's ack."""
+        return await redis_client.set(name, value)
+
+    async def exists(self, *names: str) -> int:
+        """Count how many of ``names`` exist."""
+        return await redis_client.exists(*names)
+
+    async def delete(self, *names: str) -> int:
+        """Remove ``names``; answer how many were removed."""
+        return await redis_client.delete(*names)
+
+    async def keys(self, pattern: str) -> List[str]:
+        """Return every key matching ``pattern``."""
+        return await redis_client.keys(pattern)
+
+
+# Spec 0002 (A5): the agent CRUD handlers below are thin delegates into the agents module.
+# The service is composed ONCE at module init through the module's own register() hook
+# (AGENTS.md rule 9) — routes, auth deps, JSON shapes and quirks stay byte-identical, and
+# the only quickstart-owned piece of the composition is the redis seam above.
+_agents_container = Container()
+_agents_container.register(CONTAINER_KEY_REDIS, _AgentRedisSeam())
+register_agents_module(_agents_container)
+agent_service: AgentService = _agents_container.resolve(AgentService)
 
 app = FastAPI()
 
@@ -97,11 +137,10 @@ class AgentListResponse(BaseModel):
 async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's information by ID."""
     try:
-        agent_data = await redis_client.get(agent_id)
-        if not agent_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        return json.loads(agent_data)
+        # legacy-parity(spec-0002): the missing-agent 404 stays swallowed into the 500
+        # below — the service's AgentNotFoundError is an Exception exactly like the
+        # in-handler HTTPException(404) it replaces.
+        return await agent_service.get_agent(agent_id)
 
     except Exception as e:
         logger.error(f"Error fetching agent {agent_id}: {e}", exc_info=True)
@@ -122,18 +161,12 @@ async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("age
 async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches an agent's stored prompts by ID."""
     try:
-        agent_data = await redis_client.get(agent_id)
-        if not agent_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
+        return await agent_service.get_agent_prompts(agent_id)
 
-        prompts = await get_prompt_responses(assistant_id=agent_id, local=True)
-        if not prompts:
-            prompts = None
-
-        return {"agent_id": agent_id, "agent_prompts": prompts}
-
-    except HTTPException:
-        raise
+    except AgentNotFoundError:
+        # legacy-parity(spec-0002): the one agent route whose 404 reaches the client —
+        # the old handler re-raised its HTTPException(404) ahead of the catch-all.
+        raise HTTPException(status_code=404, detail="Agent not found")
     except Exception as e:
         logger.error(f"Error fetching prompts for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -151,36 +184,10 @@ async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_sc
     }
 )
 async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depends(require_scope("agents:write"))):
-    agent_uuid = str(uuid.uuid4())
-    data_for_db = agent_data.agent_config.model_dump()
-    data_for_db["assistant_status"] = "seeding"
-    agent_prompts = agent_data.agent_prompts
-    logger.info(f"Data for DB {data_for_db}")
-
-    if len(data_for_db["tasks"]) > 0:
-        logger.info("Setting up follow up tasks")
-        for index, task in enumerate(data_for_db["tasks"]):
-            if task["task_type"] == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_details"],
-                        },
-                    ]
-                )
-                data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
-
-    stored_prompt_file_path = f"{agent_uuid}/conversation_details.json"
-    await asyncio.gather(
-        redis_client.set(agent_uuid, json.dumps(data_for_db)),
-        store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
-    )
-
-    return {"agent_id": agent_uuid, "state": "created"}
+    """Creates a new agent from the provided configuration and prompts."""
+    # legacy-parity(spec-0002): no catch-all here — the old handler had none, so failures
+    # (extraction generation included) still propagate as unhandled 500s.
+    return await agent_service.create_agent(agent_data.agent_config, agent_data.agent_prompts)
 
 
 @app.put(
@@ -201,43 +208,10 @@ async def edit_agent(
 ):
     """Edits an existing agent based on the provided agent_id."""
     try:
-        existing_data = await redis_client.get(agent_id)
-        if not existing_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        existing_data = json.loads(existing_data)
-
-        new_data = agent_data.agent_config.model_dump()
-        new_data["assistant_status"] = "updated"
-        agent_prompts = agent_data.agent_prompts
-
-        logger.info(f"Updating Agent {agent_id}: {new_data}")
-
-        for index, task in enumerate(new_data.get("tasks", [])):
-            if task.get("task_type") == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                if not extraction_prompt_llm:
-                    raise HTTPException(status_code=500, detail="Extraction model not configured")
-
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_details = task["tools_config"]["llm_agent"].get("extraction_details", "")
-
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {"role": "user", "content": extraction_details},
-                    ]
-                )
-
-                new_data["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
-
-        stored_prompt_file_path = f"{agent_id}/conversation_details.json"
-        await asyncio.gather(
-            redis_client.set(agent_id, json.dumps(new_data)),
-            store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
-        )
-
-        return {"agent_id": agent_id, "state": "updated"}
+        # legacy-parity(spec-0002): a missing agent AND an unconfigured extraction model
+        # both land in the generic 500 below, exactly as the old in-handler raises did
+        # once the catch-all swallowed them.
+        return await agent_service.update_agent(agent_id, agent_data.agent_config, agent_data.agent_prompts)
 
     except Exception as e:
         logger.error(f"Error updating agent {agent_id}: {e}", exc_info=True)
@@ -258,12 +232,9 @@ async def edit_agent(
 async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:write"))):
     """Deletes an agent by ID."""
     try:
-        agent_exists = await redis_client.exists(agent_id)
-        if not agent_exists:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        await redis_client.delete(agent_id)
-        return {"agent_id": agent_id, "state": "deleted"}
+        # legacy-parity(spec-0002): the missing-agent 404 stays swallowed into the 500
+        # below, and the prompt file is deliberately left behind (orphan-on-DELETE).
+        return await agent_service.delete_agent(agent_id)
 
     except Exception as e:
         logger.error(f"Error deleting agent {agent_id}: {e}", exc_info=True)
@@ -283,24 +254,10 @@ async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("
 async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches all agents stored in Redis."""
     try:
-        from voiceai.platform.agent_records import collect_agent_records
-
-        agent_keys = await redis_client.keys("*")
-
-        if not agent_keys:
-            return {"agents": []}
-        pairs = []
-        for key in agent_keys:
-            # Bare UUID keys are agent records; namespaced platform keys (data with
-            # colons, index sets) are skipped before GET — reading a set as a
-            # string raises WRONGTYPE and spams the log on every directory load.
-            if ":" in key:
-                continue
-            try:
-                pairs.append((key, await redis_client.get(key)))
-            except Exception as e:
-                logger.debug(f"Skipping unreadable agent key {key}: {e}")
-        return {"agents": collect_agent_records(pairs)}
+        # The bare-UUID `KEYS *` scan (":"-keys skipped before GET, per-key failures
+        # logged and skipped) lives verbatim behind the repository's one documented
+        # method — see voiceai/modules/agents/repository.py::list_agents.
+        return await agent_service.list_agents()
 
     except Exception as e:
         logger.error(f"Error fetching all agents: {e}", exc_info=True)

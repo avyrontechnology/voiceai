@@ -211,6 +211,26 @@ A3: check=green; test-all=7/1945/1952 (net-new: 0; no test rewritten or removed 
 
 A4: check=green; test-all=7/1988/1995 (net-new: 0; reconciliation: A1's two "until A4" pins in tests/arch/modules/agents/test_module_def.py — test_router_mounts_no_routes_yet and test_register_is_a_noop_until_a4 — rewritten in place as test_router_mounts_exactly_the_four_legacy_paths and test_register_binds_the_repository_service_and_ports, test count unchanged; +43 new A4 tests: 29 service/helpers-delegation DI-fake suites (LlmPort conformance, the create/update extraction-guard asymmetry, falsy-prompts-to-null, prompt-file orphan, 503-when-redis-unconfigured) and 14 controller suites via httpx ASGI against create_app with the real agents MODULE and a dict-backed fake redis under the core "redis" key. Named gates: tests/test_render_prompt.py and tests/test_prompt_context_substitution.py green; tests/test_prompt_resilience.py keeps its exact 2 known failures. make sec clean; make cov 98.87% (≥ 85%; the only sizeable gap is adapters/llm.py's generate body, which is the live litellm call the offline suite must never invoke))
 
+### A5 curl smoke (recorded 2026-09-17)
+
+Offline, httpx ASGITransport against the imported `local_setup.quickstart_server.app`
+(per the A5 step definition — no live uvicorn/redis), with redis and the platform store
+faked the way `tests/test_agent_prompts_endpoint.py` fakes them (module-attribute swap of
+`quickstart_server.redis_client` — intercepted live by the A5 `_AgentRedisSeam` — plus
+`voiceai.helpers.utils.PREPROCESS_DIR` → tmpdir) and an all-scopes Bearer API key in a
+fake platform store so `require_scope` authenticates. Results, all asserted green:
+
+- `GET /all` → `200 {"agents": []}` empty; after the POST → `200` with exactly one
+  record, `agent_id` matching and `data.agent_name` intact.
+- `POST /agent` → `201 {"agent_id": <uuid4>, "state": "created"}`; the stored redis
+  record carries `assistant_status: "seeding"` (no extraction task ⇒ no LLM call).
+- Prompts round-trip: `GET /agent/{id}/prompts` → `200` answering the exact POSTed
+  `agent_prompts` payload (`{"agent_id", "agent_prompts"}` wire shape); quirk pins:
+  `GET /agent/nope/prompts` → true `404 "Agent not found"`, `GET /agent/nope` →
+  swallowed `500 "Internal server error"`, unauthenticated `GET /all` → `401`.
+
+A5: check=green; test-all=7/1988/1995 (net-new: 0; no test added, rewritten or removed — the quickstart CRUD handlers now delegate to `AgentService`, composed once at module init through the module's `register()` with a call-time-resolving redis seam so the legacy `quickstart_server.redis_client` monkeypatch target stays live; `tests/test_agent_prompts_endpoint.py` keeps its exact 3 known failures (still 401 at auth, unchanged); curl smoke recorded above; make sec clean; make cov 98.87%)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —
