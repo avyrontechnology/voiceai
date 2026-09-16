@@ -70,6 +70,27 @@ ENV_EXTRACTION_PROMPT_GENERATION_MODEL: Final[str] = "EXTRACTION_PROMPT_GENERATI
 ENV_RAG_SERVER_URL: Final[str] = "RAG_SERVER_URL"
 DEFAULT_RAG_SERVER_URL: Final[str] = "http://localhost:8000"
 
+# --- Brains: judgment-LLM contract shared by simple + knowledgebase (A6) ----------------
+# TODO(spec-0004): the brains read these env vars directly (verbatim legacy behavior);
+# they migrate to `core.environment` when the voice runtime composes the brains.
+ENV_CHECK_FOR_COMPLETION_LLM: Final[str] = "CHECK_FOR_COMPLETION_LLM"
+ENV_VOICEMAIL_DETECTION_LLM: Final[str] = "VOICEMAIL_DETECTION_LLM"
+DEFAULT_VOICEMAIL_DETECTION_MODEL: Final[str] = "gpt-4.1-mini"
+#: The name tag every brain inherits from `brains.base.BaseAgent`.
+BASE_AGENT_NAME: Final[str] = "base-agent"
+# LLM chat-message wire keys the judgment prompts are built from.
+MESSAGE_ROLE_KEY: Final[str] = "role"
+MESSAGE_CONTENT_KEY: Final[str] = "content"
+SYSTEM_ROLE: Final[str] = "system"
+USER_ROLE: Final[str] = "user"
+# Judgment answers: any failure degrades to "keep talking" / "not a voicemail".
+HANGUP_KEY: Final[str] = "hangup"
+IS_VOICEMAIL_KEY: Final[str] = "is_voicemail"
+NEGATIVE_ANSWER: Final[str] = "No"
+LATENCY_MS_KEY: Final[str] = "latency_ms"
+#: The user turn both voicemail checks send (legacy wording, byte-identical).
+VOICEMAIL_USER_MESSAGE_TEMPLATE: Final[str] = "User message: {user_message}"
+
 # --- agent_type dispatch (the LlmAgent validator's exact key set, moved in A2) ----------
 AGENT_TYPE_SIMPLE_LLM: Final[str] = "simple_llm_agent"
 AGENT_TYPE_GRAPH: Final[str] = "graph_agent"

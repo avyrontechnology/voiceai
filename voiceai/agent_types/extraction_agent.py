@@ -1,17 +1,14 @@
-from .base_agent import BaseAgent
+# legacy-shim(spec-0002) — ExtractionContextualAgent lives in voiceai.modules.agents.brains.extraction (step A6).
+"""Legacy import surface for the extraction brain.
+
+Every name the old module bound stays importable from here (the auxiliary imports are
+re-created verbatim). Deleted at cutover — see the burn-down list in
+specs/0002-agents-module.md §Rollout.
+"""
+
 from voiceai.helpers.logger_config import configure_logger
 
-logger = configure_logger(__name__)
+from .base_agent import BaseAgent
+from voiceai.modules.agents.brains.extraction import ExtractionContextualAgent, logger
 
-
-class ExtractionContextualAgent(BaseAgent):
-    def __init__(self, llm, prompt=None):
-        super().__init__()
-        self.llm = llm
-        self.current_messages = 0
-        self.is_inference_on = False
-        self.has_intro_been_sent = False
-
-    async def generate(self, history):
-        json_data = await self.llm.generate(history, request_json=True)
-        return json_data
+__all__ = ["BaseAgent", "ExtractionContextualAgent", "configure_logger", "logger"]

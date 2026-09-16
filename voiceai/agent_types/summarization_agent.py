@@ -1,24 +1,14 @@
-from .base_agent import BaseAgent
+# legacy-shim(spec-0002) — SummarizationContextualAgent lives in voiceai.modules.agents.brains.summarization (step A6).
+"""Legacy import surface for the summarization brain.
+
+Every name the old module bound stays importable from here (the auxiliary imports are
+re-created verbatim). Deleted at cutover — see the burn-down list in
+specs/0002-agents-module.md §Rollout.
+"""
+
 from voiceai.helpers.logger_config import configure_logger
 
-logger = configure_logger(__name__)
+from .base_agent import BaseAgent
+from voiceai.modules.agents.brains.summarization import SummarizationContextualAgent, logger
 
-
-class SummarizationContextualAgent(BaseAgent):
-    def __init__(self, llm, prompt=None):
-        super().__init__()
-        self.llm = llm
-        self.current_messages = 0
-        self.is_inference_on = False
-        self.has_intro_been_sent = False
-
-    async def generate(self, history):
-        summary = ""
-        try:
-            summary = await self.llm.generate(history, request_json=False)
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            logger.error(f"error in generating summary: {e}")
-        return {"summary": summary}
+__all__ = ["BaseAgent", "SummarizationContextualAgent", "configure_logger", "logger"]

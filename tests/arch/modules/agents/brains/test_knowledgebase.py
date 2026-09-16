@@ -205,6 +205,19 @@ class TestRagConfigParsing:
         monkeypatch.delenv("RAG_SERVER_URL", raising=False)
         assert KnowledgeBaseAgent({}).rag_server_url == "http://localhost:8000"
 
+    def test_rag_server_url_constructor_param_wins_over_env(self, provider, monkeypatch):
+        """A6 surface: an explicit constructor URL beats the env side-channel."""
+        monkeypatch.setenv("RAG_SERVER_URL", "http://rag.internal:9000")
+        agent = KnowledgeBaseAgent({}, rag_server_url="http://explicit:7000")
+
+        assert agent.rag_server_url == "http://explicit:7000"
+
+    def test_rag_server_url_empty_param_falls_back_to_env(self, provider, monkeypatch):
+        """A falsy explicit URL falls through to the env fallback (documented semantics)."""
+        monkeypatch.setenv("RAG_SERVER_URL", "http://rag.internal:9000")
+
+        assert KnowledgeBaseAgent({}, rag_server_url="").rag_server_url == "http://rag.internal:9000"
+
 
 class TestCheckForCompletion:
     async def test_parses_the_json_answer_and_adds_latency(self, provider):
@@ -332,9 +345,7 @@ class TestAddRagContext:
     async def test_history_is_capped_at_50_messages_keeping_the_system_head(self, provider, install_rag_client):
         agent = KnowledgeBaseAgent({"rag_config": {**RAG_CONFIG, "used_sources": USED_SOURCES[:1]}})
         install_rag_client(FakeRagClient(response=rag_response([rag_context()])))
-        messages = [{"role": "system", "content": "S"}] + [
-            {"role": "user", "content": f"m{i}"} for i in range(70)
-        ]
+        messages = [{"role": "system", "content": "S"}] + [{"role": "user", "content": f"m{i}"} for i in range(70)]
 
         final_messages, _ = await agent._add_rag_context(messages)
 

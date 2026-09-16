@@ -231,6 +231,8 @@ fake platform store so `require_scope` authenticates. Results, all asserted gree
 
 A5: check=green; test-all=7/1988/1995 (net-new: 0; no test added, rewritten or removed — the quickstart CRUD handlers now delegate to `AgentService`, composed once at module init through the module's `register()` with a call-time-resolving redis seam so the legacy `quickstart_server.redis_client` monkeypatch target stays live; `tests/test_agent_prompts_endpoint.py` keeps its exact 3 known failures (still 401 at auth, unchanged); curl smoke recorded above; make sec clean; make cov 98.87%)
 
+A6: check=green; test-all=7/2044/2051 (net-new: 0; no test rewritten or removed — two gated commits per the step definition: first `test(agents)` with +49 characterization tests for the six zero-test brains (gated at 7/2037/2044), importing through the LEGACY paths and patching via `__module__` so the SAME suite proves parity after the move; then `refactor(agents)` with the six files moved to `voiceai/modules/agents/brains/{base,simple,extraction,summarization,webhook,knowledgebase}.py`, legacy imports bridged through the new §3.1 adapter `adapters/brains.py`, every `voiceai/agent_types/` path except the two A7 graph files now a `# legacy-shim(spec-0002)` re-export (per-file shims carry explicit `__all__` for mypy's no_implicit_reexport; the package `__init__` keeps its exact legacy import lines so the task_manager.py:62 star surface is byte-identical — a pin asserts the recorded 15-name pre-move snapshot still resolves), knowledgebase `RAG_SERVER_URL` now a constructor param with the env fallback (tm env write untouched), +7 move-pin tests (5 shim/surface pins, 2 constructor-param). New quirk pinned: without `used_sources` even a successful retrieval degrades to the opaque internal error. `tests/test_llm_verbosity_passthrough.py` stays green through its `__module__`-resolved patch seam. make sec clean; make cov 98.97%)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —
@@ -250,3 +252,19 @@ Shim burn-down:
 - `voiceai/platform/agent_records.py` (A3) — pure re-export of the agent-record scan
   helpers (`is_agent_key` / `parse_agent_record` / `collect_agent_records`), which now
   live in `voiceai.modules.agents.static_methods`.
+- `voiceai/agent_types/__init__.py` (A6) — package-surface shim keeping the exact legacy
+  star-import surface (task_manager.py:62) resolving: the six easy brains through their
+  per-file shims, `graph_agent` / `graph_based_conversational_agent` still from their
+  legacy files until A7 retargets them.
+- `voiceai/agent_types/base_agent.py` (A6) — re-export of `voiceai.modules.agents.brains.base`.
+- `voiceai/agent_types/contextual_conversational_agent.py` (A6) — re-export of
+  `voiceai.modules.agents.brains.simple` (plus the legacy auxiliary names, verbatim).
+- `voiceai/agent_types/extraction_agent.py` (A6) — re-export of
+  `voiceai.modules.agents.brains.extraction`.
+- `voiceai/agent_types/summarization_agent.py` (A6) — re-export of
+  `voiceai.modules.agents.brains.summarization`.
+- `voiceai/agent_types/webhook_agent.py` (A6) — re-export of
+  `voiceai.modules.agents.brains.webhook`.
+- `voiceai/agent_types/knowledgebase_agent.py` (A6) — re-export of
+  `voiceai.modules.agents.brains.knowledgebase` (plus the legacy `voiceai.models` star
+  the old module's namespace exposed).
