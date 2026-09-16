@@ -11,11 +11,19 @@ logger = configure_logger(__name__)
 
 
 class BaseSynthesizer:
-    def __init__(self, task_manager_instance=None, stream=True, buffer_size=40, event_loop=None):
+    def __init__(self, task_manager_instance=None, stream=True, buffer_size=40, event_loop=None, sequence_gate=None):
+        """Args:
+            sequence_gate: Optional ``SequenceGatePort`` conformer (spec 0004 step B2).
+                When provided, `should_synthesize_response` prefers it over the legacy
+                ``task_manager_instance`` backref (which keeps flowing until step
+                B13c). Injected as a kwarg so this legacy module never imports
+                ``voiceai.modules.*`` (AGENTS.md §3.1 bridge 3).
+        """
         self.stream = stream
         self.buffer_size = buffer_size
         self.internal_queue = asyncio.Queue()
         self.task_manager_instance = task_manager_instance
+        self.sequence_gate = sequence_gate
         self.connection_time = None
         self.turn_latencies = []
         self.first_chunk_generated = False
@@ -70,6 +78,13 @@ class BaseSynthesizer:
         self.internal_queue = asyncio.Queue()
 
     def should_synthesize_response(self, sequence_id):
+        """Whether ``sequence_id`` is still a valid (uninterrupted) stream.
+
+        Prefers the injected ``sequence_gate`` (spec 0004 step B2); falls back to
+        the legacy ``task_manager_instance`` backref until B13c retires it.
+        """
+        if self.sequence_gate is not None:
+            return self.sequence_gate.is_sequence_id_in_current_ids(sequence_id)
         return self.task_manager_instance.is_sequence_id_in_current_ids(sequence_id)
 
     async def push(self, message):

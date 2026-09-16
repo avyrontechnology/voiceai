@@ -8,8 +8,10 @@ instances built entirely from in-memory fakes. Nothing here opens a connection, 
 event loop task, or instantiates a provider (the conftest socket guard would fail the
 suite loudly if it did).
 
-The step-B2 target ports (`ActiveTranscriberProbePort`, `WelcomeStateSetterPort`) are
-proven on fakes only; their legacy-class conformance pins land with B2's gate. This
+The step-B2 ports (`ActiveTranscriberProbePort`, `WelcomeStateSetterPort`,
+`SequenceGatePort`'s synthesizer seam) are proven on fakes AND, since B2 landed, on the
+legacy classes themselves (`TranscriberPool` probe members, the input handlers'
+`set_welcome_message_played`, `BaseSynthesizer`'s preferred `sequence_gate`). This
 file also carries the B0 module-def assertions (empty router, no-op register) and the
 skeleton behavior tests for `models`/`helpers`/`utils`/`exceptions`, since B0's test
 ownership is exactly this file (deviation noted in the step report).
@@ -33,6 +35,7 @@ from voiceai.exceptions import TranscriberError as LegacyTranscriberError
 from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.input_handlers.default import DefaultInputHandler
+from voiceai.input_handlers.telephony import TelephonyInputHandler
 from voiceai.modules import ALL_MODULES, ModuleDef, voice
 from voiceai.modules.voice.constants import (
     CATEGORY_IS_USER_ONLINE,
@@ -71,6 +74,7 @@ from voiceai.modules.voice.ports import (
 )
 from voiceai.output_handlers.telephony import TelephonyOutputHandler
 from voiceai.s2s.base_s2s import BaseS2SProvider
+from voiceai.synthesizer.base_synthesizer import BaseSynthesizer
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
@@ -89,6 +93,10 @@ _OUTPUT_HANDLER_CONFORMS: Final[type[CallOutputPort]] = TelephonyOutputHandler
 _MARK_LEDGER_CONFORMS: Final[type[MarkLedgerPort]] = MarkEventMetaData
 #: TaskManager itself is the sequence gate today (`is_sequence_id_in_current_ids`).
 _SEQUENCE_GATE_CONFORMS: Final[type[SequenceGatePort]] = TaskManager
+#: Step B2 landed: the pool carries the three probe members as first-class surface.
+_TRANSCRIBER_POOL_PROBE_CONFORMS: Final[type[ActiveTranscriberProbePort]] = TranscriberPool
+#: Step B2 landed: the input handlers carry the welcome-state setter.
+_INPUT_HANDLER_WELCOME_CONFORMS: Final[type[WelcomeStateSetterPort]] = DefaultInputHandler
 
 # --- Port member pins: renaming or moving a member must be loud -------------------------
 TRANSCRIPTION_POOL_METHODS = frozenset(
@@ -327,7 +335,7 @@ def test_port_member_sets_are_pinned():
     assert not TRANSCRIPTION_POOL_METHODS & frozenset(dir(NotAPort))
 
 
-# --- Step-B2 target ports: fakes conform now, the legacy pins land with B2 --------------
+# --- Step-B2 ports: fakes AND (since B2 landed) the legacy classes conform --------------
 
 
 def test_probe_port_fake_conforms_with_concrete_values():
@@ -340,11 +348,44 @@ def test_probe_port_fake_conforms_with_concrete_values():
     assert probe.supports_regen_settle() is True
 
 
-def test_transcriber_pool_does_not_yet_carry_the_probe_surface():
-    """Honest B0 state: the pool gains the probe members only in step B2."""
+def test_transcriber_pool_carries_the_probe_surface():
+    """B2 landed: the pool conforms to the probe port (flips the honest B0 pin)."""
     pool = _transcriber_pool()
 
-    assert not isinstance(pool, ActiveTranscriberProbePort)
+    assert isinstance(pool, ActiveTranscriberProbePort)
+
+
+def test_pool_probe_members_delegate_to_the_active_inner_transcriber():
+    """The lifted members read the ACTIVE inner transcriber, concretely (risk R1)."""
+    inner = SimpleNamespace(connection_time=None, turn_latencies=[], current_turn_id=7, eager_eot_threshold=0.4)
+    pool = TranscriberPool({ACTIVE_LABEL: inner}, None, None, ACTIVE_LABEL, {})
+
+    assert pool.current_turn_id == 7
+    assert pool.eager_eot_threshold == 0.4
+
+
+def test_pool_probe_members_answer_none_when_the_inner_lacks_them():
+    """A provider without the members answers None — exactly what the old digs got."""
+    pool = _transcriber_pool()  # the standby component defines neither member
+
+    assert pool.current_turn_id is None
+    assert pool.eager_eot_threshold is None
+
+
+def test_pool_supports_regen_settle_follows_the_active_label():
+    """The capability mirrors the name-prefix exclusion, tracking the active label."""
+
+    class DeepgramStub:
+        """Name-prefix matters: the exclusion check lowercases the class name."""
+
+    class SonioxStub:
+        """Any non-excluded provider name arms the settle window."""
+
+    pool = TranscriberPool({"hi": DeepgramStub(), "en": SonioxStub()}, None, None, "hi", {})
+
+    assert pool.supports_regen_settle() is False
+    pool.active_label = "en"
+    assert pool.supports_regen_settle() is True
 
 
 def test_welcome_setter_fake_conforms_and_records_state():
@@ -354,6 +395,43 @@ def test_welcome_setter_fake_conforms_and_records_state():
     assert isinstance(setter, WelcomeStateSetterPort)
     setter.set_welcome_message_played(True)
     assert cast(FakeWelcomeSetter, setter).played is True
+
+
+def test_input_handlers_carry_the_welcome_setter():
+    """B2 landed: both input-handler legs conform to the setter port."""
+    assert isinstance(DefaultInputHandler(), WelcomeStateSetterPort)
+    assert isinstance(TelephonyInputHandler(queues=None), WelcomeStateSetterPort)
+
+
+def test_set_welcome_message_played_keeps_the_attribute_in_sync():
+    """The setter and the raw flag (read by welcome_message_played) cannot drift."""
+    handler = DefaultInputHandler()
+    assert handler.welcome_message_played() is False
+
+    handler.set_welcome_message_played(True)
+    assert handler.is_welcome_message_played is True
+    assert handler.welcome_message_played() is True
+
+    handler.set_welcome_message_played(False)
+    assert handler.is_welcome_message_played is False
+    assert handler.welcome_message_played() is False
+
+
+def test_base_synthesizer_prefers_the_injected_sequence_gate():
+    """B2: with both seams wired, the typed gate decides; the backref is not consulted."""
+    synth = BaseSynthesizer(task_manager_instance=FakeSequenceGate({9}), sequence_gate=FakeSequenceGate({7}))
+
+    assert synth.should_synthesize_response(7) is True
+    assert synth.should_synthesize_response(9) is False
+
+
+def test_base_synthesizer_falls_back_to_the_task_manager_backref():
+    """Without a gate the legacy backref keeps answering (it flows until B13c)."""
+    synth = BaseSynthesizer(task_manager_instance=FakeSequenceGate({9}))
+
+    assert synth.sequence_gate is None
+    assert synth.should_synthesize_response(9) is True
+    assert synth.should_synthesize_response(7) is False
 
 
 def test_sequence_gate_round_trip_through_the_protocol_type():

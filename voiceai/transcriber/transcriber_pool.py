@@ -3,6 +3,7 @@ import os
 import time
 from typing import Awaitable, Callable, Optional
 
+from voiceai.constants import REGEN_SETTLE_EXCLUDED_TRANSCRIBERS
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.lid import LIDProvider
 
@@ -188,6 +189,53 @@ class TranscriberPool:
         active = self.transcribers[self.active_label]
         task = getattr(active, "transcription_task", None)
         return task is not None and not task.done()
+
+    # ------------------------------------------------------------------
+    # Active-transcriber capability probes (spec 0004 step B2)
+    # ------------------------------------------------------------------
+    # The three members task_manager historically dug off
+    # ``pool.transcribers[pool.active_label]`` by hand; the pool answers them
+    # directly now (`ActiveTranscriberProbePort` in voiceai.modules.voice.ports).
+
+    @property
+    def current_turn_id(self) -> int | str | None:
+        """The active transcriber's ASR turn id (Deepgram ints, OpenAI ``"turn_N"``).
+
+        Returns:
+            The active inner transcriber's ``current_turn_id``, or ``None`` when it
+            does not track one (or the active label is unmapped).
+        """
+        active = self.transcribers.get(self.active_label)
+        if active is None:
+            return None
+        return getattr(active, "current_turn_id", None)
+
+    @property
+    def eager_eot_threshold(self) -> float | None:
+        """EagerEOT confidence gate for speculative generation; falsy disables it.
+
+        Returns:
+            The active inner transcriber's ``eager_eot_threshold``, or ``None`` when
+            it does not define one (or the active label is unmapped).
+        """
+        active = self.transcribers.get(self.active_label)
+        if active is None:
+            return None
+        return getattr(active, "eager_eot_threshold", None)
+
+    def supports_regen_settle(self) -> bool:
+        """Whether a regen settle window can ever pay off for the active transcriber.
+
+        Mirrors task_manager's historical ``type(active).__name__``-prefix exclusion
+        check (``regen_settle_can_fire``) verbatim, including its fallback to the
+        pool object itself when the active label is unmapped.
+
+        Returns:
+            ``False`` for excluded providers (no final can land inside the settle
+            window, so waiting only costs), ``True`` otherwise.
+        """
+        active = self.transcribers.get(self.active_label, self)
+        return not type(active).__name__.lower().startswith(REGEN_SETTLE_EXCLUDED_TRANSCRIBERS)
 
     # ------------------------------------------------------------------
     # Duck-typed interface

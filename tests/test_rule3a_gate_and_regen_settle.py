@@ -173,3 +173,14 @@ def test_can_fire_follows_the_active_pool_member():
     assert make_can_fire_tm(pool).regen_settle_can_fire() is False
     pool.active_label = "en"
     assert make_can_fire_tm(pool).regen_settle_can_fire() is True
+
+
+def test_can_fire_prefers_the_pool_capability():
+    """B2: a real pool answers supports_regen_settle() itself; the dig stays as the
+    fallback for bare transcribers and dig-shaped stubs (the tests above)."""
+    from voiceai.transcriber.transcriber_pool import TranscriberPool
+
+    pool = TranscriberPool({"hi": DeepgramStub(), "en": SonioxStub()}, None, None, "hi", {})
+    assert make_can_fire_tm(pool).regen_settle_can_fire() is False
+    pool.active_label = "en"
+    assert make_can_fire_tm(pool).regen_settle_can_fire() is True

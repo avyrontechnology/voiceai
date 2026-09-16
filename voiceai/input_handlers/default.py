@@ -143,6 +143,18 @@ class DefaultInputHandler:
     def welcome_message_played(self):
         return self.is_welcome_message_played
 
+    def set_welcome_message_played(self, played: bool) -> None:
+        """Record whether the welcome message has (not) finished playing.
+
+        The spec-0004 step-B2 ``WelcomeStateSetterPort`` seam: replaces
+        task_manager's direct ``is_welcome_message_played`` attribute writes while
+        keeping that attribute (read by `welcome_message_played`) in sync.
+
+        Args:
+            played: The new welcome-played state.
+        """
+        self.is_welcome_message_played = played
+
     def get_mark_event_meta_data_obj(self, packet):
         mark_id = packet["name"]
         return self.mark_event_meta_data.fetch_data(mark_id)

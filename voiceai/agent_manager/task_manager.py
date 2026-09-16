@@ -1510,7 +1510,7 @@ class TaskManager(BaseManager):
         try:
             if await self.__await_stream_sid():
                 logger.info(f"Got stream sid for s2s conversation {self.stream_sid}")
-                self.tools["input"].is_welcome_message_played = True
+                self.tools["input"].set_welcome_message_played(True)
                 self._s2s_stream_ready.set()
         except Exception as e:
             logger.error(f"Exception in _s2s_await_stream_sid {str(e)}")
@@ -1574,7 +1574,7 @@ class TaskManager(BaseManager):
                 # No welcome message to play - mark as played immediately
                 # so the system doesn't wait for a mark event that will never arrive
                 logger.info("No welcome message audio to send, marking welcome message as played")
-                self.tools["input"].is_welcome_message_played = True
+                self.tools["input"].set_welcome_message_played(True)
             else:
                 self.tools["input"].update_is_audio_being_played(True)
                 self.conversation_history.append_welcome_message(text)
@@ -2691,7 +2691,7 @@ class TaskManager(BaseManager):
         # handle_interruption clears the welcome's pending mark; its ACK would
         # otherwise be the only signal that flips this flag.
         if not self.tools["input"].welcome_message_played():
-            self.tools["input"].is_welcome_message_played = True
+            self.tools["input"].set_welcome_message_played(True)
 
         await self.sync_history(self.mark_event_meta_data.fetch_cleared_mark_event_data().items(), current_ts)
         self.tools["input"].reset_response_heard_by_user()
@@ -4818,6 +4818,10 @@ class TaskManager(BaseManager):
     def regen_settle_can_fire(self):
         """False for excluded transcribers: no final can land inside the window, so waiting only costs."""
         transcriber = self.tools.get("transcriber")
+        # B2: the pool answers the capability itself (ActiveTranscriberProbePort);
+        # bare single transcribers keep the historical name-prefix check below.
+        if hasattr(transcriber, "supports_regen_settle"):
+            return transcriber.supports_regen_settle()
         active = (
             transcriber.transcribers.get(transcriber.active_label, transcriber)
             if hasattr(transcriber, "transcribers")
@@ -5195,10 +5199,8 @@ class TaskManager(BaseManager):
                         ):
                             logger.info(f"Condition for interruption hit")
                             self.interruption_manager.on_user_speech_started()
-                            _t = self.tools.get("transcriber")
-                            if hasattr(_t, "transcribers") and hasattr(_t, "active_label"):
-                                _t = _t.transcribers.get(_t.active_label, _t)
-                            _asr_turn_id = getattr(_t, "current_turn_id", None)
+                            # B2: the pool answers current_turn_id itself (ActiveTranscriberProbePort).
+                            _asr_turn_id = getattr(self.tools.get("transcriber"), "current_turn_id", None)
                             self.interruption_manager.on_interruption_triggered(asr_turn_id=_asr_turn_id)
                             # Also record in the interrupted set for was_interrupted annotation
                             self.interruption_manager.record_interrupted_transcriber_turn(_asr_turn_id)
@@ -5228,11 +5230,9 @@ class TaskManager(BaseManager):
                                 )
                                 # on_agent_interrupted_user MUST come before reset_utterance_end_time
                                 # so it can still read the previous turn's utterance_end_time.
-                                _t = self.tools.get("transcriber")
-                                if hasattr(_t, "transcribers") and hasattr(_t, "active_label"):
-                                    _t = _t.transcribers.get(_t.active_label, _t)
+                                # B2: the pool answers current_turn_id itself (ActiveTranscriberProbePort).
                                 self.interruption_manager.on_agent_interrupted_user(
-                                    asr_turn_id=getattr(_t, "current_turn_id", None)
+                                    asr_turn_id=getattr(self.tools.get("transcriber"), "current_turn_id", None)
                                 )
                                 self.interruption_manager.reset_utterance_end_time()
                                 await self.__cleanup_downstream_tasks()
@@ -5265,13 +5265,9 @@ class TaskManager(BaseManager):
                         eot_confidence = message["data"].get("confidence")
                         logger.info(f"EagerEndOfTurn received (confidence={eot_confidence}): {eager_transcript}")
 
+                        # B2: the pool answers eager_eot_threshold itself (ActiveTranscriberProbePort).
                         transcriber = self.tools.get("transcriber")
-                        active_transcriber = (
-                            transcriber.transcribers.get(transcriber.active_label, transcriber)
-                            if hasattr(transcriber, "transcribers")
-                            else transcriber
-                        )
-                        eager_eot_threshold = getattr(active_transcriber, "eager_eot_threshold", None)
+                        eager_eot_threshold = getattr(transcriber, "eager_eot_threshold", None)
 
                         if not eager_eot_threshold:
                             logger.info(
@@ -5307,7 +5303,7 @@ class TaskManager(BaseManager):
                             # meta_info["asr_turn_id"] is stale until EndOfTurn, so read the live id.
                             self.user_spoke = True
                             eager_user_row = {"role": "user", "content": eager_transcript}
-                            eager_asr_turn_id = asr_id_to_int(getattr(active_transcriber, "current_turn_id", None))
+                            eager_asr_turn_id = asr_id_to_int(getattr(transcriber, "current_turn_id", None))
                             if eager_asr_turn_id is not None:
                                 eager_user_row["asr_turn_id"] = eager_asr_turn_id
                             self.history.append(eager_user_row)

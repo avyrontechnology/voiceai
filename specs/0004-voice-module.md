@@ -320,6 +320,31 @@ incl. the read-through-owner mid-message swap, retired-final-chunk reset tm:7074
 (+ mid-stream negative), and the unconditional revalidate-in-kickoff tm:4807 (+ the
 cancel-path double revalidate). No production code touched; make sec clean.)
 
+B2: check=green; test-all=7/2280/2287 (net-new: 0; reconciliation: 2 tests rewritten
+in place, 1↔1 each, +8 additive. Rewrites: tests/arch/modules/voice/test_ports.py's
+honest B0 pin test_transcriber_pool_does_not_yet_carry_the_probe_surface flipped to
+test_transcriber_pool_carries_the_probe_surface (the B0-planned pin landing);
+tests/test_s2s_task_manager.py::test_s2s_marks_the_welcome_as_played now asserts
+set_welcome_message_played(True) on the input-handler mock instead of the retired
+direct attribute write. Additive: +7 in test_ports.py (probe delegation ×2,
+supports_regen_settle label-following, welcome-setter legacy pins ×2, sequence_gate
+preference + backref fallback) and +1 in test_rule3a_gate_and_regen_settle.py
+(capability path preferred on a real pool). Gate ran the 32 files matching
+`grep -rl "TranscriberPool\|SynthesizerPool\|InputHandler\|OutputHandler" tests/
+--include="test_*.py"` individually — all green except the preserved known-failing
+test_telephony_output_send_timeout pair (spec said "21 files": the match set grew
+with B1's characterization files). Deviations, made loud: only THREE direct
+welcome-state writes exist in tm (1513/1577/2694) — the spec's 4th site "8032" is a
+stale line number (tm:8032 is the s2s `is_dtmf_active` write; the only other welcome
+literal, tm:1439, is the handler-constructor kwarg, which stays); retiring the eager
+site's `active_transcriber` local also updated its second use at tm:5310 (same eager
+branch; the transcription-port docstring's 5198-5310 range covers it);
+regen_settle_can_fire prefers pool.supports_regen_settle() but keeps the verbatim
+dig as the bare-transcriber fallback (test_rule3a's dig-shaped stubs pin it);
+input_handlers/telephony.py and transcriber/base_transcriber.py owned but unedited
+— TelephonyInputHandler inherits the setter from DefaultInputHandler, and the probe
+surface lives on the pool per the spec. make sec clean.)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per

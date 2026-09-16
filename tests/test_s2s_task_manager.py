@@ -458,7 +458,9 @@ class TestStreamSidPropagation:
         tm = self._make_telephony_tm()
         await tm._s2s_await_stream_sid()
         # The model speaks the greeting itself, so no mark event is ever coming for it.
-        assert tm.tools["input"].is_welcome_message_played is True
+        # B2: the write goes through the input handler's set_welcome_message_played()
+        # (WelcomeStateSetterPort) instead of a direct attribute assignment.
+        tm.tools["input"].set_welcome_message_played.assert_called_once_with(True)
 
     async def test_missing_stream_sid_ends_the_call_rather_than_hanging(self):
         tm = self._make_telephony_tm()
