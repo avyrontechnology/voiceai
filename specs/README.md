@@ -20,5 +20,7 @@ when reality diverges — the spec is documentation of record, not a proposal ar
 | Spec | Title | Status |
 |------|-------|--------|
 | 0001 | Architecture foundation (common, core, database, health module) | done |
-| 0002 | Platform auth migration into `modules/auth` (next) | draft |
+| 0002 | Agents module — definition domain, models split, brains, CRUD (tranche A) | in progress |
 | 0003 | Database driver selection + real backend for `core/db.py` | draft |
+| 0004 | Voice module — realtime runtime strangler out of TaskManager (tranche B) | draft |
+| 0005 | Platform auth migration into `modules/auth` | draft |

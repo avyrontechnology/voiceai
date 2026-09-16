@@ -364,4 +364,5 @@ Accepted as the contract of record (all verified by the 59-agent review workflow
 ## Rollout
 
 Pure addition; nothing imports the new packages yet. `local_setup` wiring and feature
-migrations are follow-up specs (0002: platform auth module migration; 0003: DB driver choice).
+migrations are follow-up specs (0002: agents module; 0003: DB driver choice; 0004: voice
+module; 0005: platform auth migration).

@@ -130,6 +130,24 @@ Coverage target ≥ 85% on new packages. A behavior without a test does not exis
 Cycles are a design bug: if two modules need each other, extract the shared part to `common`
 or a new module — spec it.
 
+### 3.1 Strangler bridges (amendment for specs 0002/0004)
+
+The matrix above bans modules↔legacy imports; a behavior-preserving strangler needs narrow,
+audited bridges. Exactly four are sanctioned:
+
+1. `modules/{agents,voice}/adapters/**` are the ONLY new-architecture files permitted to
+   import legacy packages; every such import is tagged with the migration step that retires it.
+2. A legacy file may become a pure re-export shim importing only a module's `__init__` public
+   surface, tagged `# legacy-shim(spec-NNNN)` and registered on the owning spec's burn-down
+   list; shims are deleted at cutover, never accreted.
+3. Kwargs-injection of module objects into legacy constructors is sanctioned — receiving an
+   injected object is not an import (precedent: the existing `task_manager_instance` kwarg).
+4. Cross-module, `voice` imports only names exported through
+   `voiceai.modules.agents.__init__.__all__`.
+
+These rules are enforced mechanically by `tests/arch/test_layer_contract.py` (an AST walk
+that runs under `make check`), not by convention.
+
 ## 4. Security standards (every iteration)
 
 - **Boundary validation:** every request body/query is a pydantic model; never trust
