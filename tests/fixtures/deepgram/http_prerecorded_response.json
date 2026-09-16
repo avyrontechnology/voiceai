@@ -1,0 +1,35 @@
+{
+  "_comment": "Recorded Deepgram prerecorded-HTTP (/v1/listen POST) response body (spec 0004 B1 golden fixture) for DeepgramTranscriber._get_http_transcription().",
+  "response": {
+    "metadata": {
+      "transaction_key": "deprecated",
+      "request_id": "dg-req-http-1",
+      "sha256": "6a2af6a8b5b8b8a0a4f9f3c2d1e0aa11",
+      "created": "2026-09-17T00:00:00.000Z",
+      "duration": 5.28,
+      "channels": 1,
+      "models": ["aa274f3c"]
+    },
+    "results": {
+      "channels": [
+        {
+          "alternatives": [
+            {
+              "transcript": "thanks for calling otoba support",
+              "confidence": 0.9878,
+              "words": [
+                {"word": "thanks", "start": 0.32, "end": 0.64, "confidence": 0.99},
+                {"word": "for", "start": 0.64, "end": 0.8, "confidence": 0.99},
+                {"word": "calling", "start": 0.8, "end": 1.28, "confidence": 0.98},
+                {"word": "otoba", "start": 1.28, "end": 1.84, "confidence": 0.97},
+                {"word": "support", "start": 1.84, "end": 2.4, "confidence": 0.99}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected_transcript": "thanks for calling otoba support",
+  "expected_duration": 5.28
+}

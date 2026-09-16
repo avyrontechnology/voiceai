@@ -1,0 +1,192 @@
+{
+  "_comment": "Recorded Deepgram Flux (/v2/listen) websocket sessions (spec 0004 B1 golden fixtures). expected_events is the golden parse of DeepgramTranscriber.receiver_flux().",
+  "sessions": {
+    "resumed_turn": {
+      "frames": [
+        {"type": "Connected", "request_id": "dg-req-flux-1", "sequence_id": 0},
+        {
+          "type": "TurnInfo",
+          "event": "StartOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 0.54,
+          "transcript": "hi",
+          "words": [{"word": "hi", "confidence": 0.9}],
+          "end_of_turn_confidence": 0.02
+        },
+        {
+          "type": "TurnInfo",
+          "event": "Update",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.12,
+          "transcript": "hi i want",
+          "words": [
+            {"word": "hi", "confidence": 0.92},
+            {"word": "i", "confidence": 0.9},
+            {"word": "want", "confidence": 0.91}
+          ],
+          "end_of_turn_confidence": 0.08,
+          "languages": ["en"],
+          "languages_hinted": ["en", "hi"]
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EagerEndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.94,
+          "transcript": "hi i want to cancel",
+          "words": [
+            {"word": "hi", "confidence": 0.93},
+            {"word": "i", "confidence": 0.9},
+            {"word": "want", "confidence": 0.92},
+            {"word": "to", "confidence": 0.89},
+            {"word": "cancel", "confidence": 0.94}
+          ],
+          "end_of_turn_confidence": 0.55,
+          "languages": ["en"],
+          "languages_hinted": ["en", "hi"]
+        },
+        {"type": "TurnInfo", "event": "TurnResumed", "turn_index": 0},
+        {
+          "type": "TurnInfo",
+          "event": "Update",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 2.8,
+          "transcript": "hi i want to cancel my plan",
+          "words": [
+            {"word": "hi", "confidence": 0.93},
+            {"word": "i", "confidence": 0.9},
+            {"word": "want", "confidence": 0.92},
+            {"word": "to", "confidence": 0.89},
+            {"word": "cancel", "confidence": 0.94},
+            {"word": "my", "confidence": 0.91},
+            {"word": "plan", "confidence": 0.95}
+          ],
+          "end_of_turn_confidence": 0.31,
+          "languages": ["en"],
+          "languages_hinted": ["en", "hi"]
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 3.4,
+          "transcript": "hi i want to cancel my plan.",
+          "words": [
+            {"word": "hi", "confidence": 0.93},
+            {"word": "i", "confidence": 0.9},
+            {"word": "want", "confidence": 0.92},
+            {"word": "to", "confidence": 0.89},
+            {"word": "cancel", "confidence": 0.94},
+            {"word": "my", "confidence": 0.91},
+            {"word": "plan.", "confidence": 0.95}
+          ],
+          "end_of_turn_confidence": 0.93,
+          "languages": ["en", "hi"],
+          "languages_hinted": ["en", "hi"]
+        }
+      ],
+      "expected_events": [
+        {"kind": "speech_started"},
+        {"kind": "interim_transcript_received", "content": "hi"},
+        {"kind": "interim_transcript_received", "content": "hi i want"},
+        {"kind": "eager_end_of_turn", "content": "hi i want to cancel", "confidence": 0.55},
+        {"kind": "turn_resumed"},
+        {"kind": "interim_transcript_received", "content": "hi i want to cancel my plan"},
+        {"kind": "transcript", "content": "hi i want to cancel my plan", "was_eager": false}
+      ],
+      "expected_lid_events": [
+        {"event_type": "Update", "detected_lang": "en", "all_languages": ["en"]},
+        {"event_type": "EagerEndOfTurn", "detected_lang": "en", "all_languages": ["en"]},
+        {"event_type": "Update", "detected_lang": "en", "all_languages": ["en"]},
+        {"event_type": "EndOfTurn", "detected_lang": "en", "all_languages": ["en", "hi"]}
+      ]
+    },
+    "eager_confirmed": {
+      "frames": [
+        {"type": "Connected", "request_id": "dg-req-flux-2", "sequence_id": 0},
+        {
+          "type": "TurnInfo",
+          "event": "StartOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 0.4,
+          "transcript": "ok",
+          "words": [{"word": "ok", "confidence": 0.88}],
+          "end_of_turn_confidence": 0.03
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EagerEndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.1,
+          "transcript": "ok bye",
+          "words": [{"word": "ok", "confidence": 0.9}, {"word": "bye", "confidence": 0.93}],
+          "end_of_turn_confidence": 0.62
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.6,
+          "transcript": "ok bye",
+          "words": [{"word": "ok", "confidence": 0.9}, {"word": "bye", "confidence": 0.93}],
+          "end_of_turn_confidence": 0.95
+        }
+      ],
+      "expected_events": [
+        {"kind": "speech_started"},
+        {"kind": "interim_transcript_received", "content": "ok"},
+        {"kind": "eager_end_of_turn", "content": "ok bye", "confidence": 0.62},
+        {"kind": "transcript", "content": "ok bye", "was_eager": true}
+      ]
+    },
+    "eager_empty_end": {
+      "frames": [
+        {"type": "Connected", "request_id": "dg-req-flux-3", "sequence_id": 0},
+        {
+          "type": "TurnInfo",
+          "event": "StartOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 0.5,
+          "transcript": "hmm",
+          "words": [{"word": "hmm", "confidence": 0.7}],
+          "end_of_turn_confidence": 0.04
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EagerEndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.0,
+          "transcript": "hmm",
+          "words": [{"word": "hmm", "confidence": 0.72}],
+          "end_of_turn_confidence": 0.51
+        },
+        {
+          "type": "TurnInfo",
+          "event": "EndOfTurn",
+          "turn_index": 0,
+          "audio_window_start": 0.0,
+          "audio_window_end": 1.4,
+          "transcript": "",
+          "words": [],
+          "end_of_turn_confidence": 0.88
+        }
+      ],
+      "expected_events": [
+        {"kind": "speech_started"},
+        {"kind": "interim_transcript_received", "content": "hmm"},
+        {"kind": "eager_end_of_turn", "content": "hmm", "confidence": 0.51},
+        {"kind": "turn_resumed"}
+      ]
+    }
+  }
+}

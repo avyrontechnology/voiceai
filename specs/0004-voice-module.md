@@ -285,6 +285,41 @@ module-def suite (empty router, no-op register), legacy-literal constants pins, 
 typed-view pins against the real builders (build_lid_decision_record field-set equality,
 create_ws_data_packet). make sec clean; make cov 98.61% (≥ 85%))
 
+B1: check=green; test-all=7/2272/2279 (net-new: 0; reconciliation: no existing test
+removed or rewritten — purely additive: +94 characterization tests in 6 new legacy-tree
+files. test_characterization_assistant_manager.py ×10: the fan-out net (welcome
+substitution incl. the web-call no-substitution quirk, per-task TaskManager
+construction/load_prompt/run contract, run_id override, deepcopied yields,
+task-0-output-as-input_parameters identity, extraction_details injection).
+test_characterization_task_manager_construction.py ×19: the real-`__init__` matrix over
+simple/graph/knowledgebase/multiagent/s2s with offline providers, extending the
+test_llm_verbosity_passthrough.py:65 pin — queue topology, tools dict,
+InterruptionManager default-then-reconfigure (tm:634/836), end_call injection
+(global-primary + graph node-scoped), welcome preload + web upsample, kwargs contract
+incl. the task_manager_instance backref and process_interim_results, the
+RAG_SERVER_URL env side-channel, the tm:697 dtmf single-consumer guard (s2s
+suppression), and the _is_browser_leg llm-queue guard predicate.
+test_characterization_base_contracts.py ×22: BaseTranscriber/BaseSynthesizer contracts
+incl. asr_turn_id publication, the (sequence_id, message_category) latency key, the
+should_synthesize_response backref gate (SequenceGatePort's seam), chunk stamping, and
+the cached HTTP fetch loop. test_characterization_default_io.py ×19: the
+pre/post-mark wire protocol, the mark-ack flow, the heard-text playback oracle
+(per-user/turn/response on handler and ledger), welcome/hangup mark side effects,
+closed-latch + reopen, and the telephony timeout≠disconnect latch as it behaves ON
+THIS BRANCH (timeout drops the packet, socket stays open; the known-failing
+test_telephony_output_send_timeout pair keeps pinning resilient-core's future fix and
+stays failing). test_characterization_deepgram_golden.py ×10 over 3 committed recorded
+fixtures in tests/fixtures/deepgram/: nova receiver (speech_final + UtteranceEnd
+fallback, user_stop stamps, turn_latencies), flux receiver (eager/resumed/confirmed/
+empty-EndOfTurn speculation-cancel, punctuation rstrip, ASR-native LID events), and
+the prerecorded HTTP parser. test_characterization_output_loop_invariants.py ×14:
+invariant nets driving the REAL rebound methods — b"\x00" BLOCK passthrough tm:7410,
+BLOCK end-of-stream flag release, SEND-path settlement, hangup gate bypass,
+stuck-gate release (+ fresh-speech negative), buffered_output_queue replace-to-flush
+incl. the read-through-owner mid-message swap, retired-final-chunk reset tm:7074
+(+ mid-stream negative), and the unconditional revalidate-in-kickoff tm:4807 (+ the
+cancel-path double revalidate). No production code touched; make sec clean.)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
