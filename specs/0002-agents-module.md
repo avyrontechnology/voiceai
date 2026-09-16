@@ -1,6 +1,7 @@
 # Spec 0002 — Agents module (tranche A of the agents/voice restructure)
 
-- **Status:** in progress
+- **Status:** done (steps A0-A7 landed 8fd6474..7488b6b; shim burn-down stays open until the
+  endgame cutover spec)
 - **Branch:** `revamp/arch` (base: `master`)
 - **Owner:** Monazir
 - **Depends on:** spec 0001 (foundation); AGENTS.md §3.1 (strangler bridges)

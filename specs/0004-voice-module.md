@@ -1,6 +1,6 @@
 # Spec 0004 — Voice module (tranche B of the agents/voice restructure)
 
-- **Status:** draft (starts after spec 0002 completes)
+- **Status:** in progress
 - **Branch:** `revamp/arch` (base: `master`)
 - **Owner:** Monazir
 - **Depends on:** spec 0001; spec 0002 (AgentDefinitionPort, agents models); AGENTS.md §3.1
