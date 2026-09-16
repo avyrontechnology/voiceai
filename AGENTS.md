@@ -82,8 +82,13 @@ in a repository is a violation. Deletes are soft (`is_active=False`) unless a sp
 hard deletion.
 
 **Rule 6 — Types everywhere.** Every variable with a non-obvious type, every function
-parameter, and every return type is annotated. `mypy` (strict profile in `pyproject.toml`)
-must pass on the new packages. `Any` requires an inline `# why:` comment.
+parameter, and every return type is annotated. `mypy` must pass on the new packages AND
+`tests/arch` with the exact profile pinned in `pyproject.toml [tool.mypy]` (untyped/incomplete
+defs banned in source, untyped decorators banned, no implicit re-export, strict equality,
+warn-on-Any-return; test defs are exempt from self-annotation but are fully checked).
+`disallow_any_generics`/`disallow_untyped_calls` are deliberately off: pinned contracts use
+open `dict` payloads and legacy imports are silently followed. `Any` requires an inline
+`# why:` comment.
 
 **Rule 7 — Docstrings.** Every module, class, and public method opens with an informative
 Google-style docstring: one summary line, then Args/Returns/Raises where they add

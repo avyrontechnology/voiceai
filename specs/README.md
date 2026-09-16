@@ -19,4 +19,6 @@ when reality diverges — the spec is documentation of record, not a proposal ar
 
 | Spec | Title | Status |
 |------|-------|--------|
-| 0001 | Architecture foundation (common, core, database, health module) | in progress |
+| 0001 | Architecture foundation (common, core, database, health module) | done |
+| 0002 | Platform auth migration into `modules/auth` (next) | draft |
+| 0003 | Database driver selection + real backend for `core/db.py` | draft |

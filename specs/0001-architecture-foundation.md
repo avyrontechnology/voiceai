@@ -1,6 +1,6 @@
 # Spec 0001 — Architecture foundation (common, core, database, first module)
 
-- **Status:** in progress
+- **Status:** done
 - **Branch:** `revamp/arch` (base: `master`)
 - **Owner:** Monazir
 - **Depends on:** nothing (this is the root spec)
@@ -214,7 +214,7 @@ def create_redis(env: Environment) -> "redis.asyncio.Redis | None"
     # from_url(..., decode_responses=True, socket_connect_timeout=5, socket_timeout=5)
 async def ping_redis(client: "redis.asyncio.Redis | None") -> bool   # False on None or any exception
 def create_db(env: Environment) -> "DatabaseClient"           # "memory" -> InMemoryDatabase();
-                                                              # "mongo" -> ConfigurationError("driver not installed; see spec 0002")
+                                                              # "mongo" -> ConfigurationError("driver not installed; see spec 0003")
 class DatabaseClient(Protocol): name: str
 class InMemoryDatabase: name = "memory"; collections: dict[str, dict[str, dict]]
 ```
@@ -331,6 +331,35 @@ DOWN, redis unconfigured → SKIPPED + overall UP), controller end-to-end via
 `pytest tests/arch`. `make sec` (bandit on new packages) clean at medium/high. `make cov`
 enforces the ≥ 85% line — `pytest-cov` joins the dev extras for this (dev-only dependency,
 maintained by pytest-dev; supply-chain note per AGENTS.md §4).
+
+## Implementation notes (deviations absorbed after the adversarial review)
+
+Accepted as the contract of record (all verified by the 59-agent review workflow):
+- `Container.register` carries `@overload`s (typed key → `T`, string key → `Any`); error-class
+  attributes (`code`, `http_status`, `retryable`) are `ClassVar`; `Environment` is frozen.
+- `ALLOWED_ORIGINS` **rejects `"*"`** (and non-origin entries) with
+  `ConfigurationError(path="ALLOWED_ORIGINS")` on EVERY model construction path (pydantic
+  field validator); the field is an immutable `tuple[str, ...]`; and `_add_cors` re-checks at
+  the point of use, covering `model_copy(update=...)`, which skips validators.
+- Unexpected-exception (500) envelopes are produced inside `RequestIdMiddleware` (with the
+  Starlette server-error handler as backstop) so they carry `X-Request-ID` and pass CORS.
+- `InMemoryRepository.update` treats a soft-deleted document as absent (`NotFoundError`);
+  `insert` with an explicit id **replaces** that document (the heartbeat probe's contract) and
+  `insert`/`update` return deep copies.
+- HTTPException mapping preserves `detail` + headers for 4xx; **5xx detail is folded into an
+  opaque envelope** (internals must not leak — supersedes the unqualified "detail preserved").
+- `APP_VERSION` resolves via `importlib.metadata.version("voiceai")` (fallback `0.0.0+local`)
+  so `/health` reports the deployed package version; the FastAPI app uses the same value.
+- Health: `register()` binds lazy providers (no `Environment` resolution — no seam needs it);
+  three components (`app`, `redis`, `database`); non-memory backends report `SKIPPED` with
+  `detail="backend=<name>"` (`# TODO(spec-0003)`); heartbeat reuses one well-known id so a
+  polled `/health` cannot grow the store.
+- Redis factory tests live in `tests/arch/core/test_container.py` (the container owns the
+  client's lifetime); an explicit `dotenv_path` is loaded per call — only the default `.env`
+  lookup is once-per-process.
+- `is_safe_outbound_url` resolves via `socket.getaddrinfo` (blocking): async call sites must
+  wrap it in `asyncio.to_thread` — an async helper ships with the first async consumer spec.
+- Version duality with the legacy `voiceai.__version__` string resolves at merge-to-master.
 
 ## Rollout
 

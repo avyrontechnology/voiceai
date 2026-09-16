@@ -22,7 +22,7 @@ lint-arch:
 	$(RUFF) check --select $(ARCH_SELECT) --ignore $(ARCH_IGNORE) $(ARCH_DIRS)
 
 type:
-	$(PY) -m mypy $(ARCH_DIRS)
+	$(PY) -m mypy $(ARCH_DIRS) tests/arch
 
 test:
 	$(PY) -m pytest -q $(ARCH_TESTS)

@@ -53,16 +53,30 @@ select = [
 # Strict typing applies to the new architecture packages only (AGENTS.md rule 6);
 # legacy engine code is excluded until it migrates.
 [tool.mypy]
-files = ["voiceai/common", "voiceai/core", "voiceai/database", "voiceai/modules"]
+files = ["voiceai/common", "voiceai/core", "voiceai/database", "voiceai/modules", "tests/arch"]
 python_version = "3.10"
 follow_imports = "silent"
 ignore_missing_imports = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+disallow_untyped_decorators = true
 check_untyped_defs = true
 no_implicit_optional = true
+no_implicit_reexport = true
+strict_equality = true
 warn_return_any = true
 warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# Tests are type-CHECKED (spec 0001 pins protocol-conformance annotations) but test defs
+# themselves need no annotations; fixtures/parametrize stay ergonomic. tests/ has no
+# __init__.py, so mypy resolves these modules under the tests/ root as arch.*.
+module = "arch.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_decorators = false
 
 [tool.commitizen]
 name = "cz_conventional_commits"
