@@ -205,6 +205,8 @@ A0: check=green; test-all=7/1869/1876 (net-new: 0)
 
 A1: check=green; test-all=7/1882/1889 (net-new: 0; reconciliation: `test_registry_lists_exactly_the_health_module` rewritten as `test_registry_lists_exactly_the_registered_modules` to admit `agents.MODULE` in `ALL_MODULES` — test count unchanged, +13 new agents-module tests)
 
+A2: check=green; test-all=7/1920/1927 (net-new: 0; no test rewritten or removed — +38 new agents-models tests: behavior-parity suite, the dir()-superset shim canary against the recorded 140-name pre-move snapshot, and the engine-free subprocess canary; all 8 named canary files also run individually green)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —
@@ -216,3 +218,8 @@ A7), R5 (§3.1 bridges), R6 (models star-import web — A2's superset shim + can
 
 Additive throughout; quickstart stays the deployed surface. Burn-down list of
 `# legacy-shim(spec-0002)` files maintained here; deletions happen at endgame cutover specs.
+
+Shim burn-down:
+
+- `voiceai/models.py` (A2) — superset re-export per R6; also still the legacy home of the
+  engine/provider star-exports its star-import consumers rely on.

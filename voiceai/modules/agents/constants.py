@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from voiceai.enums import ReasoningEffort
+
 # --- Module identity -------------------------------------------------------------------
 MODULE_NAME: Final[str] = "agents"
 
@@ -88,3 +90,92 @@ DEFAULT_AGENT_TYPE: Final[str] = "other"
 
 # --- Error messages (client-visible; the 404 text matches the legacy detail) ------------
 AGENT_NOT_FOUND_MESSAGE: Final[str] = "Agent not found"
+
+# --- Reasoning-effort support map (models split, A2) ------------------------------------
+# TODO(spec-0002): mirrors the legacy `voiceai.constants.MODEL_REASONING_EFFORT_MAP`
+# verbatim (a test pins the equality) because the layer contract bans `voiceai.constants`
+# imports from module code; the legacy copy retires when the llms/platform migration spec
+# moves its remaining consumers.
+MODEL_REASONING_EFFORT_MAP: Final[dict[str, list[ReasoningEffort]]] = {
+    "gpt-5": [ReasoningEffort.MINIMAL, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5-mini": [ReasoningEffort.MINIMAL, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5-nano": [ReasoningEffort.MINIMAL, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5-codex": [ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5-pro": [ReasoningEffort.HIGH],
+    "gpt-5.1": [ReasoningEffort.NONE, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5.1-codex": [ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5.1-codex-max": [
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.1-codex-mini": [ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5.2": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.4": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.4-mini": [ReasoningEffort.NONE, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5.4-nano": [ReasoningEffort.NONE, ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH],
+    "gpt-5.5": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.5-pro": [ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH],
+    "gpt-5.6-sol": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.6-terra": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-5.6-luna": [
+        ReasoningEffort.NONE,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    # Realtime speech-to-speech. gpt-realtime-1.5 has no reasoning and is deliberately absent.
+    "gpt-realtime-2": [
+        ReasoningEffort.MINIMAL,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-realtime-2.1": [
+        ReasoningEffort.MINIMAL,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+    "gpt-realtime-2.1-mini": [
+        ReasoningEffort.MINIMAL,
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ],
+}
