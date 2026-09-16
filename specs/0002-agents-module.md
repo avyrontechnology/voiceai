@@ -209,6 +209,8 @@ A2: check=green; test-all=7/1920/1927 (net-new: 0; no test rewritten or removed 
 
 A3: check=green; test-all=7/1945/1952 (net-new: 0; no test rewritten or removed — +25 new arch tests: static_methods behavior-parity mirroring tests/test_platform_agent_records.py plus the shim identity pin, and repository/prompt-store DI-fake suites including the voiceai.helpers.utils monkeypatch-interception contract; tests/test_platform_agent_records.py stays green via the shim, tests/test_agent_prompts_endpoint.py keeps its exact 3 known failures)
 
+A4: check=green; test-all=7/1988/1995 (net-new: 0; reconciliation: A1's two "until A4" pins in tests/arch/modules/agents/test_module_def.py — test_router_mounts_no_routes_yet and test_register_is_a_noop_until_a4 — rewritten in place as test_router_mounts_exactly_the_four_legacy_paths and test_register_binds_the_repository_service_and_ports, test count unchanged; +43 new A4 tests: 29 service/helpers-delegation DI-fake suites (LlmPort conformance, the create/update extraction-guard asymmetry, falsy-prompts-to-null, prompt-file orphan, 503-when-redis-unconfigured) and 14 controller suites via httpx ASGI against create_app with the real agents MODULE and a dict-backed fake redis under the core "redis" key. Named gates: tests/test_render_prompt.py and tests/test_prompt_context_substitution.py green; tests/test_prompt_resilience.py keeps its exact 2 known failures. make sec clean; make cov 98.87% (≥ 85%; the only sizeable gap is adapters/llm.py's generate body, which is the live litellm call the offline suite must never invoke))
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —

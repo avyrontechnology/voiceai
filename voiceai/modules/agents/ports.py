@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-__all__ = ["AgentDefinitionPort", "AgentSessionStorePort"]
+__all__ = ["AgentDefinitionPort", "AgentSessionStorePort", "LlmPort"]
 
 
 @runtime_checkable
@@ -49,3 +49,17 @@ class AgentSessionStorePort(Protocol):
 
     async def save_prompts(self, agent_id: str, prompts: dict[str, Any] | None) -> None:  # why: free-form JSON
         """Persist `prompts` for `agent_id`; `None` stores the empty payload."""
+
+
+@runtime_checkable
+class LlmPort(Protocol):
+    """One-shot chat completion, used by the service to seed `extraction_json` (step A4).
+
+    Deliberately minimal — an async callable from chat messages to the generated text — so
+    a plain `async def` satisfies it structurally; the LiteLLM-backed conformer lives in
+    `voiceai.modules.agents.adapters.llm` (the §3.1 bridge that owns the legacy imports).
+    Message dicts pass through opaque: the LLM wire shape is the seam, never a model.
+    """
+
+    async def __call__(self, messages: list[dict[str, Any]]) -> str:  # why: chat messages are the LLM wire seam
+        """Generate one completion for `messages` and return its text."""
