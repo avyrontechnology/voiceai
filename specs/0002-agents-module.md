@@ -207,6 +207,8 @@ A1: check=green; test-all=7/1882/1889 (net-new: 0; reconciliation: `test_registr
 
 A2: check=green; test-all=7/1920/1927 (net-new: 0; no test rewritten or removed — +38 new agents-models tests: behavior-parity suite, the dir()-superset shim canary against the recorded 140-name pre-move snapshot, and the engine-free subprocess canary; all 8 named canary files also run individually green)
 
+A3: check=green; test-all=7/1945/1952 (net-new: 0; no test rewritten or removed — +25 new arch tests: static_methods behavior-parity mirroring tests/test_platform_agent_records.py plus the shim identity pin, and repository/prompt-store DI-fake suites including the voiceai.helpers.utils monkeypatch-interception contract; tests/test_platform_agent_records.py stays green via the shim, tests/test_agent_prompts_endpoint.py keeps its exact 3 known failures)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —
@@ -223,3 +225,6 @@ Shim burn-down:
 
 - `voiceai/models.py` (A2) — superset re-export per R6; also still the legacy home of the
   engine/provider star-exports its star-import consumers rely on.
+- `voiceai/platform/agent_records.py` (A3) — pure re-export of the agent-record scan
+  helpers (`is_agent_key` / `parse_agent_record` / `collect_agent_records`), which now
+  live in `voiceai.modules.agents.static_methods`.
