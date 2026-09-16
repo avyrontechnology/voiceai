@@ -207,6 +207,84 @@ conformance suites; golden deepgram fixtures; the meta-test + socket guard from 
 Universal gate per step (spec 0002 definition); baselines re-snapshotted per step; every
 rewrite carries a reconciliation table; final B14 audit results recorded here.
 
+### Tranche B baseline (measured and recorded by B0, 2026-09-17)
+
+- `.venv/bin/python -m pytest -q --collect-only 2>/dev/null | tail -1` →
+  `2155 tests collected, 1 error in 0.61s` — the 1 error is the known
+  `tests/test_seed_mongo_users.py` collection error (imports a git-ignored `scripts/`
+  file; `make test-all` ignores that file, and with the same ignore flag the count is
+  also `2155 tests collected`). Matches the spec 0002 A7 closing count.
+- `make test-all` → `7 failed, 2148 passed, 1 skipped`. Exact failing set — the 7 known
+  master failures, never fixed in this spec (real fixes live on `revamp/resilient-core`):
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_roundtrip`
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_missing_file_returns_null`
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_missing_agent_returns_404`
+  - `tests/test_prompt_resilience.py::test_missing_prompts_file_returns_empty_dict`
+  - `tests/test_prompt_resilience.py::test_missing_prompts_result_supports_get`
+  - `tests/test_telephony_output_send_timeout.py::test_handle_interruption_does_not_hang_on_a_dead_socket[TwilioOutputHandler]`
+  - `tests/test_telephony_output_send_timeout.py::test_handle_does_not_hang_sending_audio_on_a_dead_socket`
+  The constant +1 between collected and reported outcomes is the pre-existing
+  module-level skip recorded at A0.
+
+### Resilient-core overlap map (R8; recorded by B0, 2026-09-17)
+
+Intersection of `git diff --name-only master...revamp/resilient-core` (63 files) with
+the files this spec plans to touch. Every overlapping edit here is behavior-preserving
+(verbatim moves, additive members, same-named delegators), so the eventual rebase of
+`revamp/resilient-core` is a mechanical path remap; steps touching these files note
+line-identity or defer per R8.
+
+| RC-diff file spec 0004 touches | Owning step(s) | R8 handling |
+|---|---|---|
+| `voiceai/agent_manager/task_manager.py` | B2–B13 (every extraction) | verbatim moves + same-named delegators; do-not-reformat; quirks preserved |
+| `voiceai/transcriber/base_transcriber.py` | B1 (contract tests), B12c (move+shim) | additive tests first; line-identity check at move |
+| `voiceai/transcriber/transcriber_pool.py` | B2 (3 lifted members), B12c (move+shim) | strictly additive in B2; line-identity check at move |
+| `voiceai/synthesizer/base_synthesizer.py` | B2 (`sequence_gate` kwarg), B12b (move+shim) | strictly additive in B2; line-identity check at move |
+| `voiceai/synthesizer/synthesizer_pool.py` | B2 gate, B12b (move+shim) | line-identity check at move |
+| `voiceai/synthesizer/stream_synthesizer.py` | B12b (`tts/stream.py`) | line-identity check at move |
+| `voiceai/input_handlers/default.py` | B2 (welcome setter), B12a (move+shim) | strictly additive in B2; line-identity check at move |
+| `voiceai/input_handlers/telephony.py` | B12a (move+shim) | line-identity check at move |
+| `voiceai/input_handlers/telephony_providers/{plivo,sip_trunk,vobiz}.py` | B12a (move+shim) | line-identity check at move |
+| `voiceai/output_handlers/default.py` | B12a (move+shim) | line-identity check at move |
+| `voiceai/output_handlers/socket_errors.py` | B12a (moves with `io/**`) | line-identity check at move |
+| `voiceai/output_handlers/telephony.py` | B12a (move+shim) | line-identity check at move |
+| `voiceai/output_handlers/telephony_providers/{exotel,freeswitch,plivo,sip_trunk,twilio,vobiz}.py` | B12a (move+shim) | line-identity check at move |
+| `voiceai/helpers/utils.py` | B3 onward (delegating wrappers stay module attrs) | additive delegation only; audio DSP body untouched (non-goal) |
+| `local_setup/quickstart_server.py` | B4 (WS handler resolves VoiceCallService) | routes/shapes/module path frozen; delegation-only edit |
+| `tests/test_telephony_output_send_timeout.py` | B12a/B12b (patch repoints if lookup sites move) | KNOWN-FAILING pair preserved as failing; ported, never fixed |
+| `tests/test_cleanup_downstream_survives_dead_output_socket.py` | B10 (`__cleanup_downstream_tasks` pins) | rewrite only with same-commit reconciliation |
+| `tests/test_task_manager_failure_isolation.py` | B5–B13 (delegator/pin migrations) | rewrite only with same-commit reconciliation |
+| `tests/test_pool_failure_isolation.py` | B2 gate (runs individually), B12b/B12c | rewrite only with same-commit reconciliation |
+| `tests/test_engine_websocket_lifecycle.py` | B4 gate | rewrite only with same-commit reconciliation |
+| `tests/test_output_handler_error_policy.py` | B12a gate | rewrite only with same-commit reconciliation |
+
+RC-diff files this spec does NOT touch (no collision): `.env.sample`, `AGENTS.md`,
+`README.md`, the three `local_setup/telephony_server/*_api_server.py` files,
+`voiceai/agent_config.py`, `voiceai/agent_types/*` (spec 0002 shims), `voiceai/constants.py`,
+`voiceai/errors.py`, `voiceai/exceptions.py` (imported for aliasing in B3 adapters, never
+edited), `voiceai/helpers/resilience.py` (RC-only), `voiceai/llms/*` (non-goal),
+`voiceai/models.py` (R6 endgame), `voiceai/output_handlers/telephony_providers/` none
+beyond the six above, `voiceai/platform/*` (spec 0005+), `voiceai/responses.py`, and the
+remaining RC test files (`test_agent_config_validation`, `test_agent_prompts_endpoint`
+(known-failing, untouched), `test_carrier_auth`, `test_errors_and_responses`,
+`test_llm_safe_error_message`, `test_resilience`, `test_seed_mongo_users` (ignored),
+`test_stream_token`, `test_tool_argument_guard`).
+
+B0: check=green; test-all=7/2178/2185 (net-new: 0; reconciliation: spec 0002 A1's
+`test_registry_lists_exactly_the_registered_modules` in tests/arch/modules/test_registry.py
+rewritten in place to admit `voice.MODULE` as the third `ALL_MODULES` entry — test count
+unchanged, the A1-precedent registry edit; +30 new voice-module tests in
+tests/arch/modules/voice/test_ports.py: mypy typed-assignment pins + runtime_checkable
+isinstance conformance for the six B0-named legacy classes (TranscriberPool,
+SynthesizerPool, DefaultInputHandler, TelephonyOutputHandler, MarkEventMetaData,
+BaseS2SProvider via a no-op subclass — all built offline around in-memory fakes, no
+instantiation of network things), the TaskManager issubclass pin for SequenceGatePort,
+fake-only conformance for the B2-target ports (ActiveTranscriberProbePort incl. an
+honest not-yet-conformant pool pin, WelcomeStateSetterPort) and the brain ports, the
+module-def suite (empty router, no-op register), legacy-literal constants pins, and
+typed-view pins against the real builders (build_lid_decision_record field-set equality,
+create_ws_data_packet). make sec clean; make cov 98.61% (≥ 85%))
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
