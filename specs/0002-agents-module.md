@@ -179,6 +179,30 @@ suite as the harness with the baseline/count/reconciliation discipline.
 `make check` + `make test-all` + `make sec` + `make cov` per step; baseline snapshot and the
 A5 curl smoke recorded here by their steps.
 
+### Baseline (measured and recorded by A0, 2026-09-17)
+
+- `.venv/bin/python -m pytest -q --collect-only 2>/dev/null | tail -1` →
+  `1876 tests collected, 1 error in 0.54s` — the 1 error is the known
+  `tests/test_seed_mongo_users.py` collection error (imports a git-ignored `scripts/`
+  file; `make test-all` ignores that file, and with the same ignore flag the count is
+  also `1876 tests collected`).
+- `make test-all` → `7 failed, 1869 passed, 1 skipped`. Exact failing set (the 7 known
+  master failures — never fixed in this spec):
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_roundtrip`
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_missing_file_returns_null`
+  - `tests/test_agent_prompts_endpoint.py::test_prompts_missing_agent_returns_404`
+  - `tests/test_prompt_resilience.py::test_missing_prompts_file_returns_empty_dict`
+  - `tests/test_prompt_resilience.py::test_missing_prompts_result_supports_get`
+  - `tests/test_telephony_output_send_timeout.py::test_handle_interruption_does_not_hang_on_a_dead_socket[TwilioOutputHandler]`
+  - `tests/test_telephony_output_send_timeout.py::test_handle_does_not_hang_sending_audio_on_a_dead_socket`
+- Pre-A0 comparison: 7 failed / 1859 passed / 1 skipped, 1866 collected. A0 adds 10
+  tests (4 layer-contract + 6 TaskManager pins), zero net-new failures, and no legacy
+  test tripped the new outbound-socket guard (no `allow_network` markers were needed).
+  The constant +1 between collected and reported outcomes is a pre-existing
+  module-level skip. `make sec` clean; `make cov` 99.23% (≥ 85%).
+
+A0: check=green; test-all=7/1869/1876 (net-new: 0)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —

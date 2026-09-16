@@ -11,12 +11,74 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 # test at a live account. Tests needing any other provider credential supply it themselves.
 os.environ["OPENAI_API_KEY"] = "test-key"
 
+import socket  # noqa: E402
+
 import pytest  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock
 
 from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
+
+# --- spec 0002 A0: outbound-socket block ---------------------------------------------------
+# The suite is offline-only. Any un-mocked outbound socket connect fails loudly with the
+# offending test's id, so a dead-namespace string patch can never silently make live IO.
+# Unix sockets and loopback destinations stay open: pytest/asyncio plumbing and local test
+# servers depend on them. Opt out per-test with @pytest.mark.allow_network.
+
+ALLOW_NETWORK_MARKER = "allow_network"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "::", "0.0.0.0", ""})
+_LOOPBACK_PREFIX = "127."
+
+
+def pytest_configure(config):
+    """Register the socket-guard opt-out marker (addopts pins --strict-markers)."""
+    config.addinivalue_line(
+        "markers",
+        f"{ALLOW_NETWORK_MARKER}: opt out of the autouse outbound-socket block (justify with a TODO)",
+    )
+
+
+def _is_local_destination(sock, address):
+    """Return True when a connect() stays on this machine (unix socket or loopback host)."""
+    if getattr(socket, "AF_UNIX", None) is not None and sock.family == socket.AF_UNIX:
+        return True
+    host = address[0] if isinstance(address, tuple) and address else address
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if not isinstance(host, str):
+        return False
+    host = host.strip("[]").lower()
+    return host in _LOOPBACK_HOSTS or host.startswith(_LOOPBACK_PREFIX)
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_sockets(request):
+    """Fail any un-mocked outbound socket connect, naming the test (spec 0002 A0)."""
+    if request.node.get_closest_marker(ALLOW_NETWORK_MARKER) is not None:
+        yield
+        return
+    own_attribute = socket.socket.__dict__.get("connect")
+    real_connect = socket.socket.connect
+    node_id = request.node.nodeid
+
+    def _guarded_connect(self, address):
+        if _is_local_destination(self, address):
+            return real_connect(self, address)
+        raise RuntimeError(
+            f"Outbound socket blocked in the offline suite: {node_id} tried to connect to "
+            f"{address!r}. Mock the network client (a dead monkeypatch target no longer "
+            f"intercepts this call), or opt out with @pytest.mark.{ALLOW_NETWORK_MARKER}."
+        )
+
+    socket.socket.connect = _guarded_connect
+    try:
+        yield
+    finally:
+        if own_attribute is None:
+            del socket.socket.connect
+        else:
+            socket.socket.connect = own_attribute
 
 _SWITCH_DECISION = {"target_language": "mr", "target_confidence": 0.95, "reasoning": "clear Marathi"}
 
