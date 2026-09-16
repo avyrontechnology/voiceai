@@ -203,6 +203,8 @@ A5 curl smoke recorded here by their steps.
 
 A0: check=green; test-all=7/1869/1876 (net-new: 0)
 
+A1: check=green; test-all=7/1882/1889 (net-new: 0; reconciliation: `test_registry_lists_exactly_the_health_module` rewritten as `test_registry_lists_exactly_the_registered_modules` to admit `agents.MODULE` in `ALL_MODULES` — test count unchanged, +13 new agents-module tests)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —

@@ -6,13 +6,12 @@ import dataclasses
 
 import pytest
 
-from voiceai.modules import ALL_MODULES, ModuleDef
-from voiceai.modules.health import MODULE
+from voiceai.modules import ALL_MODULES, ModuleDef, agents, health
 
 
-def test_registry_lists_exactly_the_health_module() -> None:
-    """Core mounts what this tuple says: today that is the health module, alone and in order."""
-    assert ALL_MODULES == (MODULE,)
+def test_registry_lists_exactly_the_registered_modules() -> None:
+    """Core mounts what this tuple says: health then agents (spec 0002 A1), in landing order."""
+    assert ALL_MODULES == (health.MODULE, agents.MODULE)
     assert all(isinstance(module, ModuleDef) for module in ALL_MODULES)
 
 
