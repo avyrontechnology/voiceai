@@ -66,6 +66,11 @@ def _build_llm_config(llm_agent_config):
     return tm.llm_config
 
 
+# A7: GraphAgent's class home is the brains/graph package __init__, but its LLM factory
+# (where the SUPPORTED_LLM_PROVIDERS lookup happens) lives in the generation collaborator.
+_LLM_FACTORY_MODULE = {"GraphAgent": "voiceai.modules.agents.brains.graph.generation"}
+
+
 def _captured_llm_kwargs(agent_cls, config):
     """Build the agent's LLM through its own factory and return the kwargs it passed."""
     captured = {}
@@ -74,10 +79,12 @@ def _captured_llm_kwargs(agent_cls, config):
         captured.update(kwargs)
         return MagicMock()
 
+    factory_module = _LLM_FACTORY_MODULE.get(agent_cls.__name__, agent_cls.__module__)
     with (
-        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
-        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
-        patch(f"{agent_cls.__module__}.SUPPORTED_LLM_PROVIDERS", {"openai": _capture}),
+        # A7: patch where the lookup happens — the graph brain's generation module.
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAI", return_value=MagicMock()),
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAiLLM", return_value=MagicMock()),
+        patch(f"{factory_module}.SUPPORTED_LLM_PROVIDERS", {"openai": _capture}),
     ):
         agent_cls(config)
     return captured

@@ -112,6 +112,90 @@ DEFAULT_AGENT_TYPE: Final[str] = "other"
 # --- Error messages (client-visible; the 404 text matches the legacy detail) ------------
 AGENT_NOT_FOUND_MESSAGE: Final[str] = "Agent not found"
 
+# --- Graph brain (A7): shared dict keys of the census-verified engine seam --------------
+# The graph agent reads its config, nodes and edges as free-form dicts; these keys are
+# shared by two or more files under `brains/graph/` (file-unique keys stay file-local
+# Finals in their one consumer, mirroring the A6 brains).
+GRAPH_NODE_ID_KEY: Final[str] = "id"
+GRAPH_NODES_KEY: Final[str] = "nodes"
+GRAPH_EDGES_KEY: Final[str] = "edges"
+GRAPH_TO_NODE_ID_KEY: Final[str] = "to_node_id"
+GRAPH_CONDITION_KEY: Final[str] = "condition"
+GRAPH_CONDITION_TYPE_KEY: Final[str] = "condition_type"
+GRAPH_FUNCTION_DESCRIPTION_KEY: Final[str] = "function_description"
+GRAPH_PROMPT_KEY: Final[str] = "prompt"
+GRAPH_MODEL_KEY: Final[str] = "model"
+GRAPH_PROVIDER_KEY: Final[str] = "provider"
+GRAPH_LLM_PROVIDER_KEY: Final[str] = "llm_provider"
+GRAPH_CUSTOM_PROVIDER: Final[str] = "custom"
+GRAPH_PROVIDER_OPENAI: Final[str] = "openai"
+GRAPH_PROVIDER_AZURE: Final[str] = "azure"
+GRAPH_PROVIDER_GROQ: Final[str] = "groq"
+GRAPH_API_VERSION_KEY: Final[str] = "api_version"
+GRAPH_OVERFLOW_LLM_KEY: Final[str] = "overflow_llm"
+GRAPH_SERVICE_TIER_KEY: Final[str] = "service_tier"
+
+# --- Graph brain (A7): shared context_data keys -----------------------------------------
+GRAPH_RECIPIENT_DATA_KEY: Final[str] = "recipient_data"
+GRAPH_DETECTED_LANGUAGE_KEY: Final[str] = "detected_language"
+GRAPH_TIMEZONE_KEY: Final[str] = "timezone"
+GRAPH_LAST_EVENT_KEY: Final[str] = "_last_event"
+#: A silence-triggered turn arrives as a user message with this prefix.
+GRAPH_SILENCE_MESSAGE_PREFIX: Final[str] = "[silence]"
+
+# --- Graph brain (A7): chat-message keys beyond the shared judgment set -----------------
+ASSISTANT_ROLE: Final[str] = "assistant"
+TOOL_ROLE: Final[str] = "tool"
+TOOL_CALLS_KEY: Final[str] = "tool_calls"
+TOOL_CALL_ID_KEY: Final[str] = "tool_call_id"
+
+# --- Graph brain (A7): routing_info wire keys (engine-consumed telemetry, verbatim) -----
+ROUTING_PREVIOUS_NODE_KEY: Final[str] = "previous_node"
+ROUTING_CURRENT_NODE_KEY: Final[str] = "current_node"
+ROUTING_TRANSITIONED_KEY: Final[str] = "transitioned"
+ROUTING_TYPE_KEY: Final[str] = "routing_type"
+ROUTING_MODEL_KEY: Final[str] = "routing_model"
+ROUTING_PROVIDER_KEY: Final[str] = "routing_provider"
+ROUTING_LATENCY_MS_KEY: Final[str] = "routing_latency_ms"
+ROUTING_EXTRACTED_PARAMS_KEY: Final[str] = "extracted_params"
+ROUTING_NODE_HISTORY_KEY: Final[str] = "node_history"
+ROUTING_MESSAGES_KEY: Final[str] = "routing_messages"
+ROUTING_TOOLS_KEY: Final[str] = "routing_tools"
+ROUTING_REASONING_KEY: Final[str] = "reasoning"
+ROUTING_EXPRESSION_KEY: Final[str] = "routing_expression"
+ROUTING_CONFIDENCE_KEY: Final[str] = "confidence"
+ROUTING_USAGE_KEY: Final[str] = "routing_usage"
+ROUTING_NODE_TYPE_KEY: Final[str] = "node_type"
+ROUTING_IS_SILENCE_TRIGGER_KEY: Final[str] = "is_silence_trigger"
+
+# --- Graph brain (A7): OpenAI function-tool schema keys (shared traversal/prompts) ------
+TOOL_TYPE_KEY: Final[str] = "type"
+TOOL_FUNCTION_TYPE: Final[str] = "function"
+TOOL_FUNCTION_KEY: Final[str] = "function"
+TOOL_NAME_KEY: Final[str] = "name"
+TOOL_DESCRIPTION_KEY: Final[str] = "description"
+TOOL_PARAMETERS_KEY: Final[str] = "parameters"
+TOOL_PROPERTIES_KEY: Final[str] = "properties"
+TOOL_REQUIRED_KEY: Final[str] = "required"
+TOOL_OBJECT_TYPE: Final[str] = "object"
+TOOL_STRING_TYPE: Final[str] = "string"
+TOOL_NUMBER_TYPE: Final[str] = "number"
+
+#: The engine's per-turn correlation id inside meta_info.
+SEQUENCE_ID_KEY: Final[str] = "sequence_id"
+
+# --- Graph brain (A7): routing tool + model-name plumbing -------------------------------
+#: The escape-hatch transition the routing LLM may call when no edge matches.
+GRAPH_STAY_ON_CURRENT_NODE_FUNCTION: Final[str] = "stay_on_current_node"
+#: `"azure/gpt-4o".split("/", 1)[-1]` — provider-prefixed model names carry this separator.
+GRAPH_MODEL_NAME_SEPARATOR: Final[str] = "/"
+
+# --- Graph brain (A7): routing_type values ----------------------------------------------
+ROUTING_TYPE_DETERMINISTIC: Final[str] = "deterministic"
+ROUTING_TYPE_LLM: Final[str] = "llm"
+ROUTING_TYPE_HOLD: Final[str] = "hold"
+ROUTING_TYPE_EVENT: Final[str] = "event"
+
 # --- Reasoning-effort support map (models split, A2) ------------------------------------
 # TODO(spec-0002): mirrors the legacy `voiceai.constants.MODEL_REASONING_EFFORT_MAP`
 # verbatim (a test pins the equality) because the layer contract bans `voiceai.constants`

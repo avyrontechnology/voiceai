@@ -142,9 +142,10 @@ def _make_agent(config_overrides=None):
     mock_openai_llm_cls = MagicMock(return_value=mock_llm)
 
     with (
-        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=mock_openai_client),
-        patch("voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
-        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        # A7: patch where the lookup happens — the graph brain's generation module.
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAI", return_value=mock_openai_client),
+        patch("voiceai.modules.agents.brains.graph.generation.SUPPORTED_LLM_PROVIDERS", {"openai": mock_openai_llm_cls}),
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
 

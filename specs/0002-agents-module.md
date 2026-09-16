@@ -233,6 +233,8 @@ A5: check=green; test-all=7/1988/1995 (net-new: 0; no test added, rewritten or r
 
 A6: check=green; test-all=7/2044/2051 (net-new: 0; no test rewritten or removed — two gated commits per the step definition: first `test(agents)` with +49 characterization tests for the six zero-test brains (gated at 7/2037/2044), importing through the LEGACY paths and patching via `__module__` so the SAME suite proves parity after the move; then `refactor(agents)` with the six files moved to `voiceai/modules/agents/brains/{base,simple,extraction,summarization,webhook,knowledgebase}.py`, legacy imports bridged through the new §3.1 adapter `adapters/brains.py`, every `voiceai/agent_types/` path except the two A7 graph files now a `# legacy-shim(spec-0002)` re-export (per-file shims carry explicit `__all__` for mypy's no_implicit_reexport; the package `__init__` keeps its exact legacy import lines so the task_manager.py:62 star surface is byte-identical — a pin asserts the recorded 15-name pre-move snapshot still resolves), knowledgebase `RAG_SERVER_URL` now a constructor param with the env fallback (tm env write untouched), +7 move-pin tests (5 shim/surface pins, 2 constructor-param). New quirk pinned: without `used_sources` even a successful retrieval degrades to the opaque internal error. `tests/test_llm_verbosity_passthrough.py` stays green through its `__module__`-resolved patch seam. make sec clean; make cov 98.97%)
 
+A7: check=green; test-all=7/2148/2155 (net-new: 0; reconciliation: A6's two shim pins in tests/arch/modules/agents/brains/test_shims.py — `test_brains_package_exports_exactly_the_six` and `test_shim_files_carry_the_tag_and_graph_files_do_not` — rewritten in place as `test_brains_package_exports_exactly_the_eight` and `test_every_shim_file_carries_the_tag` with MOVES gaining the two graph entries, test count unchanged; +104 new A7 tests: 6 split-mechanics pins (the 1500/800 line-cap assertions over voiceai/modules, the recorded 43-method facade surface, the generation patch-seam existence, shim identity, offline composition) and 98 collaborator parity suites mirroring brains/graph/{routing,traversal,generation,prompts,rag} plus brains/legacy_graph so make cov measures the split package. SAME COMMIT rewired all 20 `voiceai.agent_types.graph_agent.*` patch sites across the 7 patching files to `voiceai.modules.agents.brains.graph.generation` — where the OpenAI/OpenAiLLM/SUPPORTED_LLM_PROVIDERS lookups now happen — including test_llm_verbosity_passthrough's `__module__`-derived target, now an explicit factory-module map (GraphAgent's class home is the package `__init__`, its LLM factory is `generation`). Gate ran the 13 graph pinning files individually, all green under the A0 socket guard (no patch went dead, no `allow_network` markers): test_graph_agent_language_directive 8, test_router_nodes 36, test_expression_routing 39, test_routing_reasoning_effort_default 24, test_tool_scope 18, test_event_injection_e2e 38, test_say_node_and_silence_policy 24, test_llm_verbosity_passthrough 9, test_language_switch_explicit 16, test_substance_gate_foreign_max 8, test_handoff_and_extraction_variables 10, test_platform_graphs 7, test_clinic_appointment_agent 3. make sec clean; make cov 98.46%)
+
 ## Risks
 
 Shared risk register lives in spec 0004 §Risks; applicable here: R3 (dead-namespace patches —
@@ -253,9 +255,9 @@ Shim burn-down:
   helpers (`is_agent_key` / `parse_agent_record` / `collect_agent_records`), which now
   live in `voiceai.modules.agents.static_methods`.
 - `voiceai/agent_types/__init__.py` (A6) — package-surface shim keeping the exact legacy
-  star-import surface (task_manager.py:62) resolving: the six easy brains through their
-  per-file shims, `graph_agent` / `graph_based_conversational_agent` still from their
-  legacy files until A7 retargets them.
+  star-import surface (task_manager.py:62) resolving: since A7 every submodule, the graph
+  files included, re-exports from `voiceai.modules.agents.brains` (the import lines are
+  byte-identical; only the docstring changed).
 - `voiceai/agent_types/base_agent.py` (A6) — re-export of `voiceai.modules.agents.brains.base`.
 - `voiceai/agent_types/contextual_conversational_agent.py` (A6) — re-export of
   `voiceai.modules.agents.brains.simple` (plus the legacy auxiliary names, verbatim).
@@ -268,3 +270,10 @@ Shim burn-down:
 - `voiceai/agent_types/knowledgebase_agent.py` (A6) — re-export of
   `voiceai.modules.agents.brains.knowledgebase` (plus the legacy `voiceai.models` star
   the old module's namespace exposed).
+- `voiceai/agent_types/graph_agent.py` (A7) — re-export of the split
+  `voiceai.modules.agents.brains.graph` package (`GraphAgent` +
+  `_DETERMINISTIC_REASONING_PREFIX`, the legacy module globals from their collaborator
+  homes, and the auxiliary imports verbatim, incl. the `voiceai.models` star).
+- `voiceai/agent_types/graph_based_conversational_agent.py` (A7) — re-export of
+  `voiceai.modules.agents.brains.legacy_graph` (`Node`/`Graph`/
+  `GraphBasedConversationAgent` — exported, never constructed).

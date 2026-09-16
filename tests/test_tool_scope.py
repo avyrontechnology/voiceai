@@ -39,11 +39,13 @@ def _make_graph_agent(nodes, current_node_id="n1"):
         "nodes": nodes,
     }
     with (
-        patch("voiceai.agent_types.graph_agent.OpenAI", return_value=MagicMock()),
+        # A7: patch where the lookup happens — the graph brain's generation module.
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAI", return_value=MagicMock()),
         patch(
-            "voiceai.agent_types.graph_agent.SUPPORTED_LLM_PROVIDERS", {"openai": MagicMock(return_value=MagicMock())}
+            "voiceai.modules.agents.brains.graph.generation.SUPPORTED_LLM_PROVIDERS",
+            {"openai": MagicMock(return_value=MagicMock())},
         ),
-        patch("voiceai.agent_types.graph_agent.OpenAiLLM", return_value=MagicMock()),
+        patch("voiceai.modules.agents.brains.graph.generation.OpenAiLLM", return_value=MagicMock()),
     ):
         agent = GraphAgent(cfg)
     return agent
