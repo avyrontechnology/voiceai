@@ -41,6 +41,30 @@ logger = configure_logger(__name__)
 _KEY_PREFIX = "platform:v1"
 
 
+def normalize_phone_digits(raw: str) -> str:
+    """Normalize a phone number to engine-lookup digits (no '+', spaces, dashes).
+
+    Mirrors Talko's ``normalize_phone_number(..., with_plus=False)`` so both
+    sides agree: ``+9179…``, ``9179…``, ``91 79-…`` and 10-digit variants all
+    map to the same ``91XXXXXXXXXX`` key. Non-Indian/short inputs fall back
+    to digits-only.
+    """
+    import re
+
+    if not raw:
+        return ""
+    digits = re.sub(r"\D", "", raw.strip())
+    if not digits:
+        return ""
+    if digits.startswith("91") and len(digits) == 12:
+        return digits
+    if len(digits) == 11 and digits.startswith("0"):
+        return "91" + digits[1:]
+    if len(digits) == 10:
+        return "91" + digits
+    return digits
+
+
 class MemoryStore:
     """In-process store. Not shared across workers; ideal for tests."""
 
@@ -255,6 +279,36 @@ class MemoryStore:
 
     async def list_numbers(self) -> List[PhoneNumber]:
         return [PhoneNumber(**raw) for raw in self._all("numbers")]
+
+    async def get_number_by_digits(self, number: str) -> Optional[PhoneNumber]:
+        """Lookup by dialed digits (Talko only knows the DID, not number_id).
+
+        Normalizes both the query and stored numbers so +/spaces/dashes and
+        10-vs-12-digit variants match. Returns None when unassigned is
+        handled by the caller (resolve endpoint 404s on missing assignment).
+        """
+        needle = normalize_phone_digits(number or "")
+        if not needle:
+            return None
+        for raw in self._all("numbers"):
+            try:
+                candidate = PhoneNumber(**raw)
+            except Exception:
+                continue
+            if normalize_phone_digits(candidate.number or "") == needle:
+                return candidate
+        # Last-10 fallback for legacy rows stored without country prefix.
+        if len(needle) >= 10:
+            last10 = needle[-10:]
+            for raw in self._all("numbers"):
+                try:
+                    candidate = PhoneNumber(**raw)
+                except Exception:
+                    continue
+                stored = normalize_phone_digits(candidate.number or "")
+                if stored and stored[-10:] == last10 and len(stored) >= 10:
+                    return candidate
+        return None
 
     async def delete_number(self, number_id: str) -> bool:
         return self._delete("numbers", number_id)
@@ -705,6 +759,23 @@ class RedisStore(MemoryStore):
     async def get_number(self, number_id: str) -> Optional[PhoneNumber]:
         raw = await self._read("numbers", number_id)
         return PhoneNumber(**raw) if raw else None
+
+    async def get_number_by_digits(self, number: str) -> Optional[PhoneNumber]:
+        """Redis-backed digits lookup (same normalization as MemoryStore)."""
+        needle = normalize_phone_digits(number or "")
+        if not needle:
+            return None
+        numbers = await self.list_numbers()
+        for candidate in numbers:
+            if normalize_phone_digits(candidate.number or "") == needle:
+                return candidate
+        if len(needle) >= 10:
+            last10 = needle[-10:]
+            for candidate in numbers:
+                stored = normalize_phone_digits(candidate.number or "")
+                if stored and stored[-10:] == last10 and len(stored) >= 10:
+                    return candidate
+        return None
 
     async def delete_number(self, number_id: str) -> bool:
         removed = await self._redis.delete(self._key("numbers", number_id))

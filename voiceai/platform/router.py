@@ -514,6 +514,25 @@ async def list_numbers(store: MemoryStore = Depends(get_store),
     return PhoneNumberListResponse(numbers=await store.list_numbers())
 
 
+@numbers_router.get("/resolve")
+async def resolve_number(
+    number: str = Query(..., min_length=1, description="Dialed DID in any format (+9179…, 9179…, spaces/dashes)"),
+    store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:read")),
+) -> JSONResponse:
+    """Resolve a DID to its assigned agent (Talko inbound lookup).
+
+    Talko stores only did_number -> partner_id and asks here per call
+    (Redis-cached 60s). Normalizes +/spaces/dashes and 10-vs-12-digit
+    variants the same way Talko does. 404 when unassigned — Talko then
+    rejects fail-closed.
+    """
+    record = await store.get_number_by_digits(number)
+    if record is None or not record.assigned_agent_id:
+        raise HTTPException(status_code=404, detail="Phone number {} not assigned".format(number))
+    return JSONResponse(content={"agent_id": record.assigned_agent_id})
+
+
 @numbers_router.post("/{number_id}/assign", response_model=PhoneNumber)
 async def assign_number(
     number_id: str, payload: AssignNumberRequest, store: MemoryStore = Depends(get_store),
