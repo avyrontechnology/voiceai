@@ -151,6 +151,15 @@ from voiceai.modules.voice.session import CallConfig
 # paths for those target voiceai.modules.voice.session.s2s_runner.<name>.
 from voiceai.modules.voice.session import s2s_runner as _voice_s2s_runner
 
+# spec-0004 B6: Region E (runtime prompt loading — load_prompt and its three private
+# bodies) lives VERBATIM in voiceai.modules.voice.session.prompts; TaskManager keeps
+# same-named thin delegators below and injects itself (the PromptSession facade) on
+# every call (§3.1 bridge 3). The PROMPTS module is now the lookup site for those
+# bodies' globals (get_prompt_responses, structure_system_prompt, the prompt
+# constants, ...): monkeypatch string paths for those target
+# voiceai.modules.voice.session.prompts.<name>.
+from voiceai.modules.voice.session import prompts as _voice_prompts
+
 # Handoff clips are static per (voice, text): cache across calls so an N-language agent
 # doesn't pay N TTS renders per call, concurrent with the welcome message. Process-wide.
 HANDOFF_CLIP_CACHE: dict = {}
@@ -1872,171 +1881,25 @@ class TaskManager(BaseManager):
     # Helper methods
     ########################
 
+    # spec-0004 B6: the runtime prompt-loading bodies (Region E) live VERBATIM in
+    # voiceai.modules.voice.session.prompts. Each same-named thin delegator below
+    # keeps this class the resolution site for the assistant_manager fan-out,
+    # patch.object, __new__ harnesses and internal self-dispatch (the mangled
+    # _TaskManager__* spellings keep resolving), and injects the session (self, the
+    # PromptSession facade) into the prompts module (§3.1 bridge 3). A delegator is
+    # deleted only in the commit that ports its pinning tests (spec 0004 iron rule).
+
     def __get_final_prompt(self, prompt, today, current_time, current_timezone):
-        enriched_prompt = prompt
-        if self.context_data is not None:
-            enrich_context_with_time_variables(self.context_data, current_timezone)
-            enriched_prompt = update_prompt_with_context(enriched_prompt, self.context_data)
-        notes = "### Note:\n"
-        if self._is_conversation_task() and self.use_fillers:
-            notes += f"1.{FILLER_PROMPT}\n"
-        return f"{enriched_prompt}\n{notes}\n{DATE_PROMPT.format(today, current_time, current_timezone)}"
+        return _voice_prompts.get_final_prompt(self, prompt, today, current_time, current_timezone)
 
     async def load_prompt(self, assistant_name, task_id, local, **kwargs):
-        if self.task_config["task_type"] == "webhook":
-            return
-
-        agent_type = (self.task_config["tools_config"].get("llm_agent") or {}).get("agent_type", "simple_llm_agent")
-        self.is_local = local
-        if task_id == 0:
-            if (
-                self.context_data
-                and "recipient_data" in self.context_data
-                and self.context_data["recipient_data"]
-                and self.context_data["recipient_data"].get("timezone", None)
-            ):
-                self.timezone = pytz.timezone(self.context_data["recipient_data"]["timezone"])
-        current_date, current_time = get_date_time_from_timezone(self.timezone)
-
-        prompt_responses = kwargs.get("prompt_responses", None)
-        if not prompt_responses:
-            prompt_responses = await get_prompt_responses(assistant_id=self.assistant_id, local=self.is_local)
-        if not isinstance(prompt_responses, dict):
-            # No stored prompts (missing file, fresh record): degrade to an empty
-            # system prompt rather than crashing the call on .get().
-            logger.error(
-                f"No usable prompt responses for {self.assistant_id} "
-                f"(got {type(prompt_responses).__name__}); continuing with an empty system prompt."
-            )
-            prompt_responses = {}
-
-        current_task = "task_{}".format(task_id + 1)
-        if self.__is_multiagent():
-            logger.info(
-                f"Getting {current_task} from prompt responses of type {type(prompt_responses)}, prompt responses key {prompt_responses.keys()}"
-            )
-            prompts = prompt_responses.get(current_task, None)
-            self.prompt_map = {}
-            for agent in self.task_config["tools_config"]["llm_agent"]["llm_config"]["agent_map"]:
-                prompt = prompts[agent]["system_prompt"]
-                prompt = self.__prefill_prompts(self.task_config, prompt, self.task_config["task_type"])
-                prompt = self.__get_final_prompt(prompt, current_date, current_time, self.timezone)
-                if agent == self.task_config["tools_config"]["llm_agent"]["llm_config"]["default_agent"]:
-                    self.system_prompt = {"role": "system", "content": prompt}
-                self.prompt_map[agent] = prompt
-            logger.info(f"Initialised prompt dict {self.prompt_map}, Set default prompt {self.system_prompt}")
-        else:
-            # Missing task prompts (e.g. no conversation_details.json) must
-            # degrade to an empty system prompt, not crash the call with
-            # `argument of type 'NoneType' is not iterable` (observed live:
-            # inbound AI call dropped right after WS accept).
-            self.prompts = self.__prefill_prompts(
-                self.task_config, prompt_responses.get(current_task, None) or {}, self.task_config["task_type"]
-            )
-
-        if "system_prompt" in self.prompts:
-            # This isn't a graph based agent
-            enriched_prompt = self.prompts["system_prompt"]
-            if self.context_data and self.context_data.get("recipient_data", {}).get("call_sid"):
-                self.call_sid = self.context_data["recipient_data"]["call_sid"]
-
-            enriched_prompt = structure_system_prompt(
-                self.prompts["system_prompt"],
-                self.run_id,
-                self.assistant_id,
-                self.call_sid,
-                self.context_data,
-                self.timezone,
-                self.is_web_based_call,
-            )
-
-            notes = ""
-            if self._is_conversation_task() and self.use_fillers:
-                notes = "### Note:\n"
-                notes += f"1.{FILLER_PROMPT}\n"
-
-            final_prompt = f"\n## Agent Prompt:\n\n{enriched_prompt}\n{notes}\n\n## Transcript:\n"
-            self.prompts["system_prompt"] = final_prompt
-
-            self.system_prompt = {"role": "system", "content": final_prompt}
-        else:
-            self.system_prompt = {"role": "system", "content": ""}
-
-        self.conversation_history.setup_system_prompt(self.system_prompt)
-
-        self.multilingual_prompts = {}
-        raw_multilingual = prompt_responses.get(current_task, {}).get("multilingual_prompts", {})
-        if raw_multilingual and not self.__is_multiagent():
-            for lang_code, lang_prompt in raw_multilingual.items():
-                enriched = structure_system_prompt(
-                    lang_prompt,
-                    self.run_id,
-                    self.assistant_id,
-                    self.call_sid,
-                    self.context_data,
-                    self.timezone,
-                    self.is_web_based_call,
-                )
-                notes = ""
-                if self._is_conversation_task() and self.use_fillers:
-                    notes = "### Note:\n"
-                    notes += f"1.{FILLER_PROMPT}\n"
-                self.multilingual_prompts[lang_code] = f"\n## Agent Prompt:\n\n{enriched}\n{notes}\n\n## Transcript:\n"
-            logger.info(f"Loaded multilingual prompts for languages: {list(self.multilingual_prompts.keys())}")
-
-        # Pin the STARTING language for LID-switch calls. Drift is not switch-only: QA showed
-        # the main LLM opening partly in Hindi before any switch ever happened (7c7d4b00) and
-        # closing in English after a clean all-Telugu run (a39f691c) — a switch-time-only note
-        # cannot cover either. Multilingual path only; single-language agents are untouched.
-        if self.language_switcher is not None and self.system_prompt.get("content"):
-            self.__apply_language_directive(self.language)
-
-        # If using knowledge_agent, inject the prompt into agent config so agent can read it
-        try:
-            if self.__is_knowledgebase_agent() and "llm_agent" in self.task_config["tools_config"]:
-                if "llm_config" in self.task_config["tools_config"]["llm_agent"]:
-                    self.task_config["tools_config"]["llm_agent"]["llm_config"]["prompt"] = self.system_prompt[
-                        "content"
-                    ]
-        except Exception as e:
-            logger.error(f"Failed to inject prompt into knowledge agent config: {e}")
+        return await _voice_prompts.load_prompt(self, assistant_name, task_id, local, **kwargs)
 
     def __prefill_prompts(self, task, prompt, task_type):
-        if (
-            self.context_data
-            and "recipient_data" in self.context_data
-            and self.context_data["recipient_data"]
-            and self.context_data["recipient_data"].get("timezone", None)
-        ):
-            self.timezone = pytz.timezone(self.context_data["recipient_data"]["timezone"])
-        current_date, current_time = get_date_time_from_timezone(self.timezone)
-
-        if not prompt and task_type in ("extraction", "summarization"):
-            if task_type == "extraction":
-                extraction_json = (
-                    task.get("tools_config").get("llm_agent", {}).get("llm_config", {}).get("extraction_json")
-                )
-                # Schema goes in as a .format() argument, so variables inside it reached the model as literal braces.
-                if isinstance(extraction_json, str):
-                    extraction_json = update_prompt_with_context(extraction_json, self.context_data)
-                prompt = EXTRACTION_PROMPT.format(current_date, current_time, self.timezone, extraction_json)
-                return {"system_prompt": prompt}
-            elif task_type == "summarization":
-                return {"system_prompt": SUMMARIZATION_PROMPT}
-        return prompt
+        return _voice_prompts.prefill_prompts(self, task, prompt, task_type)
 
     def __process_stop_words(self, text_chunk, meta_info):
-        # THis is to remove stop words. Really helpful in smaller 7B models
-        if "end_of_llm_stream" in meta_info and meta_info["end_of_llm_stream"] and "user" in text_chunk[-5:].lower():
-            if text_chunk[-5:].lower() == "user:":
-                text_chunk = text_chunk[:-5]
-            elif text_chunk[-4:].lower() == "user":
-                text_chunk = text_chunk[:-4]
-
-        # index = text_chunk.find("AI")
-        # if index != -1:
-        #     text_chunk = text_chunk[index+2:]
-        return text_chunk
+        return _voice_prompts.process_stop_words(self, text_chunk, meta_info)
 
     def update_transcript_for_interruption(self, original_stream, heard_text):
         """Trim original response to match what was actually heard."""

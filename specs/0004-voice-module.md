@@ -472,6 +472,73 @@ green). make sec clean; make cov dipped to 84.52% mid-step (the moved engine
 code's tests live in the legacy tree) and closes at 85.55% (≥ 85%) with the arch
 pins; the cov gate formally returns at B13a.)
 
+B6: check=green; test-all=7/2396/2403 (net-new: 0; reconciliation: no existing test
+removed or rewritten — purely additive: +41 arch tests in 2 new files.
+tests/arch/modules/voice/session/test_prompts.py ×23 (the B5 test_s2s_runner
+precedent): TaskManager delegator pins for all four moved names (load_prompt + the
+three mangled privates, session-injection asserted), lookup-site + identity pins for
+the nine globals the prompts module now owns (R3), load_prompt behavior at the new
+home (webhook early-return, non-dict degrade, exact final-prompt assembly with and
+without fillers, call_sid/timezone stamping, the multiagent prompt_map incl. the
+preserved system-prompt-clobber quirk pinned on the concrete empty value,
+multilingual assembly, language-directive gating, knowledgebase injection), the
+prefill/get_final/stop-words contracts on concrete values, and the port seam —
+prompt_responses_from_store over AgentSessionStorePort + a byte-identical
+port-vs-legacy-fetch load parity with the legacy fetch poisoned.
+tests/arch/modules/voice/session/lifecycle/test_report.py ×18, the step's heart:
+run()-parity — the REAL TaskManager.run() teardown driven on fully-seeded __new__
+harnesses (a CancelledError from the harness's __is_s2s hook drops run() straight
+into its finally) deep-equals build_conversation_report(snapshot_teardown(twin))
+for the ASR+TTS leg and the s2s leg (conversation_time compared within tolerance),
+and build_followup_report for extraction/summarization/webhook — plus concrete-value
+pins on annotation/rebasing, the zero-start user_bot quirk, turn-id promotion and
+uncovered-turn stamping, the latency_dict master-strip vs enriched progression, the
+shared-reference quirks (rag/mark_tracking/chunk_marks by identity, messages deep
+copy), the double lid-event capture, the popped detection entry, recording_url None,
+and a no-stray-mutation sweep. The moves: Region E (original tm 2111-2276, currently
+1875-2039: __get_final_prompt, load_prompt, __prefill_prompts, __process_stop_words)
+→ session/prompts.py as module-level functions taking the session as `self` behind
+the PromptSession facade Protocol, proven AST-identical against HEAD during the step
+modulo the declared accommodations; tm keeps a same-named thin delegator per body
+(mangled _TaskManager__* spellings keep resolving; load_prompt signature unchanged)
+— tm 8,322 → 8,185 lines, exactly two hunks (import block + Region E swap), run()
+untouched by construction, tests/arch/test_taskmanager_pins.py + the goodbye-drain
+pin green. Region V (original tm 8763-9147, run()'s finally) is NOT moved: it is
+re-expressed in session/lifecycle/report.py as pure builders (wire/annotate/append/
+rebase/output/progression/promote/strip, verbatim interior expressions with self.X
+spelled snap.X) over the frozen TeardownSnapshot dataclass, with snapshot_teardown
+as the single capture seam mirroring Region V's read order (incl. calling the lid
+snapshot TWICE, its health flush being idempotent) — run() keeps its verbatim inline
+copy until B13b swaps it expression-for-expression. Deviations, made loud: the step
+text's "run()'s finally CALLS them" was resolved AGAINST inserting calls in B6 — the
+step title says run() NOT touched, no existing method seam inside the finally could
+host the call without editing run()'s body, and B13b is defined as the only step
+that edits it; equivalence is instead proven by the run()-parity suite. The spec's
+"over AgentDefinitionPort" is typed over AgentSessionStorePort — spec 0002 split
+definition CRUD (AgentDefinitionPort) from the prompt-payload store, and the payload
+port is the store one; the seam is prompt_responses_from_store (imported via the
+agents __all__, §3.1 bridge 4), which B13a feeds through load_prompt's EXISTING
+prompt_responses kwarg, retiring the legacy fetch branch. One NEW adapter file
+beyond B3's five, adapters/prompt_runtime.py (the B4 adapters/session.py / B5
+s2s_runtime precedent), binding the nine legacy values Region E reads; prompts.py
+re-exports them because it is the lookup site. Five compile-time name-mangling
+accommodations inside otherwise-verbatim prompt bodies (the B5 precedent):
+self.__{prefill_prompts,get_final_prompt,is_multiagent,apply_language_directive,
+is_knowledgebase_agent} spelled self._TaskManager__*. Mechanical accommodations:
+noqa F841 on the verbatim dead agent_type local, noqa UP032 on the verbatim
+"task_{}".format, noqa E501 on the verbatim long log line, `prompts: Any` on the
+multiagent local (mypy), the knowledgebase-injection statement unwrapped to one
+line (value-identical), moved signatures gained annotations + Google docstrings,
+otobaai loggers (content preserved — the full-prompt INFO line and the
+summarized-data INFO line are preserved PII quirks carrying TODOs). tm's
+now-unused legacy imports (get_prompt_responses, structure_system_prompt,
+get_date_time_from_timezone, enrich_context_with_time_variables, pytz) were LEFT
+in place: do-not-reformat, repo ruff does not flag F401, and they keep the old
+module attributes resolvable for any downstream reader. No new shims (tm keeps
+delegators; no legacy path emptied). File sizes: prompts.py 391, report.py 780,
+prompt_runtime.py 84 — all under the 800 target. make sec clean; make cov 86.50%
+(≥ 85%; the formal cov gate returns at B13a).)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
