@@ -7,9 +7,8 @@ never set, and the agent loops goodbyes until the caller drops.
 """
 
 import asyncio
-import inspect
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 from voiceai.agent_manager.task_manager import TaskManager
@@ -102,14 +101,55 @@ async def test_bargein_does_not_cancel_turn_during_tool_call():
 class TestSourceGuards:
     """Catch accidental removal of the wiring that closes the barge-in race."""
 
-    def test_end_call_branch_sets_in_progress_flag(self):
-        src = inspect.getsource(TaskManager._TaskManager__execute_function_call)
-        assert "_end_call_in_progress = True" in src, (
-            "end_call branch must set _end_call_in_progress before generating the goodbye"
-        )
+    async def test_end_call_branch_sets_in_progress_flag(self):
+        # Behavior guard (spec 0004, B11a): the getsource pin is retired — drive the
+        # REAL end_call branch at the coordinator seam and assert the CONCRETE flag.
+        from voiceai.modules.voice.session.turn import function_calls
 
-    def test_listen_transcriber_uses_the_guard(self):
-        src = inspect.getsource(TaskManager._listen_transcriber)
-        assert "_should_ignore_transcriber_input" in src, (
-            "_listen_transcriber must drop user speech while a hangup/end_call actuation is underway"
+        tm = MagicMock()
+        tm.check_if_user_online = True
+        tm.run_id = "run-1"
+        tm._end_call_in_progress = False
+        tm.conversation_history = MagicMock()
+        tm._enter_hangup_state = MagicMock()
+        tm.wait_for_current_message = AsyncMock()
+        tm.process_call_hangup = AsyncMock()
+        tm._TaskManager__execute_function_call = TaskManager._TaskManager__execute_function_call.__get__(
+            tm, TaskManager
         )
+        with patch.object(function_calls, "convert_to_request_log"):
+            await tm._TaskManager__execute_function_call(
+                None,
+                "POST",
+                "{}",
+                None,
+                None,
+                {},
+                {"turn_id": 1, "sequence_id": 2},
+                "llm",
+                "end_call_hangup",
+                reason="user asked",
+                textual_response="bye!",
+                model_response=[{"x": 1}],
+                tool_call_id="tc-1",
+            )
+        assert tm._end_call_in_progress is True
+
+    async def test_listen_transcriber_uses_the_guard(self):
+        # Behavior guard (spec 0004, B11d): the last _listen_transcriber getsource pin
+        # is retired — prove the moved listener consults the ignore gate by recording
+        # the seam call while a barge-in arrives mid end_call actuation.
+        from voiceai.modules.voice.session.turn import transcript_listener
+
+        tm = _make_tm(end_call_in_progress=True, hangup_triggered=False)
+        seen = []
+        real_guard = transcript_listener.should_ignore_transcriber_input
+
+        def _recording(session):
+            seen.append(True)
+            return real_guard(session)
+
+        with patch.object(transcript_listener, "should_ignore_transcriber_input", side_effect=_recording):
+            await _drive_with_bargein(tm)
+        assert seen, "_listen_transcriber must consult the ignore gate per transcript"
+        tm._TaskManager__cleanup_downstream_tasks.assert_not_called()

@@ -465,7 +465,7 @@ def test_config_is_sent_before_establish_connection_returns():
     async def fake_connect(*a, **kw):
         return ws
 
-    import voiceai.synthesizer.maya_synthesizer as mod
+    import voiceai.modules.voice.tts.providers.maya_synthesizer as mod  # B12b lookup site (R3)
 
     original = mod.websockets.connect
     mod.websockets.connect = fake_connect

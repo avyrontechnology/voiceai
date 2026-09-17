@@ -16,27 +16,28 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from voiceai.modules.voice.exceptions import ensure_label_known
+
 # §3.1 bridge imports — retire with step B12a (the io/** physical relocation).
 # Concrete module paths (not the package surfaces) because the legacy packages have no
 # `__all__` and mypy runs with `no_implicit_reexport` (the spec-0002 A4 precedent).
-from voiceai.input_handlers.default import DefaultInputHandler
-from voiceai.input_handlers.telephony_providers.exotel import ExotelInputHandler
-from voiceai.input_handlers.telephony_providers.freeswitch import FreeSwitchInputHandler
-from voiceai.input_handlers.telephony_providers.plivo import PlivoInputHandler
-from voiceai.input_handlers.telephony_providers.sip_trunk import SipTrunkInputHandler
-from voiceai.input_handlers.telephony_providers.talko import TalkoInputHandler
-from voiceai.input_handlers.telephony_providers.twilio import TwilioInputHandler
-from voiceai.input_handlers.telephony_providers.vobiz import VobizInputHandler
-from voiceai.modules.voice.exceptions import ensure_label_known
+from voiceai.modules.voice.io.input.default import DefaultInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.exotel import ExotelInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.freeswitch import FreeSwitchInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.plivo import PlivoInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.sip_trunk import SipTrunkInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.talko import TalkoInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.twilio import TwilioInputHandler
+from voiceai.modules.voice.io.input.telephony_providers.vobiz import VobizInputHandler
+from voiceai.modules.voice.io.output.default import DefaultOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.exotel import ExotelOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.freeswitch import FreeSwitchOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.plivo import PlivoOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.sip_trunk import SipTrunkOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.talko import TalkoOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.twilio import TwilioOutputHandler
+from voiceai.modules.voice.io.output.telephony_providers.vobiz import VobizOutputHandler
 from voiceai.modules.voice.ports import CallInputPort, CallOutputPort
-from voiceai.output_handlers.default import DefaultOutputHandler
-from voiceai.output_handlers.telephony_providers.exotel import ExotelOutputHandler
-from voiceai.output_handlers.telephony_providers.freeswitch import FreeSwitchOutputHandler
-from voiceai.output_handlers.telephony_providers.plivo import PlivoOutputHandler
-from voiceai.output_handlers.telephony_providers.sip_trunk import SipTrunkOutputHandler
-from voiceai.output_handlers.telephony_providers.talko import TalkoOutputHandler
-from voiceai.output_handlers.telephony_providers.twilio import TwilioOutputHandler
-from voiceai.output_handlers.telephony_providers.vobiz import VobizOutputHandler
 
 __all__ = [
     "DefaultInputHandler",

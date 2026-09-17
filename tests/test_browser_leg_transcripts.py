@@ -81,7 +81,7 @@ async def test_caller_transcript_forwarded_as_user_text():
     tm = make_browser_tm()
     meta_info = {"sequence_id": 3, "turn_id": 1}
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         await tm._handle_transcriber_output("llm", "appointment kal chahiye", dict(meta_info))
 
     tm.tools["output"].handle.assert_awaited_once()
@@ -95,7 +95,7 @@ async def test_caller_transcript_not_forwarded_on_telephony():
     tm = make_browser_tm(io_provider="plivo")
     meta_info = {"sequence_id": 3, "turn_id": 1}
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         await tm._handle_transcriber_output("llm", "appointment kal chahiye", dict(meta_info))
 
     tm.tools["output"].handle.assert_not_awaited()
@@ -109,7 +109,7 @@ async def test_cumulative_segments_share_one_history_row():
     tm.conversation_history = ConversationHistory()
     meta_info = {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"}
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         await tm._handle_transcriber_output("llm", "हां जी", dict(meta_info))
         await tm._handle_transcriber_output("llm", "हां जी मेरा नाम विक्रम", dict(meta_info))
 
@@ -124,7 +124,7 @@ async def test_new_asr_turn_appends_new_history_row():
     tm = make_browser_tm()
     tm.conversation_history = ConversationHistory()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         await tm._handle_transcriber_output(
             "llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"}
         )
@@ -154,7 +154,7 @@ async def test_overlapped_turn_forwards_only_new_words():
     )
     tm._TaskManager__cleanup_downstream_tasks = AsyncMock()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         await tm._handle_transcriber_output(
             "llm", "हां जी", {"sequence_id": 3, "turn_id": 1, "asr_turn_id": "turn_1"}
         )
@@ -177,7 +177,7 @@ async def test_typed_chat_turn_hides_stream_markers():
     tm._run_llm_task = AsyncMock()
     await tm.queues["llm"].put({"data": "Speak with Human", "meta_info": {}})
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.transcript_listener.convert_to_request_log"):
         task = asyncio.create_task(tm._listen_llm_input_queue())
         await asyncio.sleep(0.2)
         task.cancel()

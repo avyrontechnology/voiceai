@@ -1,62 +1,10 @@
-import asyncio
-import base64
-import json
-import os
-import audioop
-from dotenv import load_dotenv
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.output_handlers.telephony import TelephonyOutputHandler
+# legacy-shim(spec-0004): this handler lives in voiceai.modules.voice.io.output.telephony_providers.twilio (step B12a).
+"""Pure re-export of `voiceai.modules.voice.io.output.telephony_providers.twilio` (spec 0004, step B12a).
 
-logger = configure_logger(__name__)
-load_dotenv()
+The objects are IDENTICAL to the new home's (never copies), so isinstance dispatch,
+registry entries and every direct importer keep resolving. Deleted at cutover, never grown.
+"""
 
+from voiceai.modules.voice.io.output.telephony_providers.twilio import TwilioOutputHandler as TwilioOutputHandler
 
-class TwilioOutputHandler(TelephonyOutputHandler):
-    def __init__(self, websocket=None, mark_event_meta_data=None, log_dir_name=None):
-        io_provider = "twilio"
-
-        super().__init__(io_provider, websocket, mark_event_meta_data, log_dir_name)
-        self.is_chunking_supported = True
-
-    async def handle_interruption(self):
-        if self._closed:
-            logger.warning("twilio output handler is closed, skipping interruption clear")
-            return
-        try:
-            logger.info("interrupting because user spoke in between")
-            message_clear = {
-                "event": "clear",
-                "streamSid": self.stream_sid,
-            }
-            await self._send_text(json.dumps(message_clear))
-            self.mark_event_meta_data.clear_data()
-        except asyncio.TimeoutError as e:
-            # Transient stall — keep the handler open (see TelephonyOutputHandler.handle).
-            logger.warning(f"Interruption clear send timed out, keeping socket open: {e}")
-        except Exception as e:
-            logger.info(f"WebSocket closed during interruption: {e}")
-            self._closed = True
-        finally:
-            # Bookkeeping must run whether or not the socket send worked —
-            # stale marks plus a latched socket is a double fault.
-            try:
-                self.mark_event_meta_data.clear_data()
-            except Exception as e:
-                logger.warning(f"Mark clear_data failed during interruption: {e}")
-
-    async def form_media_message(self, audio_data, audio_format="wav"):
-        if audio_format != "mulaw":
-            logger.info(f"Converting to mulaw")
-            audio_data = audioop.lin2ulaw(audio_data, 2)
-        base64_audio = base64.b64encode(audio_data).decode("utf-8")
-        message = {"event": "media", "streamSid": self.stream_sid, "media": {"payload": base64_audio}}
-
-        return message
-
-    async def form_mark_message(self, mark_id):
-        mark_message = {"event": "mark", "streamSid": self.stream_sid, "mark": {"name": mark_id}}
-
-        return mark_message
-
-    def requires_custom_voicemail_detection(self):
-        return False
+__all__ = ["TwilioOutputHandler"]

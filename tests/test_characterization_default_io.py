@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-import voiceai.output_handlers.telephony as telephony_module
+import voiceai.modules.voice.io.output.telephony as telephony_module  # B12a lookup site (R3)
 from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 from voiceai.helpers.observable_variable import ObservableVariable
 from voiceai.input_handlers.default import DefaultInputHandler

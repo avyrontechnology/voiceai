@@ -61,7 +61,7 @@ async def test_send_payload_decodes_base64_to_bytes():
     session.post = MagicMock(return_value=post_ctx)
     sess_ctx = AsyncMock()
     sess_ctx.__aenter__ = AsyncMock(return_value=session)
-    with patch("voiceai.synthesizer.sarvam_synthesizer.aiohttp.ClientSession", return_value=sess_ctx):
+    with patch("voiceai.modules.voice.tts.providers.sarvam_synthesizer.aiohttp.ClientSession", return_value=sess_ctx):
         out = await synth._send_payload({"text": "hi"})
     assert isinstance(out, bytes)
     assert out == wav

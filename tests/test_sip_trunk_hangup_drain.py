@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from voiceai.input_handlers.telephony_providers import sip_trunk as sip_trunk_input
+from voiceai.modules.voice.io.input.telephony_providers import sip_trunk as sip_trunk_input  # B12a lookup site (R3)
 from voiceai.input_handlers.telephony_providers.sip_trunk import SipTrunkInputHandler
 
 

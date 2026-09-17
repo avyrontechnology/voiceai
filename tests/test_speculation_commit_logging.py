@@ -120,7 +120,9 @@ async def test_function_call_abort_returns_no_capture():
 def test_commit_emits_rows_with_real_sequence_id_and_usage():
     tm = _commit_tm()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log") as log_mock:
+    with patch(
+        "voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"
+    ) as log_mock:
         _log_commit(tm)("telugu reply", _capture())
 
     assert log_mock.call_count == 2
@@ -149,7 +151,7 @@ async def test_commit_reports_on_turn_usage():
 
     tm.on_turn_usage = on_turn_usage
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"):
         _log_commit(tm)("telugu reply", _capture())
         for task in list(tm._usage_tasks):
             await task
@@ -171,7 +173,7 @@ async def test_overflowed_commit_reports_to_on_overflow_not_turn_usage():
     tm.on_turn_usage = on_turn_usage
     tm.on_overflow = on_overflow
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"):
         _log_commit(tm)("telugu reply", _capture(overflowed=True))
         for task in list(tm._usage_tasks):
             await task
@@ -187,7 +189,7 @@ def test_commit_latency_entry_gets_real_seq_and_origin():
     tm.on_turn_usage = None
     tm.llm_latencies.turn_latencies = []
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+    with patch("voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"):
         _log_commit(tm)("telugu reply", _capture(latency=latency))
 
     tm._stamp_llm_latency_dict.assert_called_once()
@@ -200,7 +202,9 @@ def test_commit_latency_entry_gets_real_seq_and_origin():
 def test_commit_without_capture_is_noop():
     tm = _commit_tm()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log") as log_mock:
+    with patch(
+        "voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"
+    ) as log_mock:
         _log_commit(tm)("anything", None)
 
     log_mock.assert_not_called()
@@ -209,7 +213,9 @@ def test_commit_without_capture_is_noop():
 def test_discard_logs_under_language_switch_component():
     tm = _commit_tm()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log") as log_mock:
+    with patch(
+        "voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"
+    ) as log_mock:
         _log_discard(tm)("unheard reply", _capture())
 
     assert log_mock.call_count == 2
@@ -224,7 +230,9 @@ def test_discard_logs_under_language_switch_component():
 def test_discard_without_capture_is_noop():
     tm = _commit_tm()
 
-    with patch("voiceai.agent_manager.task_manager.convert_to_request_log") as log_mock:
+    with patch(
+        "voiceai.modules.voice.session.turn.history_sync.convert_to_request_log"
+    ) as log_mock:
         _log_discard(tm)("", None)
 
     log_mock.assert_not_called()

@@ -1,15 +1,10 @@
-from .base_transcriber import BaseTranscriber
-from .deepgram_transcriber import DeepgramTranscriber
-from .azure_transcriber import AzureTranscriber
-from .sarvam_transcriber import SarvamTranscriber
-from .assemblyai_transcriber import AssemblyAITranscriber
-from .google_transcriber import GoogleTranscriber
-from .pixa_transcriber import PixaTranscriber
-from .gladia_transcriber import GladiaTranscriber
-from .elevenlabs_transcriber import ElevenLabsTranscriber
-from .smallest_transcriber import SmallestTranscriber
-from .openai_transcriber import OpenAITranscriber
-from .soniox_transcriber import SonioxTranscriber
-from .gemini_transcriber import GeminiTranscriber
-from .transcriber_pool import TranscriberPool
-from voiceai.lid import LIDProvider, SarvamLID, SonioxLID
+# legacy-shim(spec-0004): this transcriber lives in voiceai.modules.voice.asr.providers (step B12c).
+"""Pure re-export of `voiceai.modules.voice.asr.providers` (spec 0004, step B12c).
+
+The objects are IDENTICAL to the new home's (never copies), so isinstance dispatch,
+registry entries and every direct importer keep resolving. Deleted at cutover, never grown.
+"""
+
+from voiceai.modules.voice.asr.providers import BaseTranscriber as BaseTranscriber, DeepgramTranscriber as DeepgramTranscriber, AzureTranscriber as AzureTranscriber, SarvamTranscriber as SarvamTranscriber, AssemblyAITranscriber as AssemblyAITranscriber, GoogleTranscriber as GoogleTranscriber, PixaTranscriber as PixaTranscriber, GladiaTranscriber as GladiaTranscriber, ElevenLabsTranscriber as ElevenLabsTranscriber, SmallestTranscriber as SmallestTranscriber, OpenAITranscriber as OpenAITranscriber, SonioxTranscriber as SonioxTranscriber, GeminiTranscriber as GeminiTranscriber, TranscriberPool as TranscriberPool, LIDProvider as LIDProvider, SarvamLID as SarvamLID, SonioxLID as SonioxLID
+
+__all__ = ["BaseTranscriber", "DeepgramTranscriber", "AzureTranscriber", "SarvamTranscriber", "AssemblyAITranscriber", "GoogleTranscriber", "PixaTranscriber", "GladiaTranscriber", "ElevenLabsTranscriber", "SmallestTranscriber", "OpenAITranscriber", "SonioxTranscriber", "GeminiTranscriber", "TranscriberPool", "LIDProvider", "SarvamLID", "SonioxLID"]

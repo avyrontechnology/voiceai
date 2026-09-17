@@ -4,6 +4,11 @@ Covers: the decide ceiling clears the observed tail, the audio gap is tools_conf
 explicit-request confidence bar never sits above the general gate (a stricter explicit bar would
 reject the caller-asked-by-name case while admitting the incidental one), and the playback gate's
 deadline stays below the decide ceiling.
+
+Ported at spec 0004 B9b: the three tunable readers are driven through the
+`LanguageSwitchCoordinator` seam over the moved bodies
+(``voiceai.modules.voice.session.language.switcher``) instead of the TaskManager mangled
+delegators; every assertion stays on the same concrete values.
 """
 
 import os
@@ -11,55 +16,52 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.constants import (
     LANGUAGE_SWITCH_AUDIO_GAP_S,
     LANGUAGE_SWITCH_DECIDE_TIMEOUT_S,
     LANGUAGE_SWITCH_MAX_HOLD_S,
     LANGUAGE_SWITCH_SETTLE_MS,
 )
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
 
 
-def _tm(tools_config=None):
+def _co(tools_config=None):
     tm = MagicMock()
     tm.task_config = {"tools_config": tools_config or {}}
-    for name in ("switch_decide_timeout_s", "switch_settle_ms", "switch_audio_gap_s"):
-        attr = f"_TaskManager__{name}"
-        setattr(tm, attr, getattr(TaskManager, attr).__get__(tm, TaskManager))
-    return tm
+    return LanguageSwitchCoordinator(tm)
 
 
 def test_decide_timeout_default_clears_observed_tail():
     # The buffer is drained before the decide, so a timeout loses that utterance outright.
     # The default has to sit above the judge's slow tail.
     assert LANGUAGE_SWITCH_DECIDE_TIMEOUT_S >= 6.0
-    assert _tm()._TaskManager__switch_decide_timeout_s() == LANGUAGE_SWITCH_DECIDE_TIMEOUT_S
+    assert _co().switch_decide_timeout_s() == LANGUAGE_SWITCH_DECIDE_TIMEOUT_S
 
 
 def test_decide_timeout_is_env_overridable(monkeypatch):
     monkeypatch.setenv("LANGUAGE_SWITCH_DECIDE_TIMEOUT_S", "9.5")
-    assert _tm()._TaskManager__switch_decide_timeout_s() == 9.5
+    assert _co().switch_decide_timeout_s() == 9.5
 
 
 def test_settle_is_env_overridable(monkeypatch):
-    assert _tm()._TaskManager__switch_settle_ms() == LANGUAGE_SWITCH_SETTLE_MS
+    assert _co().switch_settle_ms() == LANGUAGE_SWITCH_SETTLE_MS
     monkeypatch.setenv("LANGUAGE_SWITCH_SETTLE_MS", "150")
-    assert _tm()._TaskManager__switch_settle_ms() == 150
+    assert _co().switch_settle_ms() == 150
 
 
 def test_audio_gap_prefers_tools_config_then_env(monkeypatch):
     # Per-agent first (the right gap depends on the carrier's clear semantics), env fallback —
     # same precedence as language_switch_lid_provider.
     monkeypatch.setenv("LANGUAGE_SWITCH_AUDIO_GAP_S", "0.4")
-    assert _tm({"language_switch_audio_gap_s": 0.9})._TaskManager__switch_audio_gap_s() == 0.9
-    assert _tm()._TaskManager__switch_audio_gap_s() == 0.4
+    assert _co({"language_switch_audio_gap_s": 0.9}).switch_audio_gap_s() == 0.9
+    assert _co().switch_audio_gap_s() == 0.4
     monkeypatch.delenv("LANGUAGE_SWITCH_AUDIO_GAP_S")
-    assert _tm()._TaskManager__switch_audio_gap_s() == LANGUAGE_SWITCH_AUDIO_GAP_S
+    assert _co().switch_audio_gap_s() == LANGUAGE_SWITCH_AUDIO_GAP_S
 
 
 def test_audio_gap_zero_disables_the_sleep():
     # The call site guards on > 0, so 0 is the documented off switch.
-    assert _tm({"language_switch_audio_gap_s": 0})._TaskManager__switch_audio_gap_s() == 0
+    assert _co({"language_switch_audio_gap_s": 0}).switch_audio_gap_s() == 0
 
 
 @pytest.mark.parametrize("min_conf", ["0.7", "0.5", "0.85"])

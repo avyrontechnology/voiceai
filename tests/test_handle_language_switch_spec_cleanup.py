@@ -4,13 +4,17 @@ __run_language_switch stores the task on the shared slot self._spec_followup_tas
 outside language_switch_lock, so a second per-turn decision can overwrite that slot mid-flight.
 Each handler therefore claims its task into a local the instant its decision unwinds and cancels
 that local in finally, including on the exception path.
+
+Ported at spec 0004 B9b: the wrapper is driven through the `LanguageSwitchCoordinator` seam over
+the moved body (``voiceai.modules.voice.session.language.switcher.handle_language_switch``); the
+fake decision core / follow-up generator are installed on the session double under the mangled
+spellings the moved body dispatches through, and the assertions are unchanged.
 """
 
 import asyncio
 from unittest.mock import MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
 
 
 def _make_tm():
@@ -22,7 +26,7 @@ def _make_tm():
 
 
 def _handle(tm):
-    return TaskManager.handle_language_switch.__get__(tm, TaskManager)
+    return LanguageSwitchCoordinator(tm).handle_language_switch
 
 
 async def _never():

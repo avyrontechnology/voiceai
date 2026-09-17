@@ -816,6 +816,441 @@ sec clean; make cov dipped to 82.12% mid-step (the moved decision core's tests l
 in the legacy tree) and closes at 86.31% (≥ 85%) with the arch behavior mirror; the
 formal cov gate returns at B13a.)
 
+B9b: check=green; test-all=7/2578/2585 (net-new: 0; reconciliation: no test added,
+removed or renamed — the remaining language-pinning test files rewritten in place
+1↔1, each re-landing under its unchanged path and test names: 135 collected nodes
+across 14 files, run individually before and after the port, all green. Census
+(re-grepped per the step; B9a's line said "~16 remaining"): 16 files touched
+language mangled names after B9a's 3-file fixture funnel; 14 ported here, 2 left
+untouched BY OWNERSHIP — tests/test_speculation_commit_logging.py (step B10 owns
+the tm-resident speculation trio and its patch repoints) and
+tests/test_characterization_output_loop_invariants.py (a B1 output-loop net owned
+by B11c; its language touches are session-double mocks, never TaskManager
+rebinds). The 14 ports, all to the coordinator seam (LanguageSwitchCoordinator /
+the moved module functions, with the session double's mangled `_TaskManager__*`
+dispatch bound from the SAME moved bodies — the B9a fixture pattern — so no
+TaskManager delegator is pinned): test_substance_gate_foreign_max ×8,
+test_language_switch_explicit ×16 (decision-core half; the LanguageSwitcher half
+was already engine-free), test_language_switch_race ×13,
+test_language_switch_drift ×20, test_language_switch_tunables ×11 (8 defs + 3
+parametrized), test_handoff_prewarm ×21 (HANDOFF_CLIP_CACHE now imported from its
+B9a home — the identity-same dict), test_handle_language_switch_spec_cleanup ×4,
+test_lid_idle_watcher_spin ×3 + test_lid_idle_watcher_suppression ×5 (the real
+ignore-input predicate bound from ITS B7 home,
+voiceai.modules.voice.session.lifecycle.hangup, instead of the tm delegator),
+test_lid_usage_tracking ×10, test_language_switch_live_marker_and_pin ×10,
+test_simple_agent_language_directive ×4, test_switch_tool_injection ×4,
+test_speculative_followup_history ×6. The named getsource rewrite:
+test_substance_gate_foreign_max.py's whole-class inspect.getsource scan (old :119)
+re-lands as an async behavior test under the SAME node id
+(test_eager_call_site_passes_eager_meta_info): it drives the REAL
+_listen_transcriber eager branch on a harness double wired with the REAL spawner +
+mismatch + arm chain (the moved coordinator bodies) and asserts CONCRETE VALUES —
+the spawner called exactly once with ("kahi tari", eager_meta_info) and the
+playback gate armed under sequence_id 42 taken from eager_meta_info, while the raw
+message meta deliberately carries no sequence_id (a regression to the raw meta now
+fails on both asserts instead of a source-text scan). Ported rebind tests assert
+concrete values throughout (gate records' outcome/sequence_id/from_language, exact
+tunable floats, directive text, clip byte counts), never bare truthiness.
+Deliberate residual TaskManager references, made loud:
+test_language_switch_race.py keeps the CLASS-LEVEL `TaskManager.lid_playback_gate
+is None` pin (a checklist behavior-invariant on the class attribute, not a
+delegator); test_switch_tool_injection.py keeps `__inject_switch_language_tool`
+(never moved — setup region, B13a per the B9a deviation list) while its rollout
+predicate migrated to the coordinator; test_speculative_followup_history.py keeps
+`__speculative_followup_text` (the B10-owned trio) while its language rebind
+(`__language_directive`) migrated to the moved body. DELEGATORS DELETED: NONE —
+loudly: every language delegator remains load-bearing after the port, on two
+grep-verified grounds. (1) Production dispatch — tm's own remaining code calls
+__language_switch_enabled (tm:725/1455), switch_language (1477 on_lid_switch bind
++ 2877/2921), __lid_idle_watcher (1489 spawn), __prewarm_handoff_clips (1603
+spawn), _spawn_language_switch_decision (4165 + the 4752 eager site),
+__lid_playback_gate_holds (5547, the output loop), __snapshot_lid_events +
+_collect_flux_lid_events (6162-6163/6233-6234, run()'s teardown) — and the moved
+bodies themselves carry 75 `_TaskManager__*` dispatches (45 switcher, 14 lid_gate,
+16 handoff) that resolve through these delegators on a real call. (2) Still-pinned
+names — the B9a arch suites
+(tests/arch/modules/voice/session/language/test_{switcher,lid_gate,handoff}.py)
+pin every delegator by name until the endgame rename spec. The step's
+delete-only-with-its-ported-tests constraint is satisfied vacuously: nothing was
+deleted, and after this commit the only legacy tests reaching language names
+THROUGH the TaskManager class are the two B10-owned trio files. No production code
+touched; task_manager.py unchanged (do-not-reformat trivially respected, run()
+untouched, goodbye-drain pin + A0 meta-test green); no monkeypatch string-path
+rewrites owed (no lookup site moved — R3). One gated commit (the step allows
+several; with zero delegator deletions there is no per-file deletion to gate).
+make sec clean.)
+
+B10: check=green (repo ruff + strict arch lint green; mypy shows only the 5
+pre-existing environment errors identical on baseline — missing types-pytz stubs
+and a numpy 3.12-syntax stub the pinned 3.10 CI env never sees; bandit not
+installed in either local python, exit 0 with no findings via system python);
+test-all=8/2598/2606 (net-new: +21 arch tests, 2606 collected vs B9b's 2585;
++1 reported skip is the pre-existing module-level skip; reconciliation: 3 tests rewritten
+in place, 1↔1 each, +0 legacy-tree tests removed. Rewrites:
+tests/test_task_manager_interruption_chain.py TestCallSites — the three
+inspect.getsource pins (sync_history / _handle_transcriber_output /
+__cleanup_downstream_tasks) re-land under the SAME node ids as call-order
+behavior tests driving the REAL moved bodies (hint-set-not-invalidate on a stub
+session, cancel-without-invalidate through the delegator, new-home routing pin);
+tests/test_speculation_commit_logging.py — 7 convert_to_request_log patch paths
+repointed 1↔1 to voiceai.modules.voice.session.turn.history_sync (the trio's new
+lookup site), binds still via the TaskManager delegators. Additive: +21 arch
+tests — tests/arch/modules/voice/session/test_interruption.py ×7 (legacy-shim
+identity + audio/interruption gates + sequence lifecycle + recovery stats) and
+tests/arch/modules/voice/session/turn/test_history_sync.py ×14 (pure-reader
+staticmethod-identity pins, delegator + session-injection pins, lookup-site pins,
+evidence/trimmer/helper behavior, cleanup cancel-without-invalidate, committed /
+discarded speculation logging on concrete values). The moves, all proven
+AST-identical bodies against HEAD during the step modulo the declared
+accommodations (InterruptionManager 35/35 methods; update_transcript identical;
+sync/cleanup/trio diffs limited to added docstrings, F541 f-prefix drops and the
+self→module dispatch for pure helpers): voiceai/agent_manager/
+interruption_manager.py (512 lines) → voiceai/modules/voice/session/
+interruption.py (545 lines, otobaai logger) with the old path as a
+`# legacy-shim(spec-0004)` identity re-export; tm 1822-2296 (evidence readers,
+sync_history, __cleanup_downstream_tasks), tm 1120-1142 (hint/cancel/invalidate
+helpers) and tm 5008-5176 (the B9a-deferred speculation trio) →
+voiceai/modules/voice/session/turn/history_sync.py (887 lines) behind the
+HistorySession facade Protocol, via the new adapters/history_runtime.py bridge
+(convert_to_request_log, format_messages, NON_EVIDENCE_MARK_TYPES — ChatRole /
+LogComponent / LogDirection ride voiceai.enums directly, the §3.1 allowance);
+tm keeps same-named thin delegators per moved name (pure readers as staticmethod
+bindings BY IDENTITY, the B9a precedent, so unbound
+TaskManager._get_latest_*(marks) calls keep resolving) and injects itself (§3.1
+bridge 3). New-home names strip the prefixes (the B7/B8 precedent):
+cleanup_downstream_tasks, log_committed/log_discarded_speculation,
+speculative_followup_text, set/cancel/invalidate helpers, trim/normalized/
+prepare/get_latest/has/inflight/estimate. Deviations, made loud: (1)
+test_browser_leg_transcripts.py patch paths NOT repointed — its 6
+convert_to_request_log patches target _handle_transcriber_output, which stays in
+tm until B11d (R3: rewrite only where the LOOKUP SITE moves); (2) the 19
+__cleanup_downstream_tasks pins in other files pass UNTOUCHED through the
+delegators (the B9b precedent — production still dispatches
+__cleanup_downstream_tasks from _handle_transcriber_output and the moved bodies
+carry the mangled dispatches, so every delegator stays load-bearing; instance-attr
+AsyncMock overrides keep intercepting); (3) sync_history's four
+conversation_history sync_* callbacks ride lambdas over the module function
+instead of self.update_transcript_for_interruption (avoids a delegator double-hop;
+stubs need no extra attr); (4) history_sync.py lands at 887 lines (> 800 target,
+< 1,500 cap): the commit path is one auditing unit (evidence + trim + cleanup +
+trio share the HistorySession facade) — flagged residual for the B14 line-count
+audit (the B5 s2s_runner / B9a switcher precedent). task_manager.py: 6,437 →
+5,841 lines (import hunk + five region swaps + trio swap); run() untouched by
+construction, goodbye-drain pin + A0 meta-test green; the B7 gate names
+(test_check_completion_* ×3, test_end_call_teardown_self_cancel) green.
+make sec clean (via system python; bandit absent from .venv); pytest-cov absent
+from both local pythons so the cov gate is unmeasured this step — the formal cov
+gate returns at B13a.)
+
+B11a: check=green (repo ruff + strict arch lint green; mypy/bandit/cov carry the
+B10-noted environment gaps, unchanged); test-all=8/2607/2615 (net-new: +9 arch
+tests, 2615 collected vs B10's 2606; reconciliation: 2 tests rewritten in place,
+1↔1 each, +0 legacy-tree tests removed. Rewrites:
+tests/test_pre_call_webhook.py::test_transfer_branch_fires_before_transfer_post —
+the inspect.getsource ordering pin re-lands under the SAME node id as a call-order
+behavior test driving the REAL moved transfer branch (webhook-before-POST asserted
+on a concrete order list); tests/test_end_call_bargein_guard.py
+TestSourceGuards::test_end_call_branch_sets_in_progress_flag — the getsource pin
+re-lands under the SAME node id driving the REAL end_call branch through the
+delegator and asserting `_end_call_in_progress is True` (its sibling
+test_listen_transcriber_uses_the_guard stays a source pin: _listen_transcriber
+moves at B11d). Same-commit patch repoints (R3): _drive_transfer's three patches
+(asyncio.sleep, convert_to_request_log, create_ws_data_packet) → the
+function_calls lookup site; the file's other 9 convert + 9 ClientSession patches
+stay at the task_manager path — they drive fire_pre_call_webhook, which stays in
+tm (no lookup site moved). Additive: +9 arch tests in
+tests/arch/modules/voice/session/turn/test_function_calls.py (delegator +
+session-injection pins per moved name, lookup-site pins, end_call lock-out,
+webhook-before-POST with history-recorded, duplicate-transfer short-circuit, and
+the default-leg mock transfer's transfer_start/end event pair). The moves, proven
+AST-verbatim against HEAD modulo the declared accommodations:
+__execute_function_call (tm 2263-2635) + _execute_transfer_call_webhook (tm
+3314-3525) → voiceai/modules/voice/session/turn/function_calls.py (759 lines, ≤
+800 target) behind the FunctionCallsSession facade Protocol, via the new
+adapters/function_runtime.py bridge (convert_to_request_log, format_messages,
+create_ws_data_packet, update_prompt_with_context, the trigger_api trio,
+END_CALL_FUNCTION_PREFIX, LANGUAGE_NAMES, TranscriberPool as a plain alias for
+the isinstance narrowing — LogComponent/LogDirection/HangupReason ride
+voiceai.enums directly); tm keeps same-named thin delegators (mangled
+_TaskManager__execute_function_call included) and injects itself (§3.1 bridge
+3). New-home names strip the prefixes (B7/B8/B10 precedent).
+__store_into_history did NOT move — it is called from __do_llm_generation (tm
+2987/3107), so generation (B11b) owns it. Accommodations: three mangled spellings
+(self.__do_llm_generation ×3, self.__is_graph_agent, self.__play_switch_handoff),
+F541 f-prefix drop, annotations + docstrings, otobaai loggers, `import aiohttp`
+(the transfer POST — lint-caught, behavior-identical), noqa E501 ×3 / F841 ×2 on
+verbatim lines, one `_mark_id`-style rename avoided (none owed). Preserved quirks
+(R8): the end_call barge-in lock, the transfer exactly-once guard with
+record-before-POST, the CALL_TRANSFER_WEBHOOK_URL env fallback (rule-4 debt,
+TODO), the cancelled-transfer transfer_end in finally, the dead
+set_response_prompt local. test_s2s_task_manager.py's instance-attr transfer
+mocks keep intercepting (no rewrite owed — no lookup site moved for them).
+task_manager.py: 5,841 → 5,267 lines; run() untouched, goodbye-drain pin + A0
+meta-test green.)
+
+B11b: check=green (repo ruff + strict arch lint green; mypy/bandit/cov carry the
+B10-noted environment gaps, unchanged); test-all=8/2619/2627 (net-new: +12 arch
+tests, 2627 collected vs B11a's 2615; reconciliation: no legacy-tree test added,
+removed, rewritten or repointed — none owed. The suites binding generation names
+(test_llm_same_turn_no_cancel's unbound
+TaskManager._TaskManager__do_llm_generation(stub, ...) call,
+test_llm_output_empty_eos's TaskManager._handle_llm_output(stub, ...) drives,
+and the _run_llm_task instance-attr mocks) all pass UNTOUCHED through the
+delegators; no suite patches convert_to_request_log at the task_manager path
+while driving a generation body, so no R3 repoint was owed either. Additive: +12
+arch tests in tests/arch/modules/voice/session/turn/test_generation.py
+(delegator + session-injection pins per moved name, lookup-site pins, empty-final-
+buffer forward, straight-to-output routing, store/commit staging, hangup-skip
+without LLM touch, eager-stub stamp, request-log-then-generate). The moves, proven
+AST-verbatim against HEAD modulo the declared accommodations: _handle_llm_output
+(tm 2159-2202), _process_conversation_preprocessed_task (tm 2203-2236),
+_process_conversation_formulaic_task (tm 2237-2263), __store_into_history (tm
+2271-2319), _llm_stream_with_first_chunk_timeout (tm 2320-2356),
+__do_llm_generation (tm 2357-2792), _append_eager_llm_stub (tm 2793-2811) and
+_process_conversation_task (tm 2812-2938) →
+voiceai/modules/voice/session/turn/generation.py (983 lines) behind the
+GenerationSession facade Protocol, via the new adapters/generation_runtime.py
+bridge (convert_to_request_log, format_messages, create_ws_data_packet,
+compute_function_pre_call_message, is_valid_md5, LLM_FIRST_CHUNK_TIMEOUT_S, plus
+VoiceAIComponentError/LLMError caught by identity — LogComponent/LogDirection/
+HangupReason ride voiceai.enums directly); tm keeps same-named thin delegators
+(mangled _TaskManager__store_into_history/_TaskManager__do_llm_generation
+included; the async-generator _llm_stream_with_first_chunk_timeout delegator
+re-yields) and injects itself (§3.1 bridge 3). New-home names strip the prefixes
+(B7/B8/B10/B11a precedent). _run_llm_task and _listen_llm_input_queue did NOT
+move — the task wrapper stays for B11c/d dispatch. Accommodations: seven mangled
+spellings (store/do/execute_function_call/is_s2s/is_graph/is_knowledgebase/
+process_stop_words), F541 ×3, noqa F841 ×2 / S110 ×2 / E501 ×9 on verbatim lines,
+annotations + docstrings, otobaai loggers, and two lint-caught MISSING imports
+added behavior-identically (`import aiohttp` was B11a's; here VoiceAIComponentError
++ LLMError via the bridge). Preserved quirks (R8): the stale end_of_llm_stream
+clear, the hangup/completion gating, the eager-stub upsert contract, the
+cancelled_at_ms stamp, the empty-final-buffer forward. generation.py lands at 983
+lines (> 800 target, < 1,500 cap): the turn core is one auditing unit — flagged
+residual for the B14 line-count audit (the B5 s2s_runner / B9a switcher / B10
+history_sync precedent). task_manager.py: 5,267 → 4,556 lines; run() untouched,
+goodbye-drain pin + A0 meta-test green.)
+
+B11c: check=green (repo ruff + strict arch lint green; mypy/bandit/cov carry the
+B10-noted environment gaps, unchanged); test-all=8/2629/2637 (net-new: +10 arch
+tests, 2637 collected vs B11b's 2627; reconciliation: no legacy-tree test added,
+removed, rewritten or repointed — none owed. The B1 characterization suite
+(test_characterization_output_loop_invariants.py: the REAL-rebound nets for the
+b"\\x00" passthrough, retired-chunk reset, replace-to-flush, stuck-gate release
+and revalidate-in-kickoff) passes UNTOUCHED through the delegators (the B9b
+precedent — it binds __process_output_loop via __get__ and mocks
+_commit/_drop_staged as instance attrs, all of which keep resolving);
+test_synthesize_silent_drops binds TaskManager._synthesize.__get__ and likewise
+re-lands untouched; no suite patches an output-loop global at the task_manager
+path while driving a moved body, so no R3 repoint was owed. Additive: +10 arch
+tests in tests/arch/modules/voice/session/turn/test_output_loop.py (delegator +
+session-injection pins per moved name, lookup-site pins, BLOCK-drop with null-byte
+passthrough, SEND-commit, staged trio by sequence, silent-drop pipeline clear,
+final-chunk ACK). The moves, proven AST-verbatim against HEAD modulo the declared
+accommodations: final_chunk_played_observer, agent_hangup_observer,
+__enqueue_chunk, __send_preprocessed_audio, _synthesize, __process_output_loop and
+_inject_and_run_llm → voiceai/modules/voice/session/turn/output_loop.py (618
+lines, under the 650 estimate) behind the OutputSession facade Protocol, via the
+new adapters/output_runtime.py bridge (convert_to_request_log,
+create_ws_data_packet, calculate_audio_duration, get_md5_hash,
+get_raw_audio_bytes, mp3_bytes_to_pcm, resample, static_node_audio_key,
+wav_bytes_to_pcm, yield_chunks_from_memory, STUCK_AUDIO_GATE_RELEASE_S;
+SUPPORTED_SYNTHESIZER_MODELS rides voiceai.modules.voice.registry (B3) and
+NON_NODE_RESPONSE_CATEGORIES rides voiceai.modules.voice.constants — moved there
+from the tm module level with B11c per rule 1b, the B9a HANDOFF_CLIP_CACHE
+precedent, with tm keeping the name by identity; LogComponent/LogDirection ride
+voiceai.enums directly); tm keeps same-named thin delegators (mangled
+_TaskManager__* spellings included) and injects itself (§3.1 bridge 3). In the
+SAME step, _stage/_commit/_drop_staged_assistant_history complete history_sync.py
+per the spec's "Region F + staged trio" map (new-home names strip the underscore;
+HistorySession gains the staged ledgers). Left for B11d: _drop_all_staged (called
+from _handle_transcriber_output), _retire_dropped_response (transcript path),
+__send_first_message/__handle_accumulated_message (transcript-scheduled),
+is_sequence_id_in_current_ids, _run_llm_task, _listen_llm_input_queue.
+Accommodations: seven mangled spellings, F541 ×7, noqa F841 ×1 / S110 ×2 / E501
+×14 / UP032 ×1 on verbatim lines, annotations + docstrings, otobaai loggers, and
+three lint-caught MISSING imports added behavior-identically (traceback, uuid in
+the output module; VoiceAIComponentError/LLMError were B11b's). Preserved quirks
+(R8): the null-byte passthrough, retired-chunk reset, read-through-owner queue,
+stuck-gate release, hangup-audio bypass, the commented-out legacy telemetry block.
+task_manager.py: 4,556 → 4,106 lines; run() untouched, goodbye-drain pin + A0
+meta-test green.)
+
+B11d: check=green (repo ruff + strict arch lint green; mypy/bandit/cov carry the
+B10-noted environment gaps, unchanged); test-all=8/2639/2647 (net-new: +10 arch
+tests, 2647 collected vs B11c's 2637; reconciliation: 1 test rewritten in place,
+1↔1, +0 removed. Rewrites: tests/test_end_call_bargein_guard.py
+TestSourceGuards::test_listen_transcriber_uses_the_guard — the LAST
+_listen_transcriber getsource pin re-lands under the SAME node id as a behavior
+test proving the moved listener consults the ignore gate (seam-call recorded
+while a barge-in arrives mid end_call actuation, cleanup assert-not-called; the
+`import inspect` goes away with it). Same-commit patch repoints (R3):
+test_browser_leg_transcripts.py's 6 convert_to_request_log patches and
+test_substance_gate_foreign_max.py:166's monkeypatch → the transcript_listener
+lookup site (both drive moved bodies: _handle_transcriber_output and the
+_listen_transcriber eager branch); test_pre_call_webhook.py's remaining 9+9
+patches stay at the task_manager path — they drive fire_pre_call_webhook, which
+stays in tm. The end-call goodbye-audio, split-utterance, substance-gate,
+same-turn-no-cancel and rule3a suites (all `__get__` rebinds / instance mocks)
+pass UNTOUCHED through the delegators. The A0 meta-test needs NO update:
+PINNED_METHOD_NAMES (`_listen_transcriber`, `_handle_transcriber_output`) keep
+resolving through the delegators and the goodbye-drain substrings are untouched —
+verified green. Additive: +10 arch tests in
+tests/arch/modules/voice/session/turn/test_transcript_listener.py (delegator +
+session-injection pins per moved name, lookup-site pins, ignore-gate truth
+values, kickoff immediate-turn start, retire drop+sequence, task-type dispatch).
+The moves, proven AST-verbatim against HEAD modulo the declared accommodations:
+the task-type predicates + _extract_sequence_and_meta + _get_next_step +
+_set_call_details, _process_followup_task, _should_ignore_transcriber_input,
+_listen_llm_input_queue, _run_llm_task, process_transcriber_request,
+_trigger_voicemail_check, _drop_all_staged_assistant_history,
+_retire_dropped_response, kickoff_llm_generation, the regen-settle quartet,
+_handle_transcriber_output, _end_call_on_component_error,
+_log_transcriber_connection_error, _maybe_update_tts_language,
+_listen_transcriber, __process_http_transcription, is_sequence_id_in_current_ids,
+__send_first_message and __handle_accumulated_message (28 methods) →
+voiceai/modules/voice/session/turn/transcript_listener.py (1,218 lines) behind
+the ListenerSession facade Protocol, via the new adapters/listener_runtime.py
+bridge (convert_to_request_log, create_ws_data_packet, safe_log_text,
+LLM_REGEN_SETTLE_S, REGEN_SETTLE_EXCLUDED_TRANSCRIBERS, LLM_DEFAULT_CONFIGS,
+clean_json_string, format_messages, format_error_message, VoiceAIComponentError,
+LLMError, TranscriberError, TranscriberPool as a plain alias; asr_id_to_int rides
+static_methods (B3)); tm keeps same-named thin delegators (mangled
+_TaskManager__regen_after_settle / _TaskManager__process_http_transcription /
+_TaskManager__send_first_message / _TaskManager__handle_accumulated_message
+included) and injects itself (§3.1 bridge 3). New-home names strip the prefixes
+(B7-B11c precedent). Accommodations: fourteen mangled spellings (regex-applied,
+verified quad-free after the B11b/B11c loop bug recurred nowhere — grep-proof),
+the should_ignore body delegating to the B7 hangup module by import (it was
+already a delegator in tm), the floating welcome-accumulation string carried as
+`#` comments (B018), five duplicate docstrings removed (verbatim original kept),
+F541 ×19 (auto-fixed), noqa F841 ×2 / E501 ×~20 on verbatim lines, annotations +
+docstrings, otobaai loggers, and four lint-caught MISSING imports added
+behavior-identically (json, traceback, websockets in the module;
+format_messages, clean_json_string, LLM_DEFAULT_CONFIGS, VoiceAIComponentError,
+LLMError, TranscriberError, TranscriberPool, format_error_message via the
+bridge). Preserved quirks (R8): the dtmf/single-consumer and browser-leg guards,
+the eager overlap merge, the regen-settle absorb, the unconditional revalidate,
+the welcome voicemail retire, the print_exc writes. transcript_listener.py lands
+at 1,218 lines (> 800 target, < 1,500 cap) — the largest turn module, flagged
+residual for the B14 line-count audit. task_manager.py: 4,106 → 3,242 lines;
+run() untouched, goodbye-drain pin + A0 meta-test green. Turn core complete
+(B11a-d): the engine's turn path now lives in session/turn/ (function_calls,
+generation, output_loop, history_sync, transcript_listener).)
+
+B12a: check=green (repo ruff + strict arch lint green; mypy/bandit/cov carry the
+B10-noted environment gaps, unchanged); test-all=8/2643/2651 (net-new: +4 arch
+tests, 2651 collected vs B11d's 2647; reconciliation: 3 test imports repointed
+1↔1, +0 tests added/removed/rewritten. Repoints (R3): the
+`import voiceai.output_handlers.telephony as telephony_module` in
+test_telephony_output_send_timeout.py, test_cleanup_downstream_...socket.py and
+test_characterization_default_io.py → the new io.output.telephony lookup site
+(the OUTPUT_SEND_TIMEOUT_S reader moved); the known-failing pair ports as
+known-failing (byte-identical `is_closed() is False` signature, verified against
+baseline). Additive: +4 arch tests in tests/arch/modules/voice/io/
+test_relocation.py (input/output shim-identity incl. talko and the sip_trunk
+private parser, timeout lookup-site pin, package surfaces). The move, line-counted
+per file against HEAD during the step: voiceai/input_handlers/** (10 files) +
+voiceai/output_handlers/** (10 files, INCLUDING talko both legs) →
+voiceai/modules/voice/io/input/** + io/output/** via the new
+adapters/io_runtime.py bridge (create_ws_data_packet, calculate_audio_duration,
+wav_bytes_to_pcm, IS_USER_ONLINE_MESSAGE, AUDIO_STREAM_END_SENTINELS,
+UNCOMPRESSED_AUDIO_FORMATS, WEBCALL_TTS_SAMPLE_RATE); every old path is a
+`# legacy-shim(spec-0004)` explicit-name identity re-export. Mechanical
+accommodations beyond the bridge: configure_logger(__name__) → otobaai
+get_logger(MODULE_NAME) (the B5 precedent; no suite pins handler logger names),
+absolute intra-package imports rewritten (relative imports untouched),
+`from voiceai.modules.voice.io...` in adapters/telephony.py (16 lines), and full
+rule-6/7 normalization of all 20 files (293 annotations incl. `-> None` inference,
+109 docstrings from per-name maps — no body touched; a script did the splicing,
+ruffs F/B/UP autofixes plus hand noqas after). Deviations, made loud: (1) a REAL
+regression caught mid-step — test_sip_trunk_hangup_drain's `fast_timings` fixture
+patches constants on the MODULE object, and patching the shim is a silent no-op
+(0.5s settle runs, 5 timing tests fail); fixed by repointing its
+`sip_trunk_input` import to the new module, and the census was widened to
+module-object patches (the only other hits were the 3 telephony_module files);
+(2) B009 getattr-with-constant autofixed in sip_trunk input (provably guarded,
+identical semantics); (3) 5 provably-unused stdlib imports dropped after
+importer census; (4) moved io files keep legacy formatting (byte-identity for
+review; s2s/session precedent — `make fmt` is not gate-enforced and the baseline
+already carries 18 unformatted files). task_manager.py untouched (no imports of
+handlers there); run() untouched.)
+
+B12b: check=green; test-all=8/2647/2655 (net-new: +4 arch tests; reconciliation:
+7 patch repoints 1↔1 (kalpa aiohttp.ClientSession ×4 → kalpa_http, kalpa
+RESPONSE_IDLE_TIMEOUT + websockets.connect → kalpa_synthesizer, sarvam
+aiohttp.ClientSession → sarvam), +0 added/removed. NOTE the spec's "4 kalpa"
+undercounted: _patch_http + 3 more aiohttp sites all drive _generate_http, so 6
+kalpa paths moved — honest count recorded here. The 2 known-failing telephony
+tests keep failing identically (verified). Additive: +4 arch tests in
+tests/arch/modules/voice/tts/test_relocation.py (shim identity incl. kalpa
+_VOICE_IDS, kalpa split + lookup-site pins, pool identity). The moves:
+voiceai/synthesizer/** (15 files) → voiceai/modules/voice/tts/{base,pool,stream}.py
++ tts/providers/*.py via the new adapters/tts_runtime.py bridge (transcoders,
+packet builder, ssl context, scalar cache, SARVAM + MAYA maps, synth-format
+probe); the kalpa split — _generate_http/synthesize/synthesize_telephony_clip/
+_process_http_audio/_get_http_audio_format → tts/providers/kalpa_http.py (190
+lines) with KalpaSynthesizer keeping thin same-named methods (MAX_TEXT_CHARS
+stays in kalpa.py with the streaming sender; kalpa_http reads it through a
+function-local import, the B4 precedent — a top-level import would cycle);
+every old path is a `# legacy-shim(spec-0004)` identity re-export.
+adapters/synthesis.py provider imports → new paths; language_runtime's
+SynthesizerPool alias → tts.pool (identity unchanged; TranscriberPool alias waits
+for B12c); task_manager.py:78-79 pool imports deliberately LEFT riding the shims
+(B13a rewires setup). Full rule-6/7 normalization of all 16 files (548
+annotations, 126 docstrings; B009/S110/S112/E501/F841 verbatim noqas).
+Deviations, made loud: (1) test_maya_synthesizer.py:468 reads
+`mod.websockets.connect` off the MODULE object — repointed to the new module
+(the B12a sip_trunk lesson applied proactively); (2) three bridge additions found
+by import failure, not census — get_synth_audio_format, SARVAM_* (caught), then
+MAYA_* (caught by the layer-contract test, which is exactly what it is for);
+(3) kalpa_synthesizer.py lands at 876 lines (> 800 target, < 1,500 cap) —
+flagged residual; (4) the layer-contract test is now an explicit B12 gate
+(it caught the maya miss). kalpa suite 87/87 green incl. the 4 repointed.
+
+B12c: check=green; test-all=8/2650/2658 (net-new: +3 arch tests; reconciliation:
+no legacy-tree patch/rewrite owed — zero string patches and zero module-object
+patches target transcriber paths (census-verified), and every class-level importer
+rides the shims. Additive: +3 arch tests in
+tests/arch/modules/voice/asr/test_relocation.py (shim identity, deepgram split
+seams, pool identity). The moves: voiceai/transcriber/** (15 files) →
+voiceai/modules/voice/asr/{base,pool}.py + asr/providers/*.py via the new
+adapters/asr_runtime.py bridge (packet/timing/audio helpers, ssl context, LID
+classes, DEEPGRAM/REGEN/ELEVENLABS/OPENAI/SONIOX tunables); the deepgram 4-way
+split — connection.py (315) + nova_session.py (514) + flux_session.py (321) as
+module-level functions taking the transcriber as `self`, with transcriber.py
+(405) keeping the class name/path/__init__/run/transcribe/turn-helpers plus thin
+same-named delegators (async-generator senders/receivers re-yield, the B11b
+precedent). New-home function names strip the underscore (B7-B12b precedent);
+internal dispatch rides the facade delegators. ONE mangling accommodation:
+self.__set_transcription_cursor → self._DeepgramTranscriber__set_transcription_cursor
+(the facade keeps the method). self-annotation is `self: DeepgramTranscriber` via
+TYPE_CHECKING (no runtime cycle; the B11d listener-Protocol alternative was
+rejected as heavier); facade __init__ None-attrs gained precise annotations
+(asyncio.Task | None etc.) for the mypy profile (unverifiable locally — env gap —
+correct by construction). Full rule-6/7 normalization (451 annotations + 97
+docstrings on providers/base/pool; deepgram modules annotated at build).
+adapters/transcription.py provider imports → new paths (deepgram → the split
+transcriber module); language/function/listener_runtime TranscriberPool aliases →
+asr.pool. Gate suites green unchanged: B1 golden fixtures + flux +
+turn-finalization + stuck-turn + pool trio (54 nodes). No fallback needed — the
+R11 whole-move option stays documented but unused.
+
+B12d (shim-inventory checkpoint): 58 true `# legacy-shim(spec-0004)` files (63
+grep hits minus 5 prose mentions in new-module docstrings — io/asr/tts
+__init__s, voice models, session/interruption); the layer-contract purity test
+covers all of them (green). No new-arch file exceeds 1,500 lines. > 800-line
+residuals, all flagged for the B14 audit: task_manager.py (3,242 — the in-progress
+facade, ends ~900 at B13b), transcript_listener.py (1,218), switcher.py (1,139),
+generation.py (983), history_sync.py (967), s2s_runner.py (891),
+kalpa_synthesizer.py (876). io/mark_ledger.py + io/observables.py (304 + 48
+lines, 16 importers) DEFERRED to the endgame helpers relocation — moving
+MarkEventMetaData/ObservableVariable now would churn platform/tests for no
+contract gain (the ports already type the seam; helpers DSP move is an explicit
+non-goal). B12 leaves the tree with every leaf contract a proven port and every
+legacy consumer riding shims.
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per

@@ -9,14 +9,20 @@ would have produced:
     last. Never append a second consecutive user message (alternating-role LLMs reject it).
   * idle-flush (no active_transcript): append the detector transcript.
   * newer turn arrived (no content match): leave history untouched, answer the newest turn.
+
+B9b note: `__speculative_followup_text` itself deliberately stays TaskManager-bound — the
+speculation-commit trio did NOT move at B9a (step B10 owns its patch-path repoints), so this
+file keeps driving the tm-resident body. Only the language rebind migrated: the real note
+builder is bound from its new home (``voiceai.modules.voice.session.language.switcher``).
 """
 
 import types
+from functools import partial
 from unittest.mock import MagicMock
-
 
 from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers.conversation_history import ConversationHistory
+from voiceai.modules.voice.session.language import switcher as _switcher
 
 
 def _msg(data="", end=False, fc=False):
@@ -27,8 +33,8 @@ def _make_tm(history, generate):
     tm = MagicMock()
     tm.conversation_history = history
     tm.multilingual_prompts = {"en": "You are a helpful agent.", "hi": "Hindi prompt"}
-    # Bind the real note builder so the speculative system prompt mirrors production.
-    tm._TaskManager__language_directive = TaskManager._TaskManager__language_directive.__get__(tm, TaskManager)
+    # Bind the real note builder (its B9a home) so the speculative system prompt mirrors production.
+    tm._TaskManager__language_directive = partial(_switcher.language_directive, tm)
     tm.tools = {"llm_agent": MagicMock()}
     tm.tools["llm_agent"].generate = generate
     return tm

@@ -1,14 +1,20 @@
 """Simple-agent language directive text.
 
-`__language_directive` is the ONLY language note: installed at call start and reinstalled on
+`language_directive` is the ONLY language note: installed at call start and reinstalled on
 every switch, so it must carry the verbatim carve-out and no one-shot switch instructions —
-it outlives the moment it was written for."""
+it outlives the moment it was written for.
+
+Ported at spec 0004 B9b: driven through the `LanguageSwitchCoordinator` seam over the moved
+body (``voiceai.modules.voice.session.language.switcher.language_directive``) instead of the
+TaskManager mangled delegator; the assertions are unchanged."""
 
 from unittest.mock import MagicMock
 
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
 
-DIRECTIVE = TaskManager._TaskManager__language_directive
+
+def DIRECTIVE(session, label):
+    return LanguageSwitchCoordinator(session).language_directive(label)
 
 
 def test_standing_directive_has_the_verbatim_carve_out():

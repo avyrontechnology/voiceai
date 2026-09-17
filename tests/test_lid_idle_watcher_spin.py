@@ -5,18 +5,26 @@ watcher re-fires every iteration with no awaiting yield, a synchronous spin that
 pod's event loop and starves co-tenant calls of media. Two guards hold: the loop-top skip covers
 the whole ignore-input condition rather than hangup alone, and a spin-guard forces a yield
 whenever a fire leaves the buffer undrained.
+
+Ported at spec 0004 B9b: the watcher runs through the `LanguageSwitchCoordinator` seam over the
+moved body (``voiceai.modules.voice.session.language.lid_gate.lid_idle_watcher``); the real
+ignore-input predicate is bound from ITS new home
+(``voiceai.modules.voice.session.lifecycle.hangup``, moved at B7) and the real evidence reader
+from the lid_gate module, so no TaskManager delegator is pinned. Assertions unchanged.
 """
 
 import asyncio
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
+from voiceai.modules.voice.session.lifecycle import hangup as _hangup
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
 def _tm(*, has_transfer=False, end_call=False, hangup=False, buffer_age=5.0):
-    """Minimal TaskManager whose idle watcher can run in isolation.
+    """Minimal session double whose idle watcher can run in isolation.
 
     buffer_age is a constant so the buffer looks perpetually aged-but-undrained — the exact
     state that produced the spin. handle_language_switch is a no-op mock (never drains).
@@ -35,17 +43,17 @@ def _tm(*, has_transfer=False, end_call=False, hangup=False, buffer_age=5.0):
     pool.lid_buffer_event.return_value = None
     tm.tools = {"transcriber": pool}
 
-    # Real methods under test / relied upon.
-    tm._should_ignore_transcriber_input = TaskManager._should_ignore_transcriber_input.__get__(tm, TaskManager)
-    tm._TaskManager__lid_idle_watcher = TaskManager._TaskManager__lid_idle_watcher.__get__(tm, TaskManager)
-    # staticmethod: bind the real one, or unpacking a MagicMock raises inside the watcher and its
-    # outer handler swallows it — the loop would exit and the test would pass for the wrong reason.
-    tm._TaskManager__buffered_language_evidence = TaskManager._TaskManager__buffered_language_evidence
+    # Real methods under test / relied upon, bound from their new homes (B7 / B9a moves).
+    tm._should_ignore_transcriber_input = partial(_hangup.should_ignore_transcriber_input, tm)
+    # Plain-function bind (the legacy staticmethod shape): a MagicMock here would raise on
+    # unpacking inside the watcher and its outer handler would swallow it — the loop would
+    # exit and the test would pass for the wrong reason.
+    tm._TaskManager__buffered_language_evidence = lid_gate.buffered_language_evidence
     return tm
 
 
 async def _run_watcher_for(tm, seconds):
-    task = asyncio.create_task(tm._TaskManager__lid_idle_watcher())
+    task = asyncio.create_task(LanguageSwitchCoordinator(tm).lid_idle_watcher())
     await asyncio.sleep(seconds)
     task.cancel()
     try:

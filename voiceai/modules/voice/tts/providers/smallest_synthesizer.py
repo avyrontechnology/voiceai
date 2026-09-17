@@ -1,0 +1,205 @@
+"""Smallest AI TTS provider (spec 0004, B12b)."""
+
+
+import asyncio
+import base64
+import json
+import os
+import time
+from typing import Any
+
+import aiohttp
+import websockets
+
+from voiceai.common.logger import get_logger
+from voiceai.modules.voice.adapters.tts_runtime import get_ssl_context
+from voiceai.modules.voice.constants import MODULE_NAME
+from voiceai.modules.voice.tts.stream import StreamSynthesizer
+
+logger = get_logger(MODULE_NAME)
+
+
+class SmallestSynthesizer(StreamSynthesizer):
+    """Smallest AI TTS provider."""
+    # Attribution tag sent to Smallest AI so requests are tracked as voiceai traffic.
+    SOURCE = "voiceai"
+
+    def __init__(
+        self,
+        voice_id: Any,
+        model: Any="lightning_v3.1",
+        language: Any="en",
+        audio_format: Any="mp3",
+        sampling_rate: Any="8000",
+        stream: Any=False,
+        buffer_size: Any=400,
+        synthesizer_key: Any=None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            stream=stream,
+            provider_name="smallest",
+            buffer_size=buffer_size,
+            **kwargs,
+        )
+        self.api_key = os.environ["SMALLEST_API_KEY"] if synthesizer_key is None else synthesizer_key
+        self.voice_id = voice_id
+        self.model = model
+        self.sampling_rate = int(sampling_rate)
+        self.language = language
+
+        # Unified Waves endpoints (docs.smallest.ai -> /text-to-speech).
+        # HTTP: POST /waves/v1/tts, streaming: WSS /waves/v1/tts/live
+        self.api_url = "https://api.smallest.ai/waves/v1/tts"
+        self.ws_url = "wss://api.smallest.ai/waves/v1/tts/live"
+
+    # ------------------------------------------------------------------
+    # StreamSynthesizer hooks
+    # ------------------------------------------------------------------
+
+    def _get_audio_format(self) -> Any:
+        return "wav"
+
+    def form_payload(self, text: Any) -> Any:
+        """Build the provider request payload."""
+        return {
+            "voice_id": self.voice_id,
+            "text": text,
+            "model": self.model,
+            "language": self.language,
+            "sample_rate": self.sampling_rate,
+        }
+
+    # ------------------------------------------------------------------
+    # sender / receiver
+    # ------------------------------------------------------------------
+
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+        """Stream text frames to the provider websocket."""
+        try:
+            if self.conversation_ended:
+                return
+            if not self.should_synthesize_response(sequence_id):
+                logger.info(f"Not synthesizing: sequence_id {sequence_id} not current")
+                return
+
+            await self._wait_for_ws()
+
+            if text != "":
+                try:
+                    if self.ws_send_time is None:
+                        self.ws_send_time = time.perf_counter()
+                    await self._send_json(self.form_payload(text))
+                except Exception as e:
+                    logger.error(f"Error sending chunk: {e}")
+                    self.connection_error = str(e)
+                    return
+
+            if end_of_llm_stream:
+                self.last_text_sent = True
+
+        except asyncio.CancelledError:
+            logger.info("Sender task was cancelled.")
+        except Exception as e:
+            logger.error(f"Unexpected error in sender: {e}")
+
+    async def receiver(self) -> None:
+        """Consume provider audio frames into the playout queue."""
+        not_connected_since = None
+        while True:
+            try:
+                if self.conversation_ended:
+                    return
+                if not self._is_ws_connected():
+                    if self.connection_error:
+                        return
+                    now = time.perf_counter()
+                    if not_connected_since is None:
+                        not_connected_since = now
+                    elif now - not_connected_since > 30:
+                        logger.error("Smallest receiver: WebSocket never connected after 30s, giving up.")
+                        self.connection_error = self.connection_error or "WebSocket never connected"
+                        return
+                    logger.info("WebSocket is not connected, skipping receive.")
+                    await asyncio.sleep(0.1)
+                    continue
+                else:
+                    not_connected_since = None
+
+                response = await self.websocket.recv()
+                data = json.loads(response)
+
+                if data.get("status") == "chunk":
+                    yield base64.b64decode(data["data"]["audio"])
+                elif data.get("status") == "complete":
+                    yield b"\x00"
+
+            except websockets.exceptions.ConnectionClosed:
+                break
+            except Exception as e:
+                logger.error(f"Error occurred in receiver - {e}")
+
+    # ------------------------------------------------------------------
+    # Connection
+    # ------------------------------------------------------------------
+
+    async def establish_connection(self) -> Any:
+        """Open the provider websocket session."""
+        try:
+            start_time = time.perf_counter()
+            websocket = await asyncio.wait_for(
+                websockets.connect(
+                    self.ws_url,
+                    additional_headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "X-Source": self.SOURCE,
+                    },
+                    ssl=get_ssl_context(self.ws_url),
+                ),
+                timeout=10.0,
+            )
+            if not self.connection_time:
+                self.connection_time = round((time.perf_counter() - start_time) * 1000)
+            logger.info(f"Connected to {self.ws_url}")
+            return websocket
+        except asyncio.TimeoutError:
+            logger.error("Timeout while connecting to Smallest websocket")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to connect to Smallest: {e}")
+            return None
+
+    def _process_http_audio(self, audio: Any) -> Any:
+        # Guard against null response from API
+        return audio if audio else b"\x00"
+
+    # ------------------------------------------------------------------
+    # HTTP
+    # ------------------------------------------------------------------
+
+    async def _generate_http(self, text: Any) -> Any:
+        logger.info(f"text {text}")
+        payload = {
+            "text": text,
+            "voice_id": self.voice_id,
+            "model": self.model,
+            "sample_rate": self.sampling_rate,
+            "output_format": self._get_audio_format(),
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "audio/wav",
+            "X-Source": self.SOURCE,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.api_url, headers=headers, json=payload) as response:
+                if response.status == 200:
+                    return await response.read()
+                else:
+                    logger.error(f"Error: {response.status} - {await response.text()}")
+                    return None
+
+    async def synthesize(self, text: Any) -> Any:
+        """Render text to audio bytes (one-shot)."""
+        return await self._generate_http(text)

@@ -25,18 +25,18 @@ from voiceai.modules.voice.ports import SynthesisPort
 # Concrete module paths (not the `voiceai.synthesizer` package surface) because the
 # legacy package has no `__all__` and mypy runs with `no_implicit_reexport` (the
 # spec-0002 A4 precedent).
-from voiceai.synthesizer.azure_synthesizer import AzureSynthesizer
-from voiceai.synthesizer.cartesia_synthesizer import CartesiaSynthesizer
-from voiceai.synthesizer.deepgram_synthesizer import DeepgramSynthesizer
-from voiceai.synthesizer.elevenlabs_synthesizer import ElevenlabsSynthesizer, ElevenlabsV3Synthesizer
-from voiceai.synthesizer.kalpa_synthesizer import KalpaSynthesizer
-from voiceai.synthesizer.maya_synthesizer import MayaSynthesizer
-from voiceai.synthesizer.openai_synthesizer import OPENAISynthesizer
-from voiceai.synthesizer.pixa_synthesizer import PixaSynthesizer
-from voiceai.synthesizer.polly_synthesizer import PollySynthesizer
-from voiceai.synthesizer.rime_synthesizer import RimeSynthesizer
-from voiceai.synthesizer.sarvam_synthesizer import SarvamSynthesizer
-from voiceai.synthesizer.smallest_synthesizer import SmallestSynthesizer
+from voiceai.modules.voice.tts.providers.azure_synthesizer import AzureSynthesizer
+from voiceai.modules.voice.tts.providers.cartesia_synthesizer import CartesiaSynthesizer
+from voiceai.modules.voice.tts.providers.deepgram_synthesizer import DeepgramSynthesizer
+from voiceai.modules.voice.tts.providers.elevenlabs_synthesizer import ElevenlabsSynthesizer, ElevenlabsV3Synthesizer
+from voiceai.modules.voice.tts.providers.kalpa_synthesizer import KalpaSynthesizer
+from voiceai.modules.voice.tts.providers.maya_synthesizer import MayaSynthesizer
+from voiceai.modules.voice.tts.providers.openai_synthesizer import OPENAISynthesizer
+from voiceai.modules.voice.tts.providers.pixa_synthesizer import PixaSynthesizer
+from voiceai.modules.voice.tts.providers.polly_synthesizer import PollySynthesizer
+from voiceai.modules.voice.tts.providers.rime_synthesizer import RimeSynthesizer
+from voiceai.modules.voice.tts.providers.sarvam_synthesizer import SarvamSynthesizer
+from voiceai.modules.voice.tts.providers.smallest_synthesizer import SmallestSynthesizer
 
 __all__ = [
     "AzureSynthesizer",

@@ -18,25 +18,25 @@ from typing import Any, cast
 
 # §3.1 bridge import — transition error alias; retires when B13b owns run()'s attribution.
 from voiceai.exceptions import TranscriberError
-from voiceai.modules.voice.exceptions import ensure_label_known
-from voiceai.modules.voice.ports import TranscriptionPort
 
 # §3.1 bridge imports — retire with step B12c (the asr/** physical relocation).
 # Concrete module paths (not the `voiceai.transcriber` package surface) because the
 # legacy package has no `__all__` and mypy runs with `no_implicit_reexport` (the
 # spec-0002 A4 precedent).
-from voiceai.transcriber.assemblyai_transcriber import AssemblyAITranscriber
-from voiceai.transcriber.azure_transcriber import AzureTranscriber
-from voiceai.transcriber.deepgram_transcriber import DeepgramTranscriber
-from voiceai.transcriber.elevenlabs_transcriber import ElevenLabsTranscriber
-from voiceai.transcriber.gemini_transcriber import GeminiTranscriber
-from voiceai.transcriber.gladia_transcriber import GladiaTranscriber
-from voiceai.transcriber.google_transcriber import GoogleTranscriber
-from voiceai.transcriber.openai_transcriber import OpenAITranscriber
-from voiceai.transcriber.pixa_transcriber import PixaTranscriber
-from voiceai.transcriber.sarvam_transcriber import SarvamTranscriber
-from voiceai.transcriber.smallest_transcriber import SmallestTranscriber
-from voiceai.transcriber.soniox_transcriber import SonioxTranscriber
+from voiceai.modules.voice.asr.providers.assemblyai_transcriber import AssemblyAITranscriber
+from voiceai.modules.voice.asr.providers.azure_transcriber import AzureTranscriber
+from voiceai.modules.voice.asr.providers.deepgram.transcriber import DeepgramTranscriber
+from voiceai.modules.voice.asr.providers.elevenlabs_transcriber import ElevenLabsTranscriber
+from voiceai.modules.voice.asr.providers.gemini_transcriber import GeminiTranscriber
+from voiceai.modules.voice.asr.providers.gladia_transcriber import GladiaTranscriber
+from voiceai.modules.voice.asr.providers.google_transcriber import GoogleTranscriber
+from voiceai.modules.voice.asr.providers.openai_transcriber import OpenAITranscriber
+from voiceai.modules.voice.asr.providers.pixa_transcriber import PixaTranscriber
+from voiceai.modules.voice.asr.providers.sarvam_transcriber import SarvamTranscriber
+from voiceai.modules.voice.asr.providers.smallest_transcriber import SmallestTranscriber
+from voiceai.modules.voice.asr.providers.soniox_transcriber import SonioxTranscriber
+from voiceai.modules.voice.exceptions import ensure_label_known
+from voiceai.modules.voice.ports import TranscriptionPort
 
 __all__ = [
     "AssemblyAITranscriber",

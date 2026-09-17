@@ -4,13 +4,21 @@ A judge seeing only the current turn rejects a lone "no" every time, so a caller
 language can never accumulate evidence and the agent cannot self-correct unless they name a
 language out loud. RECENT TURNS supplies that state, carrying each turn's duration so
 acknowledgment mis-tags stay non-evidence.
+
+Ported at spec 0004 B9b: the pure evidence readers are driven through the
+`LanguageSwitchCoordinator` staticmethods (identity bindings of the moved
+``voiceai.modules.voice.session.language.lid_gate`` functions) and the watcher through the
+coordinator seam, with the real ignore-input predicate bound from its B7 home; no TaskManager
+delegator is pinned. Assertions unchanged.
 """
 
+from functools import partial
 from unittest.mock import MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers.language_switcher import LanguageSwitcher
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
+from voiceai.modules.voice.session.lifecycle import hangup as _hangup
 from voiceai.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT, LANGUAGE_SWITCH_TURN_PROMPT
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
@@ -23,11 +31,11 @@ def _pool(events=None, segments=None):
 
 
 def _recent(pool, limit=4):
-    return TaskManager._TaskManager__recent_detected_turns(pool, limit)
+    return LanguageSwitchCoordinator.recent_detected_turns(pool, limit)
 
 
 def _evidence(pool, active):
-    return TaskManager._TaskManager__buffered_language_evidence(pool, active)
+    return LanguageSwitchCoordinator.buffered_language_evidence(pool, active)
 
 
 def _foreign(pool, active):
@@ -181,11 +189,7 @@ def test_unreadable_segments_api_never_skips_and_never_raises():
     assert _evidence(pool, "hi") == (False, [], 0.0)
 
 
-async def test_watcher_skips_the_decide_when_buffer_is_all_active_language(monkeypatch):
-    # When buffered_lang already equals the active language the judge can only answer "stay",
-    # so the decide latency and lock hold buy nothing.
-    import asyncio
-
+def _watcher_tm(*, active, segments, buffered_lang):
     from unittest.mock import AsyncMock
 
     tm = MagicMock()
@@ -193,19 +197,27 @@ async def test_watcher_skips_the_decide_when_buffer_is_all_active_language(monke
     tm.hangup_triggered = False
     tm._end_call_in_progress = False
     tm.has_transfer = False
-    tm.language = "en"
+    tm.language = active
     tm.handle_language_switch = AsyncMock()
     pool = MagicMock(spec=TranscriberPool)
     pool.lid_buffer_age.return_value = 5.0  # well past both thresholds
-    pool.lid_buffer_language.return_value = "en"
-    pool.lid_buffer_segments.return_value = [{"lang": "en"}, {"lang": "en"}]
+    pool.lid_buffer_language.return_value = buffered_lang
+    pool.lid_buffer_segments.return_value = segments
     pool.lid_buffer_event.return_value = None
     tm.tools = {"transcriber": pool}
-    tm._should_ignore_transcriber_input = TaskManager._should_ignore_transcriber_input.__get__(tm, TaskManager)
-    tm._TaskManager__buffered_language_evidence = TaskManager._TaskManager__buffered_language_evidence
-    watcher = TaskManager._TaskManager__lid_idle_watcher.__get__(tm, TaskManager)
+    tm._should_ignore_transcriber_input = partial(_hangup.should_ignore_transcriber_input, tm)
+    tm._TaskManager__buffered_language_evidence = lid_gate.buffered_language_evidence
+    return tm
 
-    task = asyncio.create_task(watcher())
+
+async def test_watcher_skips_the_decide_when_buffer_is_all_active_language(monkeypatch):
+    # When buffered_lang already equals the active language the judge can only answer "stay",
+    # so the decide latency and lock hold buy nothing.
+    import asyncio
+
+    tm = _watcher_tm(active="en", segments=[{"lang": "en"}, {"lang": "en"}], buffered_lang="en")
+
+    task = asyncio.create_task(LanguageSwitchCoordinator(tm).lid_idle_watcher())
     await asyncio.sleep(0.25)
     task.cancel()
     tm.handle_language_switch.assert_not_awaited()  # no judge call for a foregone "stay"
@@ -214,26 +226,10 @@ async def test_watcher_skips_the_decide_when_buffer_is_all_active_language(monke
 async def test_watcher_still_fires_when_a_foreign_tag_is_present(monkeypatch):
     import asyncio
 
-    from unittest.mock import AsyncMock
+    # latest is active… but 'en' earlier — foreign evidence anywhere must reach the judge
+    tm = _watcher_tm(active="hi", segments=[{"lang": "en"}, {"lang": "hi"}], buffered_lang="hi")
 
-    tm = MagicMock()
-    tm.conversation_ended = False
-    tm.hangup_triggered = False
-    tm._end_call_in_progress = False
-    tm.has_transfer = False
-    tm.language = "hi"
-    tm.handle_language_switch = AsyncMock()
-    pool = MagicMock(spec=TranscriberPool)
-    pool.lid_buffer_age.return_value = 5.0
-    pool.lid_buffer_language.return_value = "hi"  # latest is active…
-    pool.lid_buffer_segments.return_value = [{"lang": "en"}, {"lang": "hi"}]  # …but 'en' earlier
-    pool.lid_buffer_event.return_value = None
-    tm.tools = {"transcriber": pool}
-    tm._should_ignore_transcriber_input = TaskManager._should_ignore_transcriber_input.__get__(tm, TaskManager)
-    tm._TaskManager__buffered_language_evidence = TaskManager._TaskManager__buffered_language_evidence
-    watcher = TaskManager._TaskManager__lid_idle_watcher.__get__(tm, TaskManager)
-
-    task = asyncio.create_task(watcher())
+    task = asyncio.create_task(LanguageSwitchCoordinator(tm).lid_idle_watcher())
     await asyncio.sleep(0.25)
     task.cancel()
-    tm.handle_language_switch.assert_awaited()  # foreign evidence anywhere must reach the judge
+    tm.handle_language_switch.assert_awaited()

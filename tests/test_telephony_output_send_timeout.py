@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-import voiceai.output_handlers.telephony as telephony_module
+import voiceai.modules.voice.io.output.telephony as telephony_module  # B12a lookup site (R3)
 from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 from voiceai.output_handlers.telephony_providers.exotel import ExotelOutputHandler
 from voiceai.output_handlers.telephony_providers.plivo import PlivoOutputHandler

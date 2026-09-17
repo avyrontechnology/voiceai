@@ -7,13 +7,17 @@ detector transliteration against an absence.
 Pin: the language directive is installed whether or not a per-language prompt variant and a
 context_note exist, otherwise tool-driven switches strip it and agents without multilingual
 variants never get one, and the main LLM drifts languages mid-call.
+
+Ported at spec 0004 B9b: the directive pair is driven at its new home
+(``voiceai.modules.voice.session.language.switcher``) — the coordinator seam's own functions —
+and the session double's mangled helper dispatch is bound from the same moved body, so no
+TaskManager delegator is pinned. Assertions unchanged.
 """
 
 from unittest.mock import MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers.language_switcher import LIVE_UNAVAILABLE_MARKER, LanguageSwitcher
+from voiceai.modules.voice.session.language import switcher as _switcher
 from voiceai.prompts import LANGUAGE_SWITCH_SYSTEM_PROMPT
 
 
@@ -71,8 +75,8 @@ def test_system_prompt_covers_reverse_transliteration():
 
 # ---- always-on language pin ----
 
-APPLY = TaskManager._TaskManager__apply_language_directive
-DIRECTIVE = TaskManager._TaskManager__language_directive
+APPLY = _switcher.apply_language_directive
+DIRECTIVE = _switcher.language_directive
 
 
 def _tm(base="## Agent Prompt:\n\nBe helpful.\n\n## Transcript:\n", multilingual=None):

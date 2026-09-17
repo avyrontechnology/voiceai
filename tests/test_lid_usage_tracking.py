@@ -1,10 +1,18 @@
 """Per-call LID spend: judge tokens (Haiku) + detector audio seconds (Sarvam/Soniox),
-persisted as one `lid_usage` record inside lid_detection_events (JSONB — no new columns)."""
+persisted as one `lid_usage` record inside lid_detection_events (JSONB — no new columns).
+
+Ported at spec 0004 B9b: the snapshot/usage recorders are driven through the
+`LanguageSwitchCoordinator` seam over the moved bodies
+(``voiceai.modules.voice.session.language.lid_gate``); the internal
+``record_lid_usage`` dispatch is bound onto the session double from the same moved
+function, so no TaskManager delegator is pinned. Assertions unchanged."""
 
 import json
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 MOD = "voiceai.helpers.language_switcher"
@@ -123,14 +131,14 @@ def make_tm(events=None, seconds=63.0, switcher=True):
         }
     else:
         tm.language_switcher = None
-    tm._TaskManager__record_lid_usage = TaskManager._TaskManager__record_lid_usage.__get__(tm, TaskManager)
-    tm._TaskManager__snapshot_lid_events = TaskManager._TaskManager__snapshot_lid_events.__get__(tm, TaskManager)
-    return tm, pool
+    # snapshot_lid_events dispatches record_lid_usage through the session's mangled name.
+    tm._TaskManager__record_lid_usage = partial(lid_gate.record_lid_usage, tm)
+    return LanguageSwitchCoordinator(tm), pool
 
 
 def test_snapshot_appends_one_usage_record():
-    tm, pool = make_tm()
-    events = tm._TaskManager__snapshot_lid_events()
+    co, pool = make_tm()
+    events = co.snapshot_lid_events()
     usage = [e for e in events if e.get("type") == "lid_usage"]
     assert len(usage) == 1
     assert usage[0]["judge_input_tokens"] == 11000
@@ -141,13 +149,13 @@ def test_snapshot_appends_one_usage_record():
 
 
 def test_snapshot_is_idempotent():
-    tm, pool = make_tm()
-    tm._TaskManager__snapshot_lid_events()
-    events = tm._TaskManager__snapshot_lid_events()
+    co, pool = make_tm()
+    co.snapshot_lid_events()
+    events = co.snapshot_lid_events()
     assert len([e for e in events if e.get("type") == "lid_usage"]) == 1
 
 
 def test_no_switcher_no_audio_writes_nothing():
-    tm, pool = make_tm(seconds=None, switcher=False)
-    events = tm._TaskManager__snapshot_lid_events()
+    co, pool = make_tm(seconds=None, switcher=False)
+    events = co.snapshot_lid_events()
     assert [e for e in events if e.get("type") == "lid_usage"] == []

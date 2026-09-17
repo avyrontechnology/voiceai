@@ -1,13 +1,22 @@
-"""Handoff clips pre-rendered per language in the call's wire format."""
+"""Handoff clips pre-rendered per language in the call's wire format.
+
+Ported at spec 0004 B9b: the handoff bodies are driven through the `LanguageSwitchCoordinator`
+seam at their new home (``voiceai.modules.voice.session.language.handoff``); the process-wide
+``HANDOFF_CLIP_CACHE`` is imported from that home (the same dict object ``task_manager.py``
+re-binds by identity), and the session double's mangled dispatch is bound from the same moved
+functions. Assertions unchanged."""
 
 import base64
 import io
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydub import AudioSegment
 
-from voiceai.agent_manager.task_manager import HANDOFF_CLIP_CACHE, TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import handoff as _handoff
+from voiceai.modules.voice.session.language.handoff import HANDOFF_CLIP_CACHE
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 
 
@@ -25,7 +34,7 @@ def _wav_bytes(duration_ms=100, rate=16000):
 
 
 def _to_mulaw(synth, audio):
-    return TaskManager._TaskManager__handoff_clip_convert.__get__(MagicMock(), TaskManager)(synth, audio, True)
+    return _handoff.handoff_clip_convert(MagicMock(), synth, audio, True)
 
 
 def test_clip_from_wav_bytes():
@@ -70,14 +79,18 @@ def _tm(cache=None):
     tm.run_id = "run"
     tm._synthesize = AsyncMock()
     # Bind the real text builder so the handoff text is a str, not a MagicMock.
-    tm._TaskManager__handoff_text_for = TaskManager._TaskManager__handoff_text_for.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_text_for = partial(_handoff.handoff_text_for, tm)
     # Bind the real wire helper so the provider drives mulaw-vs-pcm, not a truthy MagicMock.
-    tm._TaskManager__handoff_mulaw_wire = TaskManager._TaskManager__handoff_mulaw_wire.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_mulaw_wire = partial(_handoff.handoff_mulaw_wire, tm)
     return tm
 
 
 async def _play(tm, target="te"):
-    await TaskManager._TaskManager__play_switch_handoff.__get__(tm, TaskManager)(target)
+    await LanguageSwitchCoordinator(tm).play_switch_handoff(target)
+
+
+async def _prewarm(tm):
+    await LanguageSwitchCoordinator(tm).prewarm_handoff_clips()
 
 
 async def test_prewarmed_clip_pushed_directly():
@@ -122,9 +135,9 @@ async def test_prewarm_renders_all_labels_and_survives_failure():
     pool.active_label = "hi"
     pool.synthesizers = {"hi": synth_for("hi", fail=True), "te": synth_for("te")}
     tm.tools["synthesizer"] = pool
-    tm._TaskManager__handoff_clip_convert = TaskManager._TaskManager__handoff_clip_convert.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_clip_convert = partial(_handoff.handoff_clip_convert, tm)
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     assert set(order) == {"te", "hi"}  # all labels rendered (concurrently)
     assert "te" in tm.handoff_audio_cache  # hi failed, te still cached
@@ -163,7 +176,7 @@ async def test_prewarm_prefers_native_mulaw_one_shot():
     pool.synthesizers = {"te": synth}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     assert tm.handoff_audio_cache["te"] == native  # cached untouched
     synth.synthesize.assert_not_awaited()  # MP3 path never used
@@ -180,13 +193,13 @@ async def test_clips_cached_across_calls_per_voice_and_text():
     pool.active_label = "hi"
     pool.synthesizers = {"te": synth}
     tm1.tools["synthesizer"] = pool
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm1, TaskManager)()
+    await _prewarm(tm1)
     assert synth.synthesize_telephony_clip.await_count == 1
 
     tm2 = _tm()  # next call, same agent config
     tm2.switch_handoff_messages = {"te": "Telugu {language}."}
     tm2.tools["synthesizer"] = pool
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm2, TaskManager)()
+    await _prewarm(tm2)
     assert synth.synthesize_telephony_clip.await_count == 1  # cache hit, no re-render
     assert tm2.handoff_audio_cache["te"] == b"\x7f" * 800
 
@@ -215,14 +228,14 @@ async def test_prewarm_renders_pcm_for_non_mulaw_wire():
 
     fallback = MagicMock(spec=["synthesize"])  # no pcm one-shot → synthesize() + audio_to_pcm
     fallback.synthesize = AsyncMock(return_value=_wav_bytes(rate=16000))
-    tm._TaskManager__handoff_clip_convert = TaskManager._TaskManager__handoff_clip_convert.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_clip_convert = partial(_handoff.handoff_clip_convert, tm)
 
     pool = MagicMock(spec=SynthesizerPool)
     pool.active_label = "hi"
     pool.synthesizers = {"te": native, "hi": fallback}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     native.synthesize_pcm_clip.assert_awaited_once()
     native.synthesize.assert_not_awaited()
@@ -242,7 +255,7 @@ async def test_prewarm_discards_error_sentinel_micro_clips():
     pool.synthesizers = {"te": synth}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     assert "te" not in tm.handoff_audio_cache  # falls back to live synth at play time
 
@@ -260,13 +273,13 @@ async def test_clip_cache_keys_are_wire_specific():
     tm_tel = _tm()
     tm_tel.switch_handoff_messages = {"te": "Telugu {language}."}
     tm_tel.tools["synthesizer"] = pool
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm_tel, TaskManager)()
+    await _prewarm(tm_tel)
 
     tm_web = _tm()
     tm_web.tools["output"].get_provider = MagicMock(return_value="freeswitch")
     tm_web.switch_handoff_messages = {"te": "Telugu {language}."}
     tm_web.tools["synthesizer"] = pool
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm_web, TaskManager)()
+    await _prewarm(tm_web)
 
     assert tm_tel.handoff_audio_cache["te"] == b"\x7f" * 800
     assert tm_web.handoff_audio_cache["te"] == b"\x00\x01" * 2400
@@ -294,14 +307,14 @@ async def test_one_shot_sentinel_falls_back_to_synthesize():
     synth = MagicMock(spec=["synthesize", "synthesize_telephony_clip"])
     synth.synthesize_telephony_clip = AsyncMock(return_value=b"\x00")  # deepgram-style sentinel
     synth.synthesize = AsyncMock(return_value=_wav_bytes(duration_ms=200))
-    tm._TaskManager__handoff_clip_convert = TaskManager._TaskManager__handoff_clip_convert.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_clip_convert = partial(_handoff.handoff_clip_convert, tm)
 
     pool = MagicMock(spec=SynthesizerPool)
     pool.active_label = "hi"
     pool.synthesizers = {"te": synth}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     synth.synthesize.assert_awaited_once()
     assert len(tm.handoff_audio_cache["te"]) == 1600  # 0.2s @ 8kHz mu-law
@@ -315,14 +328,14 @@ async def test_short_fallback_clip_still_discarded():
 
     synth = MagicMock(spec=["synthesize"])
     synth.synthesize = AsyncMock(return_value=_wav_bytes(duration_ms=10))  # 80 bytes mu-law
-    tm._TaskManager__handoff_clip_convert = TaskManager._TaskManager__handoff_clip_convert.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_clip_convert = partial(_handoff.handoff_clip_convert, tm)
 
     pool = MagicMock(spec=SynthesizerPool)
     pool.active_label = "hi"
     pool.synthesizers = {"te": synth}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     assert "te" not in tm.handoff_audio_cache
 
@@ -336,14 +349,14 @@ async def test_mulaw_stream_synth_still_prewarms_on_pcm_wire():
     synth = MagicMock(spec=["synthesize", "use_mulaw"])
     synth.use_mulaw = True  # hardcoded by the provider, ignores the kwarg
     synth.synthesize = AsyncMock(return_value=_wav_bytes(duration_ms=200, rate=32000))
-    tm._TaskManager__handoff_clip_convert = TaskManager._TaskManager__handoff_clip_convert.__get__(tm, TaskManager)
+    tm._TaskManager__handoff_clip_convert = partial(_handoff.handoff_clip_convert, tm)
 
     pool = MagicMock(spec=SynthesizerPool)
     pool.active_label = "hi"
     pool.synthesizers = {"te": synth}
     tm.tools["synthesizer"] = pool
 
-    await TaskManager._TaskManager__prewarm_handoff_clips.__get__(tm, TaskManager)()
+    await _prewarm(tm)
 
     # 0.2s PCM@24k = 9600 bytes (resampler may round a sample)
     assert abs(len(tm.handoff_audio_cache["te"]) - 9600) <= 8
@@ -354,7 +367,7 @@ def test_handoff_mulaw_wire_tracks_output_handler_registry():
     from voiceai.providers import SUPPORTED_OUTPUT_TELEPHONY_HANDLERS
 
     tm = _tm()
-    wire = TaskManager._TaskManager__handoff_mulaw_wire.__get__(tm, TaskManager)
+    wire = LanguageSwitchCoordinator(tm).handoff_mulaw_wire
     for provider in SUPPORTED_OUTPUT_TELEPHONY_HANDLERS:
         tm.tools["output"].get_provider = MagicMock(return_value=provider)
         assert wire() is True, provider

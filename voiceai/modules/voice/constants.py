@@ -54,6 +54,14 @@ CATEGORY_BACKCHANNELING: Final[str] = "backchanneling"
 #: the layer contract bans importing `voiceai.constants` from module code.
 CATEGORY_IS_USER_ONLINE: Final[str] = "is_user_online_message"
 
+#: Message categories that never count as graph-node responses (moved from
+#: `voiceai.agent_manager.task_manager._NON_NODE_RESPONSE_CATEGORIES` with B11c;
+#: the output loop's graph-agent guard reads it — rule 1b, the B9a
+#: HANDOFF_CLIP_CACHE precedent).
+NON_NODE_RESPONSE_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {"is_user_online_message", "filler", "backchanneling", "agent_welcome_message", "handoff"}
+)
+
 # --- Mark event metadata keys (the mark ledger's per-mark dict, preserved verbatim) -----
 TEXT_SYNTHESIZED_KEY: Final[str] = "text_synthesized"
 IS_FIRST_CHUNK_KEY: Final[str] = "is_first_chunk"

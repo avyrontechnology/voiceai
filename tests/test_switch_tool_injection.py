@@ -5,14 +5,20 @@ alongside it makes the main LLM a second, competing switcher deciding from main-
 mis-scripts foreign speech exactly when switching matters, and races the judge into unexplained
 "Already speaking in X" tool responses. The injection method is legacy machinery, so these tests
 pin the call-site gate by exercising the same predicate and injection pair the constructor runs.
+
+Ported at spec 0004 B9b: the rollout predicate is driven through the `LanguageSwitchCoordinator`
+seam (`language_switch_enabled` at its new home). `__inject_switch_language_tool` itself did NOT
+move (a setup-region member, it stays in ``task_manager.py`` until B13a — the B9a deviation 3
+list), so its pin stays TaskManager-bound here on purpose.
 """
 
 from unittest.mock import MagicMock
 
 from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
-ENABLED = TaskManager._TaskManager__language_switch_enabled
+# Legacy injection machinery: not moved at B9 (B13a owns the setup regions).
 INJECT = TaskManager._TaskManager__inject_switch_language_tool
 
 
@@ -31,7 +37,7 @@ def _constructor_gate(tm):
     # Mirrors the __init__ call site: inject when the flow is OFF, or when the judge
     # exists but resolved no credentials (dead judge → legacy tool fallback).
     judge_dead = tm.language_switcher is not None and not getattr(tm.language_switcher, "has_credentials", True)
-    if not ENABLED(tm) or judge_dead:
+    if not LanguageSwitchCoordinator(tm).language_switch_enabled() or judge_dead:
         INJECT(tm)
 
 

@@ -4,13 +4,21 @@ Firing during an utterance slices it across two decides, so while callee_speakin
 flush defers. Past LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S of buffer age the flag is treated as
 stale, since the detector hears the same audio and produced nothing for that long, and the flush
 fires anyway, so a wedged final can never starve the safety net.
+
+Ported at spec 0004 B9b: the watcher runs through the `LanguageSwitchCoordinator` seam over the
+moved body (``voiceai.modules.voice.session.language.lid_gate.lid_idle_watcher``); the real
+ignore-input predicate is bound from ITS new home
+(``voiceai.modules.voice.session.lifecycle.hangup``, moved at B7) and the real evidence reader
+from the lid_gate module, so no TaskManager delegator is pinned. Assertions unchanged.
 """
 
 import asyncio
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
+from voiceai.modules.voice.session.lifecycle import hangup as _hangup
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 
@@ -32,14 +40,13 @@ def _tm(*, buffer_age, speaking, buffered_lang="hi", active="mr", segments=None)
     pool.lid_buffer_segments.return_value = segments or [{"lang": buffered_lang, "prob": 0.9, "audio_s": 1.2}]
     tm.tools = {"transcriber": pool}
 
-    tm._should_ignore_transcriber_input = TaskManager._should_ignore_transcriber_input.__get__(tm, TaskManager)
-    tm._TaskManager__lid_idle_watcher = TaskManager._TaskManager__lid_idle_watcher.__get__(tm, TaskManager)
-    tm._TaskManager__buffered_language_evidence = TaskManager._TaskManager__buffered_language_evidence
+    tm._should_ignore_transcriber_input = partial(_hangup.should_ignore_transcriber_input, tm)
+    tm._TaskManager__buffered_language_evidence = lid_gate.buffered_language_evidence
     return tm
 
 
 async def _run_watcher_for(tm, seconds):
-    task = asyncio.create_task(tm._TaskManager__lid_idle_watcher())
+    task = asyncio.create_task(LanguageSwitchCoordinator(tm).lid_idle_watcher())
     await asyncio.sleep(seconds)
     task.cancel()
     try:
@@ -71,7 +78,7 @@ async def test_stale_speaking_flag_cannot_starve_the_flush():
 
 async def test_suppression_resumes_firing_when_speech_ends():
     tm = _tm(buffer_age=1.5, speaking=True)
-    task = asyncio.create_task(tm._TaskManager__lid_idle_watcher())
+    task = asyncio.create_task(LanguageSwitchCoordinator(tm).lid_idle_watcher())
     await asyncio.sleep(0.5)
     assert not tm.handle_language_switch.await_count  # deferred while speaking
     tm.interruption_manager.callee_speaking = False  # final transcript landed... or VAD closed

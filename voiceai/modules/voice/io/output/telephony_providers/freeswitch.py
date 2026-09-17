@@ -1,0 +1,264 @@
+"""FreeSWITCH telephony output handler (spec 0004, B12a)."""
+
+
+import asyncio
+import base64
+import json
+import os
+import time
+import uuid
+from typing import Any
+
+from voiceai.common.logger import get_logger
+from voiceai.modules.voice.adapters.io_runtime import wav_bytes_to_pcm
+from voiceai.modules.voice.constants import MODULE_NAME
+from voiceai.modules.voice.io.output.default import DefaultOutputHandler
+
+logger = get_logger(MODULE_NAME)
+
+# A single large streamAudio frame (e.g. a ~90KB cached welcome → ~120KB WS frame) drops the
+# mod_audio_stream connection (libwsc, code 1006). Split PCM into small frames; the module's
+# playout buffer reassembles them, so no pacing is needed. Even byte count keeps L16 samples intact.
+STREAM_CHUNK_BYTES = 8192
+
+
+class FreeSwitchOutputHandler(DefaultOutputHandler):
+    """Streams TTS to the patched mod_audio_stream, which injects it into the call:
+      audio  → {"type":"streamAudio","data":{"audioDataType":"raw","sampleRate":R,"audioData":b64}}
+      barge-in → {"type":"killAudio"}   (flushes the module's playout buffer)
+    mod_audio_stream does NOT echo playback marks (like Asterisk), so playback-completion is
+    simulated by audio duration and fed back via input_handler.process_mark_message."""
+
+    def __init__(self, *args: Any, sampling_rate: Any=24000, input_handler: Any=None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.io_provider = "freeswitch"
+        self.sampling_rate = sampling_rate
+        self.input_handler = input_handler
+        self.bytes_per_second = self.sampling_rate * 2  # mono L16
+        self._response_bytes = 0
+        self._response_first_send = None
+        self._pending_marks = []
+        self._finish_task = None
+        self._finish_marks = []
+        self.stream_sid = None
+        # in-band marks (Twilio semantics): final mark's echo ends the turn (+settle); estimator stays as fallback
+        self.playback_settle_s = float(os.getenv("WEBCALL_PLAYBACK_SETTLE_S", "0.15"))
+        # once echoes are confirmed, the estimator gets this grace so the real echo wins the race
+        self.estimator_grace_s = float(os.getenv("WEBCALL_ESTIMATOR_GRACE_S", "1.5"))
+        self._final_mark_id = None
+        self.marks_echoed = False  # first echo = module supports marks (observability)
+        if input_handler is not None:
+            input_handler.on_mark_played = self.on_mark_played
+        # REAL playback-complete via mod_audio_stream's playoutDone is available (see
+        # on_playout_done_event) but DISABLED: it finishes the turn at buffer-drain, which is
+        # marginally before the caller's downstream jitter/browser buffer stops playing, risking
+        # an early turn-end/tail clip. Turn-end uses the byte-count estimator (below) — proven,
+        # and interruption does not depend on this. Re-enable by wiring on_playout_done here.
+
+    def on_mark_played(self, name: Any) -> None:
+        """Playhead crossed this mark (registry ack already done); the final mark's echo is real playback-complete."""
+        if self._closed:
+            return
+        self.marks_echoed = True
+        if name in self._pending_marks:
+            self._pending_marks.remove(name)
+        if name in self._finish_marks:
+            self._finish_marks.remove(name)
+        if self._final_mark_id is not None and name == self._final_mark_id:
+            self._final_mark_id = None
+            if self._finish_task and not self._finish_task.done():
+                self._finish_task.cancel()  # real playback clock supersedes the estimator
+            self._finish_task = asyncio.create_task(
+                self._complete_after_playout(self.playback_settle_s, list(self._finish_marks))
+            )
+
+    def on_playout_done_event(self) -> None:
+        """Finish the response when the playout buffer truly drains."""
+        # AVAILABLE, currently unwired (see __init__). Finish the response the instant the
+        # module's playout buffer truly drains, instead of the estimated timer.
+        if self._closed:
+            return
+        if not self._finish_marks:
+            return  # mid-response chunk gap or nothing awaiting completion — estimator owns it
+        if self._finish_task and not self._finish_task.done():
+            self._finish_task.cancel()
+        marks, self._finish_marks = self._finish_marks, []
+        self._final_mark_id = None  # same stale-echo guard as the estimator path
+        for mark_id in marks:
+            if self.input_handler:
+                self.input_handler.process_mark_message({"type": "mark", "name": mark_id})
+        if self.input_handler and self.input_handler.is_audio_being_played_to_user():
+            self.input_handler.update_is_audio_being_played(False)
+
+    async def set_stream_sid(self, stream_id: Any) -> None:
+        """Stamp the stream SID."""
+        # the first-message/welcome path calls this (telephony handlers track a stream_sid);
+        # freeswitch's stream is the ws itself, so just store it for parity.
+        self.stream_sid = stream_id
+
+    def get_stream_sid(self) -> Any:
+        """Return the stream SID."""
+        return self.stream_sid
+
+    @staticmethod
+    def is_closed_socket_error(e: Any) -> bool:
+        """Whether an error is a closed-socket error."""
+        # starlette raises a bare RuntimeError('Cannot call "send" once a close message has
+        # been sent.') — builtins module, text has "close" not "closed"/"disconnect".
+        text = str(e).lower()
+        return "websocket" in type(e).__module__ or "close" in text or "disconnect" in text
+
+    def mark_closed(self) -> None:
+        """Latch closed AND release turn-taking state — if the socket dies on the final chunk
+        the playout self-ack never runs, and task_manager blocks on is_audio_being_played."""
+        self._closed = True
+        if self._finish_task and not self._finish_task.done():
+            self._finish_task.cancel()
+        self._pending_marks = []
+        self._finish_marks = []
+        self._final_mark_id = None
+        self._response_bytes = 0
+        self._response_first_send = None
+        if self.input_handler and self.input_handler.is_audio_being_played_to_user():
+            self.input_handler.update_is_audio_being_played(False)
+
+    async def handle_interruption(self) -> None:
+        """Interrupt playback and reset the handler for barge-in."""
+        if self._closed:
+            return
+        try:
+            await self.websocket.send_text(json.dumps({"type": "killAudio"}))
+        except Exception as e:
+            logger.info(f"freeswitch: ws closed during interruption: {e}")
+            self._closed = True
+        if self._finish_task and not self._finish_task.done():
+            self._finish_task.cancel()
+        self._pending_marks = []
+        self._finish_marks = []
+        self._final_mark_id = None
+        self._response_bytes = 0
+        self._response_first_send = None
+        if self.mark_event_meta_data:
+            self.mark_event_meta_data.clear_data()
+
+    async def send_init_acknowledgement(self) -> None:
+        """Acknowledge handler initialization."""
+        return  # FreeSWITCH stream sends no init; nothing to ack
+
+    async def _complete_after_playout(self, remaining: Any, marks: Any) -> None:
+        try:
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            if self.marks_echoed:
+                logger.warning("freeswitch: estimator watchdog fired despite mark echoes (echo lost?)")
+            self._finish_marks = []  # estimator finishing — a later playoutDone must not re-ack
+            self._final_mark_id = None  # a late final echo must not match into the next response
+            for mark_id in marks:
+                if self.input_handler:
+                    self.input_handler.process_mark_message({"type": "mark", "name": mark_id})
+            # turn-taking reads this state; without clearing it the agent looks like
+            # it's still speaking and user turns get delayed (mirrors sip_trunk)
+            if self.input_handler and self.input_handler.is_audio_being_played_to_user():
+                self.input_handler.update_is_audio_being_played(False)
+        except asyncio.CancelledError:
+            pass  # interrupted → playout aborted
+
+    async def handle(self, packet: Any) -> None:
+        """Handle one inbound frame or outbound packet."""
+        if self._closed:
+            return
+        try:
+            meta_info = packet.get("meta_info") or {}
+            audio = packet.get("data") if meta_info.get("type") == "audio" else None
+            # finality can also arrive on a no-audio packet — don't drop it (mirrors sip_trunk)
+            is_final = bool(
+                (meta_info.get("end_of_llm_stream") and meta_info.get("end_of_synthesizer_stream"))
+                or meta_info.get("is_final_chunk_of_entire_response")
+                or (meta_info.get("sequence_id") == -1 and meta_info.get("end_of_llm_stream"))
+            )
+            has_audio = audio and len(audio) > 1 and audio != b"\x00\x00"
+            if not has_audio and not is_final:
+                return
+
+            # some synths (e.g. elevenlabs mp3 path) deliver WAV-with-header chunks; the fork
+            # protocol is raw L16, so strip the container or the header plays as a click.
+            if has_audio and audio[:4] == b"RIFF":
+                audio = wav_bytes_to_pcm(audio)
+
+            if has_audio:
+                if self._response_first_send is None:
+                    self._response_first_send = time.time()
+                self._response_bytes += len(audio)
+
+                if meta_info.get("message_category") == "agent_welcome_message" and not self.welcome_message_sent_ts:
+                    self.welcome_message_sent_ts = time.time() * 1000
+
+                frames = 0
+                for i in range(0, len(audio), STREAM_CHUNK_BYTES):
+                    chunk = audio[i : i + STREAM_CHUNK_BYTES]
+                    b64 = base64.b64encode(chunk).decode("utf-8")
+                    await self.websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "streamAudio",
+                                "data": {"audioDataType": "raw", "sampleRate": self.sampling_rate, "audioData": b64},
+                            }
+                        )
+                    )
+                    frames += 1
+                logger.info(
+                    f"freeswitch out: streamAudio pcm={len(audio)}B in {frames} frames "
+                    f"cat={meta_info.get('message_category')} seq={meta_info.get('sequence_id')} final={is_final}"
+                )
+
+            # register the chunk's mark for playback-completion bookkeeping
+            mark_id = meta_info.get("mark_id") or str(uuid.uuid4())
+            if self.mark_event_meta_data:
+                self.mark_event_meta_data.update_data(
+                    mark_id,
+                    {
+                        "text_synthesized": ""
+                        if meta_info.get("sequence_id") == -1
+                        else meta_info.get("text_synthesized", ""),
+                        "type": meta_info.get("message_category", ""),
+                        "is_first_chunk": meta_info.get("is_first_chunk", False),
+                        "is_final_chunk": is_final,
+                        "sequence_id": meta_info.get("sequence_id"),
+                        # turn mapping fields (same contract as telephony.py) — without turn_id,
+                        # sync_history can't map acked marks to a turn and skips barge-in trims
+                        "turn_id": meta_info.get("turn_id"),
+                        "response_uid": meta_info.get("response_uid"),
+                        "response_group_uid": meta_info.get("response_group_uid"),
+                        "duration": (len(audio) / self.bytes_per_second) if has_audio else 0.0,
+                        "sent_ts": time.time(),
+                    },
+                )
+            self._pending_marks.append(mark_id)
+            # in-band mark after the chunk's frames (ordered WS); an unpatched module ignores the type
+            await self.websocket.send_text(json.dumps({"type": "mark", "name": mark_id}))
+
+            # on the final chunk, arm completion: final-mark echo wins, estimated timer is the fallback
+            if is_final:
+                self._final_mark_id = mark_id
+                total_dur = self._response_bytes / self.bytes_per_second
+                # a no-audio final (e.g. language-switch handoff) has no first-send ts
+                first_send = self._response_first_send if self._response_first_send is not None else time.time()
+                remaining = (first_send + total_dur) - time.time()
+                # bare `remaining` is a LOWER bound on real playback end (startup + jitter land
+                # later), so an ungraced estimator always beats the echo and the settle never
+                # applies. With echoes confirmed, demote the estimator to a watchdog.
+                if self.marks_echoed:
+                    remaining = max(remaining, 0) + self.estimator_grace_s
+                marks, self._pending_marks = self._pending_marks, []
+                self._response_bytes = 0
+                self._response_first_send = None
+                self._finish_marks = list(marks)
+                self._finish_task = asyncio.create_task(self._complete_after_playout(remaining, marks))
+        except Exception as e:
+            # only a dead websocket should silence the handler permanently; anything else
+            # (e.g. a bad chunk) must be loud and must not kill the rest of the call's audio.
+            if self.is_closed_socket_error(e):
+                logger.info(f"freeswitch ws send failed (client disconnected): {e}")
+                self.mark_closed()
+            else:
+                logger.error(f"freeswitch handle error (audio chunk dropped): {e}", exc_info=True)

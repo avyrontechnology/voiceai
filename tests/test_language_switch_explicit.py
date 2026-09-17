@@ -1,5 +1,8 @@
 """Explicit-only judge mode (per-agent toggle): switches only on an explicit
-request/selection/confirmation; speaking another language alone never switches."""
+request/selection/confirmation; speaking another language alone never switches.
+
+Ported at spec 0004 B9b: the decision-core half runs through the `LanguageSwitchCoordinator`
+seam over the moved ``run_language_switch``; assertions unchanged."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -153,9 +156,16 @@ async def test_canonical_yes_to_two_options_is_ambiguous_stay():
     assert result["request_status"] == "ambiguous"
 
 
-# ── task_manager: explicit mode bypasses detection gates, keeps structural ones ───
+# ── the decision core: explicit mode bypasses detection gates, keeps structural ones ───
+# Ported at spec 0004 B9b: driven through the LanguageSwitchCoordinator seam over the moved
+# run_language_switch (voiceai.modules.voice.session.language.switcher); the session double's
+# mangled dispatch is bound from the same moved bodies (the B9a fixture pattern).
 
-from voiceai.agent_manager.task_manager import TaskManager
+from functools import partial
+
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
+from voiceai.modules.voice.session.language import switcher as _switcher
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
@@ -194,16 +204,15 @@ def make_tm(monkeypatch, decision, explicit_only=True, synth_labels=("en", "hi")
     tm.conversation_history = MagicMock()
     tm.conversation_history.replace_last_user.return_value = True
     tm.conversation_history.last_assistant_content.return_value = "Would you like Hindi?"
-    for name in ("switch_audio_gap_s", "switch_settle_ms", "switch_decide_timeout_s", "record_lid_event"):
-        attr = f"_TaskManager__{name}"
-        setattr(tm, attr, getattr(TaskManager, attr).__get__(tm, TaskManager))
-    tm._TaskManager__detector_corroborates = TaskManager._TaskManager__detector_corroborates
+    for name in ("switch_audio_gap_s", "switch_settle_ms", "switch_decide_timeout_s"):
+        setattr(tm, f"_TaskManager__{name}", partial(getattr(_switcher, name), tm))
+    tm._TaskManager__record_lid_event = partial(lid_gate.record_lid_event, tm)
+    tm._TaskManager__detector_corroborates = lid_gate.detector_corroborates
     return tm
 
 
 async def run_switch(tm):
-    run = TaskManager._TaskManager__run_language_switch.__get__(tm, TaskManager)
-    return await run("Hindi.", {"sequence_id": 1}, "en")
+    return await LanguageSwitchCoordinator(tm).run_language_switch("Hindi.", {"sequence_id": 1}, "en")
 
 
 def outcomes(tm):

@@ -1,20 +1,10 @@
-from dotenv import load_dotenv
-from voiceai.helpers.logger_config import configure_logger
-from voiceai.output_handlers.telephony_providers.twilio import TwilioOutputHandler
+# legacy-shim(spec-0004): this handler lives in voiceai.modules.voice.io.output.telephony_providers.talko (step B12a).
+"""Pure re-export of `voiceai.modules.voice.io.output.telephony_providers.talko` (spec 0004, step B12a).
 
-logger = configure_logger(__name__)
-load_dotenv()
+The objects are IDENTICAL to the new home's (never copies), so isinstance dispatch,
+registry entries and every direct importer keep resolving. Deleted at cutover, never grown.
+"""
 
+from voiceai.modules.voice.io.output.telephony_providers.talko import TalkoOutputHandler as TalkoOutputHandler
 
-class TalkoOutputHandler(TwilioOutputHandler):
-    """Talko (Tata Tele via talko-service) output handler.
-
-    Emits Twilio-shaped ``media``/``mark``/``clear`` frames which Talko's
-    relay translates onto the Tata stream (mark names preserved verbatim
-    so playout-ack tracking keeps working).
-    """
-
-    def __init__(self, websocket=None, mark_event_meta_data=None, log_dir_name=None):
-        super().__init__(websocket, mark_event_meta_data, log_dir_name)
-        self.io_provider = "talko"
-        self.is_chunking_supported = True
+__all__ = ["TalkoOutputHandler"]

@@ -6,7 +6,6 @@ raises (fire-and-forget) when the webhook endpoint fails.
 """
 
 import asyncio
-import inspect
 import json
 import types
 from types import SimpleNamespace
@@ -357,10 +356,13 @@ def _make_transfer_self(tool_conf):
 
 
 async def _drive_transfer(me):
+    # B11a lookup sites: __execute_function_call's globals now live in the
+    # function_calls module (R3) — the fire_pre_call_webhook patches above stay
+    # at the task_manager path because that method stays in tm.
     with (
-        patch("voiceai.agent_manager.task_manager.asyncio.sleep", new=AsyncMock()),
-        patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
-        patch("voiceai.agent_manager.task_manager.create_ws_data_packet"),
+        patch("voiceai.modules.voice.session.turn.function_calls.asyncio.sleep", new=AsyncMock()),
+        patch("voiceai.modules.voice.session.turn.function_calls.convert_to_request_log"),
+        patch("voiceai.modules.voice.session.turn.function_calls.create_ws_data_packet"),
     ):
         await TaskManager._TaskManager__execute_function_call(
             me,
@@ -405,13 +407,23 @@ async def test_transfer_call_skips_pre_call_webhook_when_no_url():
     me.fire_pre_call_webhook.assert_not_called()
 
 
-def test_transfer_branch_fires_before_transfer_post():
-    """Source guard: the transfer_call branch must call fire_pre_call_webhook before it
-    hands off to the webhook POST, so the webhook genuinely precedes the transfer."""
-    src = inspect.getsource(TaskManager._TaskManager__execute_function_call)
-    transfer_idx = src.index('if called_fun.startswith("transfer_call")')
-    fire_idx = src.index("fire_pre_call_webhook", transfer_idx)
-    handoff_idx = src.index("_execute_transfer_call_webhook", transfer_idx)
-    assert transfer_idx < fire_idx < handoff_idx, "pre-call webhook must fire before the transfer POST"
-    # The POST now lives in the extracted helper.
-    assert "session.post" in inspect.getsource(TaskManager._execute_transfer_call_webhook)
+async def test_transfer_branch_fires_before_transfer_post():
+    """Behavior guard (spec 0004, B11a): the transfer_call branch fires the pre-call
+    webhook BEFORE handing off to the webhook POST — driven through the real moved
+    bodies, asserting CONCRETE call order instead of a source-text scan."""
+    order = []
+    me = _make_transfer_self(
+        {"pre_call_webhook_url": "https://hook.example/notify", "pre_call_webhook_param": {"note": "x"}}
+    )
+    me.fire_pre_call_webhook = MagicMock(side_effect=lambda *a, **k: order.append("webhook"))
+
+    real_transfer = me._execute_transfer_call_webhook
+
+    async def _ordered_transfer(*args, **kwargs):
+        order.append("post")
+        return await real_transfer(*args, **kwargs)
+
+    me._execute_transfer_call_webhook = _ordered_transfer
+    await _drive_transfer(me)
+    assert order[0] == "webhook", "pre-call webhook must fire before the transfer POST"
+    assert "post" in order

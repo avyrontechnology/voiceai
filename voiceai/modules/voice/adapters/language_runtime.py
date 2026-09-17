@@ -41,8 +41,8 @@ from voiceai.helpers.utils import audio_to_pcm as _legacy_audio_to_pcm
 from voiceai.helpers.utils import convert_to_request_log as _legacy_convert_to_request_log
 from voiceai.helpers.utils import create_ws_data_packet as _legacy_create_ws_data_packet
 from voiceai.helpers.utils import update_prompt_with_context as _legacy_update_prompt_with_context
-from voiceai.synthesizer.synthesizer_pool import SynthesizerPool as _LegacySynthesizerPool
-from voiceai.transcriber.transcriber_pool import TranscriberPool as _LegacyTranscriberPool
+from voiceai.modules.voice.asr.pool import TranscriberPool as _LegacyTranscriberPool
+from voiceai.modules.voice.tts.pool import SynthesizerPool as _LegacySynthesizerPool
 
 __all__ = [
     "LANGUAGE_NAMES",

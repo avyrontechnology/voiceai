@@ -3,13 +3,22 @@
 The gate lives in __process_output_loop, which every call type runs, so the escapes matter more
 than the hold: each one is checked inside the predicate because the loop's WAIT branch has no exit
 of its own — it keeps the dequeued message and re-polls, so anything behind it waits too.
+
+Ported at spec 0004 B9b: the gate trio, the mismatch probe and the spawner are driven through the
+`LanguageSwitchCoordinator` seam over the moved bodies
+(``voiceai.modules.voice.session.language.{lid_gate,switcher}``); the session double's mangled
+dispatch is bound from the same moved functions. The one deliberate TaskManager reference left is
+the CLASS-LEVEL ``lid_playback_gate is None`` pin — a normative behavior-invariant on the class
+itself (not a delegator), kept until the endgame rename spec. Assertions unchanged.
 """
 
 import asyncio
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate
+from voiceai.modules.voice.session.language import switcher as _switcher
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
@@ -29,22 +38,21 @@ def _tm(language="hi"):
     tm.conversation_ended = False
     tm._should_ignore_transcriber_input = MagicMock(return_value=False)
     tm.lid_playback_gate = None
-    tm._TaskManager__buffered_language_evidence = TaskManager._TaskManager__buffered_language_evidence
-    for name in ("arm_lid_playback_gate", "lid_playback_gate_holds", "release_lid_playback_gate"):
-        attr = f"_TaskManager__{name}"
-        setattr(tm, attr, getattr(TaskManager, attr).__get__(tm, TaskManager))
-    for name in ("record_lid_event", "switch_settle_ms", "switch_decide_timeout_s"):
-        attr = f"_TaskManager__{name}"
-        setattr(tm, attr, getattr(TaskManager, attr).__get__(tm, TaskManager))
+    # Internal mangled dispatch, bound from the moved bodies (the B9a fixture pattern).
+    tm._TaskManager__buffered_language_evidence = lid_gate.buffered_language_evidence
+    for name in ("arm_lid_playback_gate", "lid_playback_gate_holds", "release_lid_playback_gate", "record_lid_event"):
+        setattr(tm, f"_TaskManager__{name}", partial(getattr(lid_gate, name), tm))
+    for name in ("switch_settle_ms", "switch_decide_timeout_s"):
+        setattr(tm, f"_TaskManager__{name}", partial(getattr(_switcher, name), tm))
     return tm
 
 
 def _arm(tm, sequence_id, task):
-    tm._TaskManager__arm_lid_playback_gate(sequence_id, task)
+    LanguageSwitchCoordinator(tm).arm_lid_playback_gate(sequence_id, task)
 
 
 def _holds(tm, sequence_id):
-    return tm._TaskManager__lid_playback_gate_holds(sequence_id)
+    return LanguageSwitchCoordinator(tm).lid_playback_gate_holds(sequence_id)
 
 
 async def test_gate_holds_while_the_decision_is_open_and_opens_when_it_resolves():
@@ -195,11 +203,15 @@ async def test_teardown_release_is_recorded_as_teardown():
 def test_default_gate_is_a_class_attribute():
     # __process_output_loop reads this on EVERY call; if it were only set in some conditional
     # __init__ branch the shared loop would raise AttributeError and the loop would exit for good.
+    # Deliberately still a TaskManager pin (the class attribute, NOT a delegator): the checklist
+    # entry says the default lives at class level, and B9a's coordinator property only forwards.
+    from voiceai.agent_manager.task_manager import TaskManager
+
     assert TaskManager.lid_playback_gate is None
 
 
 def _mismatch(tm):
-    return TaskManager._TaskManager__detector_language_mismatch.__get__(tm, TaskManager)()
+    return LanguageSwitchCoordinator(tm).detector_language_mismatch()
 
 
 def test_detector_mismatch_gate():
@@ -251,12 +263,9 @@ async def test_spawn_arms_the_gate_so_the_eager_path_is_covered():
     synth.labels = ["hi", "te"]
     tm.tools = {"transcriber": pool, "synthesizer": synth}
     tm.handle_language_switch = AsyncMock()
-    tm._TaskManager__detector_language_mismatch = TaskManager._TaskManager__detector_language_mismatch.__get__(
-        tm, TaskManager
-    )
-    spawn = TaskManager._spawn_language_switch_decision.__get__(tm, TaskManager)
+    tm._TaskManager__detector_language_mismatch = partial(lid_gate.detector_language_mismatch, tm)
 
-    task = spawn("mala samajla nahi", {"sequence_id": 11})
+    task = LanguageSwitchCoordinator(tm).spawn_language_switch_decision("mala samajla nahi", {"sequence_id": 11})
     try:
         assert task is not None
         assert tm.lid_playback_gate is not None
@@ -274,11 +283,8 @@ async def test_spawn_does_not_arm_when_the_detector_agrees():
     pool.labels = ["hi", "te"]
     tm.tools = {"transcriber": pool}
     tm.handle_language_switch = AsyncMock()
-    tm._TaskManager__detector_language_mismatch = TaskManager._TaskManager__detector_language_mismatch.__get__(
-        tm, TaskManager
-    )
-    spawn = TaskManager._spawn_language_switch_decision.__get__(tm, TaskManager)
-    task = spawn("haan ji", {"sequence_id": 12})
+    tm._TaskManager__detector_language_mismatch = partial(lid_gate.detector_language_mismatch, tm)
+    task = LanguageSwitchCoordinator(tm).spawn_language_switch_decision("haan ji", {"sequence_id": 12})
     try:
         assert tm.lid_playback_gate is None  # no mismatch → no reason to delay audio
     finally:

@@ -1,38 +1,10 @@
-from voiceai.input_handlers.telephony import TelephonyInputHandler
-from dotenv import load_dotenv
-from voiceai.helpers.logger_config import configure_logger
+# legacy-shim(spec-0004): this handler lives in voiceai.modules.voice.io.input.telephony_providers.exotel (step B12a).
+"""Pure re-export of `voiceai.modules.voice.io.input.telephony_providers.exotel` (spec 0004, step B12a).
 
-logger = configure_logger(__name__)
-load_dotenv()
+The objects are IDENTICAL to the new home's (never copies), so isinstance dispatch,
+registry entries and every direct importer keep resolving. Deleted at cutover, never grown.
+"""
 
+from voiceai.modules.voice.io.input.telephony_providers.exotel import ExotelInputHandler as ExotelInputHandler
 
-class ExotelInputHandler(TelephonyInputHandler):
-    def __init__(
-        self,
-        queues,
-        websocket=None,
-        input_types=None,
-        mark_event_meta_data=None,
-        turn_based_conversation=False,
-        is_welcome_message_played=False,
-        observable_variables=None,
-    ):
-        super().__init__(
-            queues,
-            websocket,
-            input_types,
-            mark_event_meta_data,
-            turn_based_conversation,
-            is_welcome_message_played=is_welcome_message_played,
-            observable_variables=observable_variables,
-        )
-        self.io_provider = "exotel"
-
-    async def call_start(self, packet):
-        start = packet["start"]
-        self.call_sid = start["call_sid"]
-        self.stream_sid = start["stream_sid"]
-
-    def get_mark_event_meta_data_obj(self, packet):
-        mark_id = packet["mark"]["name"]
-        return self.mark_event_meta_data.fetch_data(mark_id)
+__all__ = ["ExotelInputHandler"]

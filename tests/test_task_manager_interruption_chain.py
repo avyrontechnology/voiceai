@@ -8,8 +8,8 @@ task_manager layer:
 """
 
 import asyncio
-import inspect
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -171,28 +171,49 @@ class TestCleanupDownstream:
 
 
 class TestCallSites:
-    """Source-level guards: catches accidental re-introduction of the
-    barge-in invalidation we deliberately removed."""
+    """Behavior guards (spec 0004, B10): the getsource pins are retired — these drive
+    the REAL moved bodies at the coordinator seam and assert CONCRETE call order."""
 
-    def test_sync_history_does_not_invalidate(self):
-        from voiceai.agent_manager.task_manager import TaskManager
+    async def test_sync_history_sets_the_hint_instead_of_dropping_the_chain(self):
+        from voiceai.modules.voice.session.turn import history_sync
 
-        src = inspect.getsource(TaskManager.sync_history)
-        assert "_invalidate_response_chain" not in src, (
-            "sync_history must use _set_interruption_hint instead of dropping the chain"
+        llm = MagicMock()
+        llm.set_interruption_hint = MagicMock()
+        llm.invalidate_response_chain = MagicMock()
+        stub = SimpleNamespace(
+            tools={
+                "input": SimpleNamespace(
+                    get_response_heard_for_response=MagicMock(return_value="hello world"),
+                    get_response_heard_for_turn=MagicMock(return_value=""),
+                    response_heard_by_user="",
+                    last_heard_turn_id=None,
+                    last_heard_response_uid=None,
+                ),
+                "llm_agent": SimpleNamespace(llm=llm),
+            },
+            conversation_history=MagicMock(messages=[]),
+            mark_event_meta_data=SimpleNamespace(
+                get_heard_text_for_response=MagicMock(return_value=""),
+                get_heard_text_for_turn=MagicMock(return_value=""),
+            ),
+            _turn_msg_map={},
         )
-        assert "_set_interruption_hint" in src
+        await history_sync.sync_history(stub, [], 1.0)
+        llm.set_interruption_hint.assert_called_once_with("hello world")
+        llm.invalidate_response_chain.assert_not_called()
 
-    def test_handle_transcriber_output_does_not_invalidate(self):
+    async def test_barge_in_cleanup_cancels_without_dropping_the_chain(self):
+        tm = _make_task_manager()
+        await tm._TaskManager__cleanup_downstream_tasks()
+        tm.tools["llm_agent"].llm.cancel_in_flight_response.assert_called_once_with()
+        tm.tools["llm_agent"].llm.invalidate_response_chain.assert_not_called()
+
+    async def test_cleanup_downstream_routes_through_the_new_home(self, monkeypatch):
         from voiceai.agent_manager.task_manager import TaskManager
+        from voiceai.modules.voice.session.turn import history_sync
 
-        src = inspect.getsource(TaskManager._handle_transcriber_output)
-        assert "_invalidate_response_chain" not in src, (
-            "_handle_transcriber_output must not drop the chain; sync_history already set the hint"
-        )
-
-    def test_cleanup_downstream_cancels_in_flight(self):
-        from voiceai.agent_manager.task_manager import TaskManager
-
-        src = inspect.getsource(TaskManager._TaskManager__cleanup_downstream_tasks)
-        assert "_cancel_in_flight_llm_response" in src
+        moved = AsyncMock(return_value=None)
+        monkeypatch.setattr(history_sync, "cleanup_downstream_tasks", moved)
+        tm = TaskManager.__new__(TaskManager)
+        await tm._TaskManager__cleanup_downstream_tasks()
+        moved.assert_awaited_once_with(tm)
