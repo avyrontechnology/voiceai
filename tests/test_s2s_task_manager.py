@@ -3,11 +3,22 @@
 Covers the parts that only exist once a provider is wired into TaskManager: audio
 transcoding between the carrier leg and the model, tool dispatch, barge-in draining
 and DTMF forwarding.
+
+B5 (spec 0004): the S2S bodies moved verbatim to
+``voiceai.modules.voice.session.s2s_runner``; TaskManager keeps same-named thin
+delegators, so every ``patch.object(TaskManager, ...)`` and every ``tm._s2s_*``
+attribute in the ``__new__`` harness below is unchanged. What DID move is the lookup
+site of the bodies' module globals: string patches for ``convert_to_request_log`` and
+``trigger_api`` now target the runner module (R3 — a stale path would fail loudly,
+the socket guard sees to the trigger_api one). The runner logs through the
+``otobaai`` family, whose root does not propagate once an app has been built, so the
+caplog test re-enables propagation for its own duration.
 """
 
 import asyncio
 import audioop
 import json
+import logging
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,6 +37,9 @@ def _silence_pcm(samples=480):
 
 
 def make_tm(*, io_provider="plivo", web=False, turn_based=False, in_rate=24000, out_rate=24000, tools_params=None):
+    # B5: this attr list is unchanged by the runner extraction ON PURPOSE — the moved
+    # bodies keep reading and writing every `_s2s_*` field on the session (this
+    # instance), which is exactly what lets a __new__ harness keep seeding them here.
     tm = TaskManager.__new__(TaskManager)
     tm.task_id = 0
     tm.run_id = "exec-123"
@@ -475,7 +489,7 @@ class TestUsageAttribution:
     """Billing reads usage_source to know whether it can trust the token counts."""
 
     async def _finish(self, tm, usage):
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log") as log:
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log") as log:
             await tm._s2s_finish_turn(s2s_events.ResponseDone(transcript="hi", usage=usage))
         return log.call_args
 
@@ -551,7 +565,12 @@ class TestBackgroundTaskLifecycle:
         for t in running:
             t.cancel()
 
-    async def test_a_failing_tool_task_is_logged_not_swallowed(self, caplog):
+    async def test_a_failing_tool_task_is_logged_not_swallowed(self, caplog, monkeypatch):
+        # B5: the runner logs through the `otobaai` family. configure_logging() (run by
+        # any earlier app-building test in the same process) sets its root
+        # propagate=False, which would hide the record from caplog's root handler —
+        # re-enable propagation for this test so capture is order-independent.
+        monkeypatch.setattr(logging.getLogger("otobaai"), "propagate", True)
         tm = make_tm()
 
         async def boom(event):
@@ -574,7 +593,7 @@ class TestHangupAndFillerParity:
         tm = make_tm()
         tm.call_hangup_message_config = "Thanks for calling Acme, goodbye."
         tm.language = "en"
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="end_call", call_id="c1", arguments="{}"))
 
         sent = tm.tools["s2s"].send_function_result.await_args.args[2]
@@ -584,7 +603,7 @@ class TestHangupAndFillerParity:
         tm = make_tm()
         tm.call_hangup_message_config = None
         tm.language = "en"
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="end_call", call_id="c1", arguments="{}"))
 
         assert "brief goodbye" in tm.tools["s2s"].send_function_result.await_args.args[2]
@@ -596,9 +615,9 @@ class TestHangupAndFillerParity:
         tm._start_api_call_detail = MagicMock(return_value={})
         tm._finalize_api_call_detail = MagicMock()
         with (
-            patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
+            patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"),
             patch(
-                "voiceai.agent_manager.task_manager.trigger_api",
+                "voiceai.modules.voice.session.s2s_runner.trigger_api",
                 new=AsyncMock(return_value={"body": "{}", "status_code": 200}),
             ),
         ):
@@ -611,7 +630,7 @@ class TestHangupAndFillerParity:
         tm = make_tm()
         tm.call_hangup_message_config = None
         tm.language = "en"
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="end_call", call_id="c1", arguments="{}"))
 
         # The goodbye is the response; a filler would talk over it.
@@ -718,7 +737,7 @@ class TestUserOnlinePrompt:
 class TestToolDispatch:
     async def test_end_call_defers_hangup_until_the_goodbye_finishes(self):
         tm = make_tm()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="end_call", call_id="c1", arguments="{}"))
 
         # The model still has to speak its goodbye, so the hangup waits for response.done.
@@ -738,7 +757,7 @@ class TestToolDispatch:
             armed_at_commit["value"] = tm._s2s_hangup_after_response
 
         tm.tools["s2s"].commit_function_results = AsyncMock(side_effect=record_state)
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="end_call", call_id="c1", arguments="{}"))
 
         assert armed_at_commit["value"] is False
@@ -748,7 +767,7 @@ class TestToolDispatch:
         tm = make_tm()
         tm._s2s_hangup_after_response = True
         tm.process_call_hangup = AsyncMock()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_finish_turn(s2s_events.ResponseDone(transcript="bye", usage=None))
 
         tm.process_call_hangup.assert_awaited_once()
@@ -757,7 +776,7 @@ class TestToolDispatch:
 
     async def test_turn_end_emits_the_stream_sentinel(self):
         tm = make_tm()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_finish_turn(s2s_events.ResponseDone(transcript="hi", usage=None))
 
         message = tm.buffered_output_queue.get_nowait()
@@ -767,7 +786,7 @@ class TestToolDispatch:
     async def test_transfer_call_reuses_the_shared_webhook_path(self):
         tm = make_tm(tools_params={"transfer_call": {"url": "https://hook.example/transfer"}})
         tm._execute_transfer_call_webhook = AsyncMock()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(
                 s2s_events.FunctionCall(name="transfer_call", call_id="c1", arguments='{"call_transfer_number":"+1"}')
             )
@@ -780,7 +799,7 @@ class TestToolDispatch:
         # the model's arguments.
         tm = make_tm(tools_params={"transfer_call": {"url": None, "param": {"call_transfer_number": "+15550001"}}})
         tm._execute_transfer_call_webhook = AsyncMock()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(
                 s2s_events.FunctionCall(name="transfer_call", call_id="c1", arguments='{"reason":"wants a human"}')
             )
@@ -793,7 +812,7 @@ class TestToolDispatch:
         tm = make_tm(tools_params={"transfer_call": {"url": "https://hook.example/transfer"}})
         tm.has_transfer = True
         tm._execute_transfer_call_webhook = AsyncMock()
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="transfer_call", call_id="c1", arguments="{}"))
 
         tm._execute_transfer_call_webhook.assert_not_awaited()
@@ -804,9 +823,9 @@ class TestToolDispatch:
         tm._start_api_call_detail = MagicMock(return_value={})
         tm._finalize_api_call_detail = MagicMock()
         with (
-            patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
+            patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"),
             patch(
-                "voiceai.agent_manager.task_manager.trigger_api",
+                "voiceai.modules.voice.session.s2s_runner.trigger_api",
                 new=AsyncMock(return_value={"body": '{"ok":1}', "status_code": 200}),
             ) as api,
         ):
@@ -827,9 +846,9 @@ class TestToolDispatch:
         tm._start_api_call_detail = MagicMock(return_value={})
         tm._finalize_api_call_detail = MagicMock()
         with (
-            patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
+            patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"),
             patch(
-                "voiceai.agent_manager.task_manager.trigger_api",
+                "voiceai.modules.voice.session.s2s_runner.trigger_api",
                 new=AsyncMock(return_value={"body": "{}", "status_code": 200}),
             ) as api,
         ):
@@ -839,7 +858,7 @@ class TestToolDispatch:
 
     async def test_unconfigured_tool_reports_an_error_instead_of_raising(self):
         tm = make_tm(tools_params={})
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="ghost", call_id="c1", arguments="{}"))
 
         assert json.loads(tm.tools["s2s"].send_function_result.await_args.args[2])["status"] == "error"
@@ -849,8 +868,8 @@ class TestToolDispatch:
         tm._start_api_call_detail = MagicMock(return_value={})
         tm._finalize_api_call_detail = MagicMock()
         with (
-            patch("voiceai.agent_manager.task_manager.convert_to_request_log"),
-            patch("voiceai.agent_manager.task_manager.trigger_api", new=AsyncMock(side_effect=RuntimeError("down"))),
+            patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"),
+            patch("voiceai.modules.voice.session.s2s_runner.trigger_api", new=AsyncMock(side_effect=RuntimeError("down"))),
         ):
             await tm._s2s_execute_tool(s2s_events.FunctionCall(name="book", call_id="c1", arguments="{}"))
 
@@ -892,7 +911,7 @@ class TestUsageReporting:
         tm = make_tm()
         tm.on_turn_usage = AsyncMock()
         usage = s2s_events.S2SUsage(input_tokens=11, output_tokens=22, cached_tokens=3)
-        with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
             await tm._s2s_finish_turn(s2s_events.ResponseDone(transcript="x", usage=usage))
         await asyncio.gather(*tm._s2s_tool_tasks, return_exceptions=True)
 

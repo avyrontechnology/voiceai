@@ -1,7 +1,8 @@
 """S2S adapter: the §3.1 factory over the speech-to-speech registry (spec 0004, B3).
 
-This file is a §3.1 bridge (rule 1): one of the only voice files permitted to import the
-legacy speech-to-speech stack. The class set mirrors ``voiceai/providers.py`` verbatim;
+This file is a §3.1 bridge (rule 1); since step B5 moved the s2s package into
+`voiceai.modules.voice.s2s`, its only remaining legacy import is the transition
+error alias. The class set mirrors ``voiceai/providers.py`` verbatim;
 the ``SUPPORTED_S2S_PROVIDERS`` map lives in `voiceai.modules.voice.registry` (the
 preserved legacy star surface), which imports the classes from HERE — the factory
 resolves the registry at call time, so the two modules never form an import cycle.
@@ -21,8 +22,10 @@ from voiceai.exceptions import VoiceAIComponentError
 from voiceai.modules.voice.exceptions import ensure_label_known
 from voiceai.modules.voice.ports import S2SPort
 
-# §3.1 bridge imports — retire with step B5 (the s2s package move).
-from voiceai.s2s import GeminiLiveS2S, OpenAIRealtimeS2S
+# B5 retired the §3.1 bridge import here: the s2s package moved to
+# voiceai.modules.voice.s2s, and voiceai/s2s/* became legacy shims over it.
+from voiceai.modules.voice.s2s.providers.gemini_live import GeminiLiveS2S
+from voiceai.modules.voice.s2s.providers.openai_realtime import OpenAIRealtimeS2S
 
 __all__ = [
     "GeminiLiveS2S",

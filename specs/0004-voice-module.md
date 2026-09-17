@@ -413,6 +413,65 @@ is unchanged, and the per-output INFO log moved to the otobaai.voice logger (rul
 content and PII quirk preserved with a TODO). make sec clean; make cov 98.53%
 (≥ 85%).)
 
+B5: check=green; test-all=7/2355/2362 (net-new: 0; reconciliation:
+tests/test_s2s_task_manager.py rewritten in place 1↔1 — all 62 test functions (71
+collected nodes) re-land under their unchanged node IDs. Its only functional edits:
+the R3 patch-path repoints for the two lookups whose site moved into the runner
+module (17× convert_to_request_log, 4× trigger_api →
+`voiceai.modules.voice.session.s2s_runner.*`), and an order-independence guard on
+the one caplog test (otobaai propagate=True for its duration — the runner logs
+through the otobaai family per rule 3, whose root stops propagating once
+configure_logging has run); the `__new__`-harness attr list is UNCHANGED by design
+(all `_s2s_*` state stays on the session instance) and now says so in a comment.
+Additive: +15 arch tests in tests/arch/modules/voice/session/test_s2s_runner.py
+(the B3 test_static_methods precedent): shim identity for every voiceai/s2s path,
+a delegator-per-moved-name pin + a session-injection pin on TaskManager, runner
+lookup-site pins, sequence_id=-1 meta pins, format/welcome-gate/playout/encode
+behavior at the new home, and the moved base turn-clock + usage-split contracts.
+The moves, all proven AST-identical bodies (docstring re-indent aside) against
+HEAD during the step: Region U — the tm "Speech-to-speech conversation" banner,
+currently tm 7643-8327 after the B3/B4 shrink (the step's 7895-8576 was the
+original file's numbering) and holding 25 methods, not the estimated 20 — →
+session/s2s_runner.py as module-level functions taking the session as their first
+parameter (kept named `self` so bodies stay verbatim; tm injects itself on every
+delegation, §3.1 bridge 3) behind the typed `S2SSession` facade Protocol; tm keeps
+a same-named thin delegator per method, so patch.object/`__new__`/self-dispatch
+all keep resolving, and `_s2s_await_stream_sid` (tm:1259, outside Region U) stays
+in tm untouched. voiceai/s2s/{__init__,events,base_s2s,openai_realtime_s2s,
+gemini_live_s2s}.py → voiceai/modules/voice/s2s/{__init__,events,base,
+providers/openai_realtime,providers/gemini_live}.py with all five old paths as
+`# legacy-shim(spec-0004)` identity re-exports (test_s2s_providers untouched and
+green; test_ports' base_s2s pin rides the shim). Deviations, made loud: TWO
+compile-time name-mangling accommodations inside otherwise-verbatim bodies —
+`self.__check_for_completion()` → `self._TaskManager__check_for_completion()`
+(_run_s2s_conversation) and `self.__is_s2s()` → `self._TaskManager__is_s2s()`
+(_hangup_after_goodbye) — required for correctness once the bodies left the
+TaskManager class body (the patched-delegator seam is what the hangup test pins,
+and it still intercepts); one NEW adapter file beyond B3's five,
+adapters/s2s_runtime.py (the B4 adapters/session.py precedent), carrying the light
+legacy values the runner and the moved Gemini provider bind (S2S timeouts,
+convert_to_request_log, trigger_api, compute_function_pre_call_message,
+calculate_audio_duration, pcm/ulaw transcoders, clean_gemini_schema);
+adapters/s2s.py received exactly its scheduled B5 edit (the "retire with step B5"
+bridge import now points at the new provider modules); base's abstract
+receive_events re-declared generator-shaped (plain `def`, the S2SPort spelling) —
+mypy rejects async-def-declared overrides of async generators, call sites
+unchanged; mechanical accommodations reported: PEP 604/builtin generics, `-> None`
+on the three `__init__`s, docstrings on public provider methods, `# noqa: S110` ×3
+on the verbatim best-effort socket closes and `# noqa: B904` on the verbatim
+connect-failure raise, otobaai loggers replacing configure_logger (log content
+preserved). Preserved quirks: sequence_id=-1 unconditional-send verbatim
+(meta + transcript packets, pinned twice), the os.getenv API-key fallbacks in
+_build_s2s_provider (rule-4 debt, TODO(spec-0004) in the runner docstring), the
+welcome-gate clock reset, and the b"\x00" end-of-stream sentinel. s2s_runner.py
+lands at 891 lines (> 800 target, < 1,500 cap): ~685 verbatim Region-U lines plus
+the S2SSession facade — flagged residual for the B14 line-count audit.
+task_manager.py: 8,913 → 8,322 lines, only the named edits (import block + region
+swap; do-not-reformat respected, run() untouched, goodbye-drain pin + A0 meta-test
+green). make sec clean; make cov dipped to 84.52% mid-step (the moved engine
+code's tests live in the legacy tree) and closes at 85.55% (≥ 85%) with the arch
+pins; the cov gate formally returns at B13a.)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
@@ -466,3 +525,12 @@ B12d and B14):
 - `voiceai/agent_manager/models.py` (B3) — pure re-export of `ComponentLatencies`,
   which lives in `voiceai.modules.voice.models`; task_manager's `from .models import
   ComponentLatencies` rides the shim unchanged.
+- `voiceai/s2s/__init__.py`, `voiceai/s2s/events.py`, `voiceai/s2s/base_s2s.py`,
+  `voiceai/s2s/openai_realtime_s2s.py`, `voiceai/s2s/gemini_live_s2s.py` (B5) —
+  pure identity re-exports of `voiceai.modules.voice.s2s` (package surface, the
+  event types, the base class incl. the reconnect constants, and each provider
+  module's public surface). Remaining importers: task_manager.py:64 (`s2s_events`
+  rides the events shim), tests/test_s2s_providers.py, tests/test_s2s_task_manager.py,
+  tests/arch/modules/voice/test_ports.py:77 (base_s2s), tests/manual/
+  s2s_audio_health.py (gemini_live_s2s), and the B5 identity pins in
+  tests/arch/modules/voice/session/test_s2s_runner.py.
