@@ -12,9 +12,10 @@ The step-B2 ports (`ActiveTranscriberProbePort`, `WelcomeStateSetterPort`,
 `SequenceGatePort`'s synthesizer seam) are proven on fakes AND, since B2 landed, on the
 legacy classes themselves (`TranscriberPool` probe members, the input handlers'
 `set_welcome_message_played`, `BaseSynthesizer`'s preferred `sequence_gate`). This
-file also carries the B0 module-def assertions (empty router, no-op register) and the
-skeleton behavior tests for `models`/`helpers`/`utils`/`exceptions`, since B0's test
-ownership is exactly this file (deviation noted in the step report).
+file also carries the B0 module-def assertions (empty router; register rewritten at B4
+from the no-op pin to the VoiceCallService binding) and the skeleton behavior tests for
+`models`/`helpers`/`utils`/`exceptions`, since B0's test ownership is exactly this file
+(deviation noted in the step report).
 """
 
 from __future__ import annotations
@@ -476,7 +477,7 @@ def test_graph_brain_fake_conforms_to_the_extension_port():
     assert graph._event_triggered_generation is False
 
 
-# --- Module definition: empty router + no-op register (the A1 precedent) ----------------
+# --- Module definition: empty router + the B4 service binding ---------------------------
 
 
 def test_module_is_a_frozen_module_def_named_voice():
@@ -498,14 +499,18 @@ def test_router_mounts_no_routes_yet():
     assert voice.MODULE.router.routes == []
 
 
-def test_register_is_a_noop_until_b13a():
-    """`register` binds nothing: a recording spy sees zero registration calls."""
-    calls: list[object] = []
+def test_register_binds_exactly_the_voice_call_service():
+    """B4 seam: `register` binds `VoiceCallService` and nothing else (B13a adds the rest).
+
+    Rewrite of the B0 no-op pin (`test_register_is_a_noop_until_b13a`), 1<->1: the
+    planned binding landed, so the pin flips the same way the B2 probe-surface pin did.
+    """
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     spy = SimpleNamespace(register=lambda *args, **kwargs: calls.append((args, kwargs)))
 
     voice.MODULE.register(cast("Container", spy))
 
-    assert calls == []
+    assert [args[0] for args, _kwargs in calls] == [voice.VoiceCallService]
 
 
 def test_public_surface_exports_the_ports():

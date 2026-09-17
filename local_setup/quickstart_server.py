@@ -7,11 +7,12 @@ import redis.asyncio as redis
 from dotenv import load_dotenv
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
-from voiceai.agent_manager.assistant_manager import AssistantManager
 from voiceai.common.constants import CONTAINER_KEY_REDIS
 from voiceai.core.container import Container
 from voiceai.modules.agents import AgentNotFoundError, AgentService
 from voiceai.modules.agents import register as register_agents_module
+from voiceai.modules.voice import VoiceCallService
+from voiceai.modules.voice import register as register_voice_module
 from voiceai.platform.auth import (
     Principal,
     get_store as auth_store,
@@ -67,6 +68,13 @@ _agents_container = Container()
 _agents_container.register(CONTAINER_KEY_REDIS, _AgentRedisSeam())
 register_agents_module(_agents_container)
 agent_service: AgentService = _agents_container.resolve(AgentService)
+
+# Spec 0004 (B4): the live-call WS handler below is a thin delegate into the voice
+# module, composed through the same module-init container seam as the agents CRUD
+# above (the A5 precedent). Resolving here keeps the legacy engine import at module
+# init, exactly where the old direct AssistantManager import loaded it.
+register_voice_module(_agents_container)
+voice_call_service: VoiceCallService = _agents_container.resolve(VoiceCallService)
 
 app = FastAPI()
 
@@ -356,45 +364,20 @@ async def websocket_endpoint(
                     )
                     io_config["provider"] = "default"
 
-    assistant_manager = AssistantManager(
-        agent_config, websocket, agent_id, is_web_based_call=is_web_leg
-    )
-
-    task_outputs = []
+    # Spec 0004 (B4): the run loop and the best-effort execution record moved verbatim
+    # into VoiceCallService.run_call (AssistantManager -> TaskManager delegation
+    # unchanged; the record fires before any exception re-raises). Socket lifecycle
+    # stays here: the service re-raises the run's exceptions after recording.
     try:
-        async for index, task_output in assistant_manager.run(local=True):
-            logger.info(task_output)
-            task_outputs.append(task_output)
+        await voice_call_service.run_call(
+            agent_config=agent_config,
+            ws=websocket,
+            agent_id=agent_id,
+            is_web_based_call=is_web_leg,
+            platform_store=getattr(app.state, "platform_store", None),
+        )
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
     except Exception as e:
         traceback.print_exc()
         logger.error(f"error in executing {e}")
-    finally:
-        # Best-effort execution log for the platform layer; never breaks the call path.
-        try:
-            from voiceai.platform.engine_hook import record_engine_execution
-
-            platform_store = getattr(app.state, "platform_store", None)
-            # Last conversation payload carries the transcript, true call timings,
-            # latency breakdown and hangup detail — without it every browser-leg
-            # row lands with an empty transcript and ~0s duration.
-            last_output = next(
-                (
-                    output
-                    for output in reversed(task_outputs)
-                    if isinstance(output, dict) and output.get("messages")
-                ),
-                None,
-            )
-            await record_engine_execution(
-                platform_store,
-                agent_id=agent_id,
-                run_id=getattr(assistant_manager, "run_id", None),
-                history=[],
-                task_outputs=task_outputs,
-                direction="inbound",
-                output=last_output,
-            )
-        except Exception as hook_error:
-            logger.warning(f"Execution logging skipped: {hook_error}")

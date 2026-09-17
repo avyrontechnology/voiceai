@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
 
+from voiceai.common.logger import get_logger
 from voiceai.modules import ModuleDef
 from voiceai.modules.voice.constants import MODULE_NAME
 from voiceai.modules.voice.errors import (
@@ -40,6 +41,7 @@ from voiceai.modules.voice.ports import (
     TranscriptionPort,
     WelcomeStateSetterPort,
 )
+from voiceai.modules.voice.service import VoiceCallService
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives at call time
     from voiceai.core.container import Container
@@ -51,14 +53,29 @@ router: APIRouter = APIRouter()
 
 
 def register(container: Container) -> None:
-    """Bind this module's providers into a container — a no-op until step B13a.
+    """Bind this module's providers into a container (AGENTS.md rule 9; spec 0004 B4).
 
-    B13a registers the adapters and the `AgentDefinitionPort` wiring here (AGENTS.md
-    rule 9); the scaffold keeps the `ModuleDef` shape honest without wiring anything.
+    B4 binds exactly `VoiceCallService` — the seam the quickstart WS handler resolves;
+    B13a adds the adapters and the `AgentDefinitionPort` wiring. The adapter import
+    lives inside the provider on purpose: building an app without ever resolving the
+    service (every arch controller test) must not drag the legacy engine stack in.
 
     Args:
-        container: The container being composed; deliberately untouched for now.
+        container: The container being composed, already carrying the core
+            infrastructure.
     """
+
+    def build_voice_call_service(_scope: Container) -> VoiceCallService:
+        """Build the call service over the legacy-bridging adapters (§3.1 bridge 1)."""
+        from voiceai.modules.voice.adapters.manager import build_assistant_manager, record_execution
+
+        return VoiceCallService(
+            manager_factory=build_assistant_manager,
+            execution_recorder=record_execution,
+            logger=get_logger(MODULE_NAME),
+        )
+
+    container.register(VoiceCallService, build_voice_call_service)
 
 
 MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router, register=register)
@@ -83,6 +100,7 @@ __all__ = [
     "TranscriptionPoolPort",
     "TranscriptionPort",
     "UnknownComponentLabelError",
+    "VoiceCallService",
     "VoiceComponentError",
     "VoiceError",
     "WelcomeStateSetterPort",

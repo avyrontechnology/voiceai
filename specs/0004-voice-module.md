@@ -372,6 +372,47 @@ annotations (mechanical rule-6 accommodation; bodies verbatim); registry.py's
 docstring avoids the literal shim tag so the shim-purity AST scan does not misread it.
 make sec clean; make cov 98.60% (≥ 85%).)
 
+B4: check=green; test-all=7/2340/2347 (net-new: 0; reconciliation: 1 test rewritten
+in place, 1↔1: tests/arch/modules/voice/test_ports.py's B0 pin
+test_register_is_a_noop_until_b13a flipped to
+test_register_binds_exactly_the_voice_call_service (the planned B4 binding landing —
+the B2 pin-flip precedent). Additive: +22 arch tests — +15 in
+tests/arch/modules/voice/session/test_config.py (CallConfig pinned FIRST against the
+B1 construction-matrix fixtures on concrete values, then field-for-field parity
+asserted against the REAL __init__ across simple/graph/kb/multiagent/s2s incl.
+reference identity of task sub-dicts) and +7 in
+tests/arch/modules/voice/test_service.py (run loop, newest-messages record selection,
+finally-record on run failure, recorder-failure swallow, getattr run_id tolerance,
+register singleton). The moves: tm Region A's pure parsing → session/config.py
+CallConfig (frozen dataclass; expressions verbatim incl. the completion-prompt
+suffix's interior whitespace, the raw end_call_primary and-chain value, the dead
+textual_chat_agent branch collapsed to its constant-False result with the same
+KeyError surface); __init__ consumes it assigning the SAME attribute names — kwargs
+mutations (welcome pops, api_tools/assistant_id/process_interim_results writes,
+end_call injections), task_id gates, env reads, both InterruptionManager
+constructions and all composition stay in tm; the quickstart WS run loop + finally
+record → service.py VoiceCallService.run_call (record fires before exceptions
+re-raise; socket lifecycle stays in the handler); quickstart composes the voice
+module on the A5 module-init container seam and resolves the service at module init,
+where the old direct AssistantManager import loaded the engine. The 9
+TaskManager.__new__ harness files ran individually: 108 passed. Deviations, made
+loud: two NEW adapter files beyond the named five — adapters/session.py (legacy
+constants/prompt/update_prompt_with_context for the parser, the B3 package-surface
+precedent) and adapters/manager.py (AssistantManager factory at module scope +
+record_execution with the hook import kept INSIDE the call so a broken platform
+still lands as "Execution logging skipped") — created instead of editing B3-owned
+adapter files; the service's dependency Protocols live in service.py, not unowned
+ports/; mechanical accommodations: placeholder-less f-prefix dropped (F541), the two
+identical kb/graph parse branches merged value-identically, the twin
+context-substitution blocks share one helper; behavior nuances: an exception in
+AssistantManager CONSTRUCTION now lands in the handler's generic except arm (it
+previously escaped uncaught from outside the handler's try; record still skipped
+either way), the record now fires before the disconnect arm's active_websockets
+removal (log order only), end_call_nodes parse unconditionally while tm's elif gate
+is unchanged, and the per-output INFO log moved to the otobaai.voice logger (rule 3;
+content and PII quirk preserved with a TODO). make sec clean; make cov 98.53%
+(≥ 85%).)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per

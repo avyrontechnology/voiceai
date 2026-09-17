@@ -137,6 +137,12 @@ from voiceai.modules.voice.static_methods import is_alphanumeric_readout as is_a
 from voiceai.modules.voice.static_methods import trailing_utterance_text as trailing_utterance_text
 from voiceai.modules.voice.static_methods import welcome_pcm_upsampled as welcome_pcm_upsampled
 
+# spec-0004 B4: Region A's pure parsing (original tm 280-942) lives in the voice module's
+# CallConfig; __init__ consumes it below while ASSIGNING THE SAME instance attribute
+# names, so the __new__ harnesses and the B1 construction matrix keep pinning the same
+# surface. Only the session package's __init__ public surface is imported (§3.1).
+from voiceai.modules.voice.session import CallConfig
+
 # Handoff clips are static per (voice, text): cache across calls so an N-language agent
 # doesn't pay N TTS renders per call, concurrent with the welcome message. Process-wide.
 HANDOFF_CLIP_CACHE: dict = {}
@@ -203,17 +209,26 @@ class TaskManager(BaseManager):
 
         self.task_config = task
 
-        self.timezone = pytz.timezone(DEFAULT_TIMEZONE)
-        self.language = DEFAULT_LANGUAGE_CODE
+        # spec-0004 B4: the parse runs over the RAW kwargs, before the welcome pops below;
+        # every kwargs mutation and task_id gate stays in this constructor.
+        call_config = CallConfig.parse(
+            task=task,
+            context_data=context_data,
+            kwargs=self.kwargs,
+            turn_based_conversation=turn_based_conversation,
+        )
+
+        self.timezone = call_config.timezone
+        self.language = call_config.language
         self.synthesizer_voice_id = None
         self.synthesizer_model = None
-        self.transfer_call_params = self.kwargs.get("transfer_call_params", None)
+        self.transfer_call_params = call_config.transfer_call_params
 
         if task["tools_config"].get("api_tools", None) is not None:
             self.kwargs["api_tools"] = task["tools_config"]["api_tools"]
 
         # Speech-to-speech agents carry no llm_agent/transcriber/synthesizer at all.
-        self.s2s_config = task["tools_config"].get("s2s")
+        self.s2s_config = call_config.s2s_config
 
         llm_agent_cfg = task["tools_config"].get("llm_agent") or {}
         # UI sends a flat SimpleLlmAgent ({model, provider, ...}); graph/multi agents nest it
@@ -230,9 +245,9 @@ class TaskManager(BaseManager):
         self.websocket = ws
         self.context_data = context_data
         self.turn_based_conversation = turn_based_conversation
-        self.enforce_streaming = kwargs.get("enforce_streaming", False)
-        self.room_url = kwargs.get("room_url", None)
-        self.is_web_based_call = kwargs.get("is_web_based_call", False)
+        self.enforce_streaming = call_config.enforce_streaming
+        self.room_url = call_config.room_url
+        self.is_web_based_call = call_config.is_web_based_call
         # self.callee_silent = True
         # TODO check if we need to toggle this based on some config
         self.yield_chunks = False
@@ -250,20 +265,15 @@ class TaskManager(BaseManager):
             "llm": self.llm_queue,
             "synthesizer": self.synthesizer_queue,
         }
-        self.pipelines = task["toolchain"]["pipelines"]
-        self.textual_chat_agent = False
-        if (
-            task["toolchain"]["pipelines"][0] == "llm"
-            and task["tools_config"]["llm_agent"]["agent_task"] == "conversation"
-        ):
-            self.textual_chat_agent = False
+        self.pipelines = call_config.pipelines
+        self.textual_chat_agent = call_config.textual_chat_agent
 
         # Assistant persistance stuff
         self.assistant_id = assistant_id
-        self.run_id = kwargs.get("run_id")
+        self.run_id = call_config.run_id
 
         self.mark_event_meta_data = MarkEventMetaData()
-        self.sampling_rate = 24000
+        self.sampling_rate = call_config.sampling_rate
         self.conversation_ended = False
         self.has_transfer = False
         self.hangup_triggered = False
@@ -292,31 +302,16 @@ class TaskManager(BaseManager):
             "metadata": {"started": 0},
         }
 
-        self.welcome_message_audio = self.kwargs.pop("welcome_message_audio", None)
-        # Rate the backend synthesized the welcome at: 8000 for telephony (unchanged legacy
-        # payloads too), 24000 for web calls so the first turn matches the full-band TTS.
-        self.welcome_message_audio_sample_rate = int(self.kwargs.pop("welcome_message_audio_sample_rate", None) or 8000)
+        # spec-0004 B4: values parsed (and the welcome PCM pre-decoded/upsampled, memoized
+        # process-wide) in CallConfig; the pops stay HERE so downstream components never
+        # see the base64 blob in kwargs — the kwargs contract the B1 matrix pins.
+        self.welcome_message_audio = call_config.welcome_message_audio
+        self.kwargs.pop("welcome_message_audio", None)
+        self.welcome_message_audio_sample_rate = call_config.welcome_message_audio_sample_rate
+        self.kwargs.pop("welcome_message_audio_sample_rate", None)
 
-        self.welcome_message_delay = task.get("task_config", {}).get("welcome_message_delay", 0)
-        # Pre-decode welcome audio for faster playback
-        self.preloaded_welcome_audio = (
-            base64.b64decode(self.welcome_message_audio) if self.welcome_message_audio else None
-        )
-        # Cached welcome PCM may be below the raw-PCM output rate (web/freeswitch play at 24kHz), so
-        # upsample or the first audio is pitched; already-24kHz welcomes pass through. Memoized per
-        # welcome (welcome_pcm_upsampled) so this resample runs once, not in every call's __init__ —
-        # otherwise a burst of concurrent calls spikes CPU on the event loop.
-        is_freeswitch_output = (task.get("tools_config", {}).get("output") or {}).get(
-            "provider"
-        ) == TelephonyProvider.FREESWITCH.value
-        if (
-            (self.is_web_based_call or is_freeswitch_output)
-            and self.preloaded_welcome_audio
-            and self.welcome_message_audio_sample_rate != WEBCALL_TTS_SAMPLE_RATE
-        ):
-            self.preloaded_welcome_audio = welcome_pcm_upsampled(
-                self.welcome_message_audio, WEBCALL_TTS_SAMPLE_RATE, self.welcome_message_audio_sample_rate
-            )
+        self.welcome_message_delay = call_config.welcome_message_delay
+        self.preloaded_welcome_audio = call_config.preloaded_welcome_audio
         self.observable_variables = {}
         self.output_handler_set = False
         # IO HANDLERS
@@ -417,8 +412,8 @@ class TaskManager(BaseManager):
 
         # Language detection
         self.language_detector = LanguageDetector(self.task_config["task_config"], run_id=self.run_id)
-        self.language_injection_mode = self.task_config["task_config"].get("language_injection_mode")
-        self.language_instruction_template = self.task_config["task_config"].get("language_instruction_template")
+        self.language_injection_mode = call_config.language_injection_mode
+        self.language_instruction_template = call_config.language_instruction_template
 
         # Call conversations
         self.call_sid = None
@@ -437,68 +432,21 @@ class TaskManager(BaseManager):
         # Tasks
         self.extracted_data = None
         self.summarized_data = None
-        self.stream = (
-            self.task_config["tools_config"]["synthesizer"] is not None
-            and self.task_config["tools_config"]["synthesizer"]["stream"]
-        ) and (self.enforce_streaming or not self.turn_based_conversation)
+        self.stream = call_config.stream
 
         self.is_local = False
         self.llm_config = None
         self.agent_type = None
 
-        self.llm_config_map = {}
+        # spec-0004 B4: the llm_agent parse (multiagent map / kb / graph / simple, the
+        # reasoning-key passthrough, use_responses_api, compact_threshold) lives in
+        # CallConfig._llm_configs with the same reference semantics; llm_agent_config is
+        # assigned only when the legacy branches assigned it.
+        self.llm_config_map = call_config.llm_config_map
         self.llm_agent_map = {}
-        if self.__is_multiagent():
-            for agent, config in self.task_config["tools_config"]["llm_agent"]["llm_config"]["agent_map"].items():
-                self.llm_config_map[agent] = config.copy()
-                self.llm_config_map[agent]["buffer_size"] = self.task_config["tools_config"]["synthesizer"][
-                    "buffer_size"
-                ]
-        else:
-            if self.task_config["tools_config"].get("llm_agent") is not None:
-                if self.__is_knowledgebase_agent():
-                    self.llm_agent_config = self.task_config["tools_config"]["llm_agent"]
-                    self.llm_config = {
-                        "model": self.llm_agent_config["llm_config"]["model"],
-                        "max_tokens": self.llm_agent_config["llm_config"]["max_tokens"],
-                        "provider": self.llm_agent_config["llm_config"]["provider"],
-                        "buffer_size": self.task_config["tools_config"]["synthesizer"].get("buffer_size"),
-                        "temperature": self.llm_agent_config["llm_config"]["temperature"],
-                    }
-                elif self.__is_graph_agent():
-                    self.llm_agent_config = self.task_config["tools_config"]["llm_agent"]
-                    self.llm_config = {
-                        "model": self.llm_agent_config["llm_config"]["model"],
-                        "max_tokens": self.llm_agent_config["llm_config"]["max_tokens"],
-                        "provider": self.llm_agent_config["llm_config"]["provider"],
-                        "buffer_size": self.task_config["tools_config"]["synthesizer"].get("buffer_size"),
-                        "temperature": self.llm_agent_config["llm_config"]["temperature"],
-                    }
-                else:
-                    agent_type = self.task_config["tools_config"]["llm_agent"].get("agent_type", None)
-                    if not agent_type:
-                        self.llm_agent_config = self.task_config["tools_config"]["llm_agent"]
-                    else:
-                        self.llm_agent_config = self.task_config["tools_config"]["llm_agent"]["llm_config"]
-
-                    self.llm_config = {
-                        "model": self.llm_agent_config["model"],
-                        "max_tokens": self.llm_agent_config["max_tokens"],
-                        "provider": self.llm_agent_config["provider"],
-                        "temperature": self.llm_agent_config["temperature"],
-                    }
-
-                for key in ("reasoning_effort", "verbosity", "reasoning_summary", "thinking_budget"):
-                    if key in self.llm_agent_config:
-                        self.llm_config[key] = self.llm_agent_config[key]
-
-                if self.llm_agent_config.get("use_responses_api") or any(
-                    p in self.llm_config.get("model", "") for p in RESPONSES_API_MODEL_PREFIXES
-                ):
-                    self.llm_config["use_responses_api"] = True
-
-                if self.llm_agent_config.get("compact_threshold"):
-                    self.llm_config["compact_threshold"] = self.llm_agent_config["compact_threshold"]
+        if call_config.llm_agent_config is not None:
+            self.llm_agent_config = call_config.llm_agent_config
+        self.llm_config = call_config.llm_config
 
         # Output stuff
         self.output_task = None
@@ -550,9 +498,7 @@ class TaskManager(BaseManager):
 
         if task_id == 0:
             # An S2S task carries no synthesizer block; its voice lives on the s2s config.
-            synthesizer_config = self.task_config["tools_config"].get("synthesizer") or {}
-            provider_config = synthesizer_config.get("provider_config") or {}
-            self.synthesizer_voice = provider_config.get("voice")
+            self.synthesizer_voice = call_config.synthesizer_voice
             self.hangup_detail = None
             self.end_call_primary = False  # set below if task_config opts in
 
@@ -563,11 +509,11 @@ class TaskManager(BaseManager):
             self.output_chunk_size = 16384 if self.sampling_rate == 24000 else 4096  # 0.5 second chunk size for calls
             # For nitro
             self.nitro = True
-            self.conversation_config = task.get("task_config", {})
+            self.conversation_config = call_config.conversation_config
             logger.info(f"Conversation config {self.conversation_config}")
 
             # Enable DTMF flow
-            dtmf_enabled = self.conversation_config.get("dtmf_enabled", False)
+            dtmf_enabled = call_config.dtmf_enabled
             # An s2s task starts its own consumer in _run_s2s_conversation. Starting this one
             # too would race it for the same queue, and this one wins by being first: the
             # digits get injected into the transcriber/LLM pipeline an s2s agent does not have.
@@ -575,115 +521,54 @@ class TaskManager(BaseManager):
                 self.tools["input"].is_dtmf_active = True
                 self.dtmf_task = asyncio.create_task(self.inject_digits_to_conversation())
 
-            self.trigger_user_online_message_after = self.conversation_config.get(
-                "trigger_user_online_message_after", DEFAULT_USER_ONLINE_MESSAGE_TRIGGER_DURATION
-            )
-            self.check_if_user_online = self.conversation_config.get("check_if_user_online", True)
-            self.check_user_online_message_config = self.conversation_config.get(
-                "check_user_online_message", DEFAULT_USER_ONLINE_MESSAGE
-            )
-            if self.check_user_online_message_config and self.context_data:
-                if isinstance(self.check_user_online_message_config, dict):
-                    self.check_user_online_message_config = {
-                        lang: update_prompt_with_context(msg, self.context_data)
-                        for lang, msg in self.check_user_online_message_config.items()
-                    }
-                else:
-                    self.check_user_online_message_config = update_prompt_with_context(
-                        self.check_user_online_message_config, self.context_data
-                    )
+            self.trigger_user_online_message_after = call_config.trigger_user_online_message_after
+            self.check_if_user_online = call_config.check_if_user_online
+            # Parsed (context-substituted) in CallConfig; assigned here unchanged.
+            self.check_user_online_message_config = call_config.check_user_online_message_config
 
-            self.kwargs["process_interim_results"] = (
-                "true" if self.conversation_config.get("optimize_latency", False) is True else "false"
-            )
+            self.kwargs["process_interim_results"] = call_config.process_interim_results
 
             # for long pauses and rushing
             if self.conversation_config is not None:
                 # TODO need to get this for azure - for azure the subtraction would not happen
                 # No transcriber on an S2S task: the provider owns endpointing.
-                self.minimum_wait_duration = (self.task_config["tools_config"].get("transcriber") or {}).get(
-                    "endpointing"
-                )
+                self.minimum_wait_duration = call_config.minimum_wait_duration
                 self.last_spoken_timestamp = time.time() * 1000
-                self.incremental_delay = self.conversation_config.get("incremental_delay", 100)
+                self.incremental_delay = call_config.incremental_delay
 
                 # Cut conversation
-                self.hang_conversation_after = self.conversation_config.get("hangup_after_silence", 10)
+                self.hang_conversation_after = call_config.hang_conversation_after
                 self.last_transmitted_timestamp = 0
 
-                self.use_fillers = self.conversation_config.get("use_fillers", False)
-                self.use_llm_to_determine_hangup = self.conversation_config.get("hangup_after_LLMCall", False)
-                self.check_for_completion_prompt = None
-                if self.use_llm_to_determine_hangup:
-                    self.check_for_completion_prompt = self.conversation_config.get("call_cancellation_prompt", None)
-                    if not self.check_for_completion_prompt:
-                        self.check_for_completion_prompt = CHECK_FOR_COMPLETION_PROMPT
-                    self.check_for_completion_prompt += """
-                        Respond only in this JSON format:
-                            {{
-                              "hangup": "Yes" or "No"
-                            }}
-                    """
+                self.use_fillers = call_config.use_fillers
+                self.use_llm_to_determine_hangup = call_config.use_llm_to_determine_hangup
+                # Parsed in CallConfig (default prompt + the verbatim JSON-format suffix).
+                self.check_for_completion_prompt = call_config.check_for_completion_prompt
 
-                self.call_hangup_message_config = self.conversation_config.get("call_hangup_message", None)
-                if self.call_hangup_message_config and self.context_data and not self.is_web_based_call:
-                    if isinstance(self.call_hangup_message_config, dict):
-                        self.call_hangup_message_config = {
-                            lang: update_prompt_with_context(msg, self.context_data)
-                            for lang, msg in self.call_hangup_message_config.items()
-                        }
-                    else:
-                        self.call_hangup_message_config = update_prompt_with_context(
-                            self.call_hangup_message_config, self.context_data
-                        )
+                # Parsed (context-substituted, web calls excluded) in CallConfig.
+                self.call_hangup_message_config = call_config.call_hangup_message_config
                 self.check_for_completion_llm = os.getenv("CHECK_FOR_COMPLETION_LLM")
 
-                cancellation_prompt = self.conversation_config.get("call_cancellation_prompt")
-                end_call_description = (
-                    (
-                        f"End the current call. Always say your goodbye message before calling this function.\n"
-                        f"Criteria for when to end: {cancellation_prompt}"
-                    )
-                    if cancellation_prompt
-                    else None
-                )
-
-                if self.__is_s2s():
-                    # The end_call result asks for the goodbye, so asking for one here too
-                    # would have the model say it twice.
-                    end_call_description = (
-                        "End the current call. Do not say goodbye before calling this "
-                        "function; you will be prompted to say it afterwards."
-                        + (f"\nCriteria for when to end: {cancellation_prompt}" if cancellation_prompt else "")
-                    )
-
-                self.end_call_primary = (
-                    self.conversation_config.get("end_call_tool_mode") in ("primary", "primary_with_shadow_hangup")
-                    and self.use_llm_to_determine_hangup
-                    and cancellation_prompt
-                )
+                # spec-0004 B4: description/primary/nodes parsed in CallConfig; the
+                # kwargs-mutating injections stay HERE, structure and logs unchanged.
+                self.end_call_primary = call_config.end_call_primary
                 if self.end_call_primary:
                     self.kwargs["api_tools"] = _inject_end_call_tool(
                         self.kwargs.get("api_tools"),
                         scope=ToolScope.GLOBAL,
                         nodes=[],
-                        description=end_call_description,
+                        description=call_config.end_call_description,
                     )
                     logger.info("end_call tool active as primary hangup")
                 elif self.__is_graph_agent():
                     # a node opting in via function_call="end_call" needs the tool regardless of the hangup toggle
-                    llm_config = self.task_config["tools_config"]["llm_agent"].get("llm_config", {}) or {}
-                    end_call_nodes = [
-                        n.get("id")
-                        for n in (llm_config.get("nodes") or [])
-                        if n.get("function_call") == END_CALL_FUNCTION_PREFIX and n.get("id")
-                    ]
+                    end_call_nodes = call_config.end_call_nodes
                     if end_call_nodes:
                         self.kwargs["api_tools"] = _inject_end_call_tool(
                             self.kwargs.get("api_tools"),
                             scope=ToolScope.NODE,
                             nodes=end_call_nodes,
-                            description=end_call_description,
+                            description=call_config.end_call_description,
                         )
                         logger.info(f"end_call tool injected node-scoped on nodes={end_call_nodes}")
 
@@ -700,12 +585,10 @@ class TaskManager(BaseManager):
                 self.repeat_after_silence_seconds = None
 
                 # Handling accidental interruption
-                self.number_of_words_for_interruption = self.conversation_config.get(
-                    "number_of_words_for_interruption", 3
-                )
+                self.number_of_words_for_interruption = call_config.number_of_words_for_interruption
                 self.asked_if_user_is_still_there = False  # Used to make sure that if user's phrase qualifies as acciedental interruption, we don't break the conversation loop
                 self.started_transmitting_audio = False
-                self.accidental_interruption_phrases = set(ACCIDENTAL_INTERRUPTION_PHRASES)
+                self.accidental_interruption_phrases = call_config.accidental_interruption_phrases
                 # self.interruption_backoff_period = 1000 #conversation_config.get("interruption_backoff_period", 300) #this is the amount of time output loop will sleep before sending next audio
                 self.allow_extra_sleep = False  # It'll help us to back off as soon as we hear interruption for a while
 
@@ -718,12 +601,10 @@ class TaskManager(BaseManager):
                 )
 
                 # Backchanneling presets are keyed on a synthesizer voice, which s2s has none of.
-                self.should_backchannel = self.conversation_config.get("backchanneling", False) and not self.__is_s2s()
+                self.should_backchannel = call_config.should_backchannel
                 self.backchanneling_task = None
-                self.backchanneling_start_delay = self.conversation_config.get("backchanneling_start_delay", 5)
-                self.backchanneling_message_gap = self.conversation_config.get(
-                    "backchanneling_message_gap", 2
-                )  # Amount of duration co routine will sleep
+                self.backchanneling_start_delay = call_config.backchanneling_start_delay
+                self.backchanneling_message_gap = call_config.backchanneling_message_gap  # Amount of duration co routine will sleep
                 if self.should_backchannel and not turn_based_conversation and task_id == 0:
                     logger.info(f"Should backchannel")
                     self.backchanneling_audios = f"{kwargs.get('backchanneling_audio_location', os.getenv('BACKCHANNELING_PRESETS_DIR'))}/{self.synthesizer_voice.lower()}"
@@ -743,9 +624,7 @@ class TaskManager(BaseManager):
                     self.transcriber_message = ""
 
                 # Discard pre-welcome utterance
-                self.discard_pre_welcome_utterance = self.conversation_config.get(
-                    "discard_pre_welcome_utterance", False
-                )
+                self.discard_pre_welcome_utterance = call_config.discard_pre_welcome_utterance
                 self._speech_started_before_welcome = False
 
         # setting transcriber and synthesizer in parallel
@@ -766,8 +645,8 @@ class TaskManager(BaseManager):
         #              pool's per-segment LID heuristic (master behavior).
         # Handoff messages are consumed by BOTH flows (legacy: before the tool
         # switch; new: played to cover the switch → follow-up generation gap).
-        self.switch_handoff_messages = self.task_config.get("tools_config", {}).get("switch_handoff_messages") or {}
-        self.agent_names = self.task_config.get("tools_config", {}).get("agent_names") or {}
+        self.switch_handoff_messages = call_config.switch_handoff_messages
+        self.agent_names = call_config.agent_names
         # LEGACY FLOW ONLY, matching the design comment above: with the Switch LLM enabled the
         # judge is the single switching authority. Injecting the tool alongside it made the main
         # LLM a second, competing switcher deciding from main-ASR text — which mis-scripts foreign
