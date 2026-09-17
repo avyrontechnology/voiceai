@@ -176,6 +176,22 @@ from voiceai.modules.voice.session import prompts as _voice_prompts
 from voiceai.modules.voice.session import health as _voice_health
 from voiceai.modules.voice.session.lifecycle import hangup as _voice_hangup
 
+# spec-0004 B8: the welcome bodies (__forced_first_message / __synthesize_welcome_audio /
+# __first_message / handle_init_event), the DTMF queue consumer
+# (inject_digits_to_conversation) and the proactive-event bodies (_listen_events /
+# _wait_for_safe_point / _proactive_generate_for_event / _generate_proactive) live
+# VERBATIM in voiceai.modules.voice.session.{welcome,dtmf,events}. TaskManager keeps
+# same-named thin delegators below and injects itself (the WelcomeSession /
+# DtmfSession / EventSession facades) on every call (§3.1 bridge 3). The WELCOME and
+# EVENTS modules are now the lookup sites for the moved bodies' globals
+# (create_ws_data_packet, convert_to_request_log, pcm_to_ulaw, calculate_audio_duration,
+# wav_bytes_to_pcm, get_synth_audio_format, resample, update_prompt_with_context,
+# get_md5_hash, select_message_by_language): monkeypatch string paths for those target
+# voiceai.modules.voice.session.{welcome,events}.<name>.
+from voiceai.modules.voice.session import dtmf as _voice_dtmf
+from voiceai.modules.voice.session import events as _voice_events
+from voiceai.modules.voice.session import welcome as _voice_welcome
+
 # Handoff clips are static per (voice, text): cache across calls so an N-language agent
 # doesn't pay N TTS renders per call, concurrent with the welcome message. Process-wide.
 HANDOFF_CLIP_CACHE: dict = {}
@@ -1304,150 +1320,19 @@ class TaskManager(BaseManager):
         except Exception as e:
             logger.error(f"Exception in _s2s_await_stream_sid {str(e)}")
 
+    # spec-0004 B8: the welcome bodies (__forced_first_message / __synthesize_welcome_audio
+    # here; __first_message / handle_init_event at their original sites below) live
+    # VERBATIM in voiceai.modules.voice.session.welcome (see the import block above).
+    # Each same-named thin delegator keeps this class the resolution site
+    # (instance-attr AsyncMock overrides, __new__ harnesses and internal self-dispatch
+    # via the mangled _TaskManager__* spellings) and injects the session (self, the
+    # WelcomeSession facade) into the welcome module (§3.1 bridge 3). A delegator is
+    # deleted only in the commit that ports its pinning tests (spec 0004 iron rule).
     async def __forced_first_message(self, timeout=10.0):
-        logger.info(f"Executing the first message task")
-        try:
-            delay_ms = int(self.welcome_message_delay or 0)
-            if delay_ms > 0:
-                logger.info(f"Welcome message delay set to {delay_ms} ms")
-                await asyncio.sleep(delay_ms / 1000)
-            if not await self.__await_stream_sid(timeout=timeout):
-                return
-
-            text = self.kwargs.get("agent_welcome_message", None)
-            meta_info = {
-                "io": self.tools["output"].get_provider(),
-                "message_category": "agent_welcome_message",
-                "request_id": str(uuid.uuid4()),
-                "cached": True,
-                "sequence_id": -1,
-                "format": self.task_config["tools_config"]["output"]["format"],
-                "text": text,
-                "end_of_llm_stream": True,
-            }
-            ws_data_packet = create_ws_data_packet(text, meta_info=meta_info)
-
-            meta_info = ws_data_packet["meta_info"]
-            text = ws_data_packet["data"]
-            meta_info["type"] = "audio"
-            meta_info["synthesizer_start_time"] = time.time()
-
-            audio_chunk = self.preloaded_welcome_audio if self.preloaded_welcome_audio else None
-            if audio_chunk is None and text:
-                # Browser legs carry no preloaded greeting; speak it through the agent's
-                # own TTS voice instead of staying silent until the caller speaks first.
-                audio_chunk = await self.__synthesize_welcome_audio(text)
-            if meta_info["text"] == "":
-                audio_chunk = None
-
-            # Convert to ulaw for Asterisk/sip-trunk provider (cached welcome is PCM)
-            if self.tools["output"].get_provider() == TelephonyProvider.SIP_TRUNK.value and audio_chunk:
-                original_size = len(audio_chunk)
-                audio_chunk = pcm_to_ulaw(audio_chunk)
-                logger.info(
-                    f"[SIP-TRUNK] Converted welcome message PCM to ulaw: {original_size} bytes -> {len(audio_chunk)} bytes"
-                )
-                meta_info["format"] = "ulaw"
-            else:
-                meta_info["format"] = "pcm"
-            meta_info["is_first_chunk"] = True
-            meta_info["end_of_synthesizer_stream"] = True
-            meta_info["chunk_id"] = 1
-            meta_info["is_first_chunk_of_entire_response"] = True
-            meta_info["is_final_chunk_of_entire_response"] = True
-            message = create_ws_data_packet(audio_chunk, meta_info)
-
-            logger.info(f"Got stream sid and hence sending the first message {self.stream_sid}")
-
-            if audio_chunk is None:
-                # No welcome message to play - mark as played immediately
-                # so the system doesn't wait for a mark event that will never arrive
-                logger.info("No welcome message audio to send, marking welcome message as played")
-                self.tools["input"].set_welcome_message_played(True)
-            else:
-                self.tools["input"].update_is_audio_being_played(True)
-                self.conversation_history.append_welcome_message(text)
-                convert_to_request_log(
-                    message=text,
-                    meta_info=meta_info,
-                    component=LogComponent.SYNTHESIZER,
-                    direction=LogDirection.RESPONSE,
-                    model=self.synthesizer_provider,
-                    is_cached=meta_info.get("is_cached", False),
-                    engine=self.tools["synthesizer"].get_engine(),
-                    run_id=self.run_id,
-                )
-                await self.tools["output"].handle(message)
-                try:
-                    data = message.get("data")
-                    if data is not None:
-                        duration = calculate_audio_duration(
-                            len(data), self.sampling_rate, format=message["meta_info"]["format"]
-                        )
-                        self.welcome_message_duration_ms = round(duration * 1000, 2)
-                        if self.should_record:
-                            self.conversation_recording["output"].append(
-                                {"data": data, "start_time": time.time(), "duration": duration}
-                            )
-                except Exception as e:
-                    duration = 0.256
-                    self.welcome_message_duration_ms = round(duration * 1000, 2)
-                    logger.error("Exception in __forced_first_message for duration calculation: {}".format(str(e)))
-        except Exception as e:
-            logger.error(f"Exception in __forced_first_message {str(e)}")
-
-        return
+        return await _voice_welcome.forced_first_message(self, timeout=timeout)
 
     async def __synthesize_welcome_audio(self, text):
-        """Speak the welcome message through the agent's TTS when no preloaded audio exists.
-
-        Browser legs never carry preloaded greeting audio, so without this the call opens
-        in silence. Returns PCM bytes at self.sampling_rate, or None (caller keeps the old
-        mark-played fallback). Never raises.
-        """
-        synth = self.tools.get("synthesizer")
-        if synth is None or not hasattr(synth, "synthesize") or not (text or "").strip():
-            return None
-        try:
-            raw = await asyncio.wait_for(synth.synthesize(text), timeout=20)
-        except Exception as e:
-            logger.error(f"Welcome TTS failed, skipping greeting audio: {e}")
-            return None
-        if not raw:
-            return None
-        if isinstance(raw, str):
-            try:
-                raw = base64.b64decode(raw)
-            except Exception:
-                logger.error("Welcome TTS returned an undecodable text payload")
-                return None
-        pcm = None
-        try:
-            processor = getattr(synth, "_process_audio_data", None) or getattr(
-                synth, "_process_audio_chunk", None
-            )
-            pcm = processor(raw) if callable(processor) else None
-        except Exception as e:
-            logger.error(f"Welcome TTS post-processing failed: {e}")
-            pcm = None
-        if pcm is None and isinstance(raw, (bytes, bytearray)):
-            try:
-                pcm = wav_bytes_to_pcm(bytes(raw)) if get_synth_audio_format(bytes(raw)) == "wav" else bytes(raw)
-            except Exception:
-                return None
-        if not pcm:
-            return None
-        try:
-            synth_rate = int(getattr(synth, "sampling_rate", self.sampling_rate) or self.sampling_rate)
-        except (TypeError, ValueError):
-            synth_rate = self.sampling_rate
-        if synth_rate != self.sampling_rate:
-            try:
-                pcm = resample(pcm, self.sampling_rate, format="pcm", original_sample_rate=synth_rate)
-            except Exception as e:
-                logger.error(f"Welcome TTS resample failed: {e}")
-                return None
-        return pcm
+        return await _voice_welcome.synthesize_welcome_audio(self, text)
 
     def __inject_switch_language_tool(self):
         """Auto-inject the switch_language tool when multilingual pools are active.
@@ -2622,144 +2507,34 @@ class TaskManager(BaseManager):
                 pass
         return
 
+    # spec-0004 B8: the DTMF consumer body lives VERBATIM in
+    # voiceai.modules.voice.session.dtmf and the proactive-event bodies
+    # (_listen_events / _wait_for_safe_point / _proactive_generate_for_event /
+    # _generate_proactive) in voiceai.modules.voice.session.events. Each same-named
+    # thin delegator keeps this class the resolution site (instance-attr AsyncMock
+    # overrides, __new__ harnesses and internal self-dispatch) and injects the
+    # session (self, the DtmfSession / EventSession facades) on every call (§3.1
+    # bridge 3). The tm:697 single-consumer guard on the dtmf queue stays at its
+    # __init__ call site above (`dtmf_enabled and not self.__is_s2s()`). The EVENTS
+    # module is now the lookup site for the event bodies' globals
+    # (create_ws_data_packet, get_md5_hash, select_message_by_language,
+    # update_prompt_with_context): monkeypatch string paths for those target
+    # voiceai.modules.voice.session.events.<name>. A delegator is deleted only in
+    # the commit that ports its pinning tests (spec 0004 iron rule).
     async def inject_digits_to_conversation(self) -> None:
-        while True:
-            try:
-                dtmf_digits = await self.queues["dtmf"].get()
-                logger.info(f"DTMF collected {dtmf_digits}")
-
-                _dtmf_ts = round(time.time() * 1000 - self.conversation_start_init_ts, 2)
-                for _digit in dtmf_digits:
-                    self.dtmf_events.append({"digit": _digit, "ts_ms": _dtmf_ts})
-
-                dtmf_message = "dtmf_number: " + dtmf_digits
-                base_meta_info = {
-                    "io": self.tools["input"].io_provider,
-                    "type": "text",
-                    "sequence": 0,
-                    "origin": "dtmf",
-                }
-                meta_info = self.__get_updated_meta_info(base_meta_info)
-                await self._handle_transcriber_output("llm", dtmf_message, meta_info)
-                logger.info(f"DTMF LLM processing triggered with sequence_id={meta_info['sequence_id']}")
-            except Exception as e:
-                logger.info(f"DTMF LLM processing triggered with exception {e}")
+        return await _voice_dtmf.inject_digits_to_conversation(self)
 
     async def _listen_events(self):
-        """Listen for external events and process them through the graph agent.
-        Events trigger node transitions and proactive speech without user input."""
-        logger.info("Event listener started for graph agent")
-        while True:
-            try:
-                event = await self.event_queue.get()
-                if self.conversation_ended:
-                    logger.info(f"Event '{event.get('event')}' ignored — conversation ended")
-                    continue
-
-                logger.info(f"Processing external event: {event.get('event')}")
-
-                # Wait for a safe point (no audio playing, no response in pipeline)
-                await self._wait_for_safe_point()
-
-                if self.conversation_ended:
-                    continue
-
-                # Process through graph agent
-                result = self.tools["llm_agent"].process_event(event)
-
-                if result.get("matched"):
-                    # Set node entry index so _node_turns counts from this point
-                    self.tools["llm_agent"].current_node_entry_index = len(self.conversation_history.get_copy())
-
-                    if self.interruption_manager and self.interruption_manager.is_user_speaking():
-                        # User is mid-speech — skip proactive generation.
-                        # The node already transitioned, so the user's in-progress
-                        # utterance will be routed + answered on the new node.
-                        target_node = result.get("target_node")
-                        if target_node:
-                            self.repeat_after_silence_seconds = target_node.get("repeat_after_silence_seconds")
-                        logger.info(
-                            f"Event '{event.get('event')}' transitioned node but user is speaking — deferring to conversation flow"
-                        )
-                    else:
-                        await self._proactive_generate_for_event(event, result)
-                else:
-                    logger.info(f"Event '{event.get('event')}' — no matching edge, context updated silently")
-
-            except asyncio.CancelledError:
-                logger.info("Event listener cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in event listener: {e}")
-                traceback.print_exc()
+        return await _voice_events.listen_events(self)
 
     async def _wait_for_safe_point(self, timeout=30.0):
-        """Wait until the pipeline is idle: no audio playing, no response in pipeline, no active LLM task."""
-        start = time.time()
-        while time.time() - start < timeout:
-            if self.conversation_ended:
-                return
-            audio_playing = self.tools["input"].is_audio_being_played_to_user() if "input" in self.tools else False
-            llm_busy = self.llm_task is not None and not self.llm_task.done() if self.llm_task else False
-            if not audio_playing and not self.response_in_pipeline and not llm_busy:
-                return
-            await asyncio.sleep(0.1)
-        logger.warning(f"_wait_for_safe_point timed out after {timeout}s")
+        return await _voice_events.wait_for_safe_point(self, timeout=timeout)
 
     async def _proactive_generate_for_event(self, event: dict, result: dict):
-        """Trigger proactive speech generation after an event-driven transition."""
-        node_type = result.get("node_type", NodeType.LLM)
-        target_node = result.get("target_node")
-
-        # Update repeat_after_silence for the new node
-        if target_node:
-            self.repeat_after_silence_seconds = target_node.get("repeat_after_silence_seconds")
-
-        if node_type == NodeType.STATIC:
-            # Static node: play cached audio directly, no LLM cost
-            static_text = (
-                select_message_by_language(target_node.get("static_message"), self.language) if target_node else ""
-            )
-            if static_text:
-                if self.context_data:
-                    static_text = update_prompt_with_context(static_text, self.context_data)
-                self.conversation_history.append_assistant(static_text)
-                meta_info = {
-                    "io": self.tools["output"].get_provider(),
-                    "request_id": str(uuid.uuid4()),
-                    "cached": True,
-                    "sequence_id": -1,
-                    "format": self.task_config["tools_config"]["output"].get("format", "pcm"),
-                    "end_of_llm_stream": True,
-                    "text": static_text,
-                    "message_category": "event_proactive",
-                }
-                ws_packet = create_ws_data_packet(get_md5_hash(static_text), meta_info=meta_info, is_md5_hash=True)
-                await self._synthesize(ws_packet)
-        else:
-            # LLM node: set flag and trigger generation without adding a user message
-            self.tools["llm_agent"]._event_triggered_generation = True
-            self.tools["llm_agent"].context_data["_event_previous_node"] = result.get("previous_node", "")
-            await self._generate_proactive()
+        return await _voice_events.proactive_generate_for_event(self, event, result)
 
     async def _generate_proactive(self):
-        meta_info = self.__get_updated_meta_info(
-            {
-                "io": self.tools["output"].get_provider(),
-                "request_id": str(uuid.uuid4()),
-                "cached": False,
-                "format": self.task_config["tools_config"]["output"].get("format", "pcm"),
-                "message_category": "event_proactive",
-            }
-        )
-        self.response_in_pipeline = True
-        task = asyncio.create_task(self._run_llm_task(create_ws_data_packet("", meta_info)))
-        self.llm_task = task
-        try:
-            await task
-        except asyncio.CancelledError:
-            logger.info("Proactive generation cancelled by interruption")
-            return
+        return await _voice_events.generate_proactive(self)
 
     # spec-0004 B7: the call-lifecycle bodies (__process_end_of_conversation and the dead
     # __update_preprocessed_tree_node here; _enter_hangup_state /
@@ -7084,138 +6859,19 @@ class TaskManager(BaseManager):
     async def __check_for_backchanneling(self):
         return await _voice_hangup.check_for_backchanneling(self)
 
+    # spec-0004 B8: bodies live VERBATIM in voiceai.modules.voice.session.welcome (see
+    # the welcome block above); these same-named delegators keep this class the
+    # resolution site (the init_event_observable registration of handle_init_event
+    # included) and inject the session. The WELCOME module is now the lookup site for
+    # the welcome bodies' globals (create_ws_data_packet, convert_to_request_log,
+    # pcm_to_ulaw, calculate_audio_duration, wav_bytes_to_pcm, get_synth_audio_format,
+    # resample, update_prompt_with_context): monkeypatch string paths for those target
+    # voiceai.modules.voice.session.welcome.<name>.
     async def __first_message(self, timeout=10.0):
-        logger.info(f"Executing the first message task")
-        try:
-            if self.is_web_based_call:
-                logger.info("Sending agent welcome message for web based call")
-                text = self.kwargs.get("agent_welcome_message", None)
-                meta_info = {
-                    "io": "default",
-                    "message_category": "agent_welcome_message",
-                    "stream_sid": self.stream_sid,
-                    "request_id": str(uuid.uuid4()),
-                    "cached": False,
-                    "sequence_id": -1,
-                    "format": self.task_config["tools_config"]["output"]["format"],
-                    "text": text,
-                    "end_of_llm_stream": True,
-                }
-                self.stream_sid_ts = time.time() * 1000
-                if text and text.strip():
-                    self.conversation_history.append_welcome_message(text)
-                await self._synthesize(create_ws_data_packet(text, meta_info=meta_info))
-                return
-
-            start_time = asyncio.get_running_loop().time()
-            logger.info("Waiting for stream_sid before sending the first message")
-            while True:
-                elapsed_time = asyncio.get_running_loop().time() - start_time
-                if elapsed_time > timeout:
-                    await self.__process_end_of_conversation()
-                    logger.warning("Timeout reached while waiting for stream_sid")
-                    break
-
-                if not self.stream_sid and not self.default_io:
-                    stream_sid = self.tools["input"].get_stream_sid()
-                    if stream_sid is not None:
-                        self.stream_sid_ts = time.time() * 1000
-                        logger.info(f"Got stream sid and hence sending the first message {stream_sid}")
-                        self.stream_sid = stream_sid
-                        text = self.kwargs.get("agent_welcome_message", None)
-                        meta_info = {
-                            "io": self.tools["output"].get_provider(),
-                            "message_category": "agent_welcome_message",
-                            "stream_sid": stream_sid,
-                            "request_id": str(uuid.uuid4()),
-                            "cached": True,
-                            "sequence_id": -1,
-                            "format": self.task_config["tools_config"]["output"]["format"],
-                            "text": text,
-                            "end_of_llm_stream": True,
-                        }
-                        if text and text.strip():
-                            self.conversation_history.append_welcome_message(text)
-                        if self.turn_based_conversation:
-                            meta_info["type"] = "text"
-                            bos_packet = create_ws_data_packet("<beginning_of_stream>", meta_info)
-                            await self.tools["output"].handle(bos_packet)
-                            await self.tools["output"].handle(create_ws_data_packet(text, meta_info))
-                            eos_packet = create_ws_data_packet("<end_of_stream>", meta_info)
-                            await self.tools["output"].handle(eos_packet)
-                        else:
-                            await self._synthesize(create_ws_data_packet(text, meta_info=meta_info))
-                        break
-                    else:
-                        await asyncio.sleep(0.01)
-                elif self.default_io:
-                    logger.info(f"Shouldn't record")
-                    # meta_info={'io': 'default', 'is_first_message': True, "request_id": str(uuid.uuid4()), "cached": True, "sequence_id": -1, 'format': 'wav'}
-                    # await self._synthesize(create_ws_data_packet(self.kwargs['agent_welcome_message'], meta_info= meta_info))
-                    break
-
-        except Exception as e:
-            logger.error(f"Exception in __first_message {str(e)}")
+        return await _voice_welcome.first_message(self, timeout=timeout)
 
     async def handle_init_event(self, init_meta_data):
-        """
-        This function is used to handle the init event which we get from the client side in the case of web calling.
-
-        Args:
-            init_meta_data: This consists of the metadata which has been sent via the client. It would consist of the
-            context data which needs to be injected in the prompt.
-        """
-        try:
-            logger.info(f"handle_init_event has been triggered with metadata = {init_meta_data}")
-            try:
-                if self.context_data is None:
-                    self.context_data = {}
-                if not isinstance(self.context_data.get("recipient_data"), dict):
-                    self.context_data["recipient_data"] = {}
-                incoming = (init_meta_data or {}).get("context_data") if isinstance(init_meta_data, dict) else None
-                if isinstance(incoming, dict):
-                    self.context_data["recipient_data"].update(incoming)
-                logger.info(f"Context data updated - {self.context_data}")
-
-                self.prompts["system_prompt"] = update_prompt_with_context(
-                    self.prompts["system_prompt"], self.context_data
-                )
-
-                if self.system_prompt["content"]:
-                    system_prompt = self.system_prompt["content"]
-                    system_prompt = update_prompt_with_context(system_prompt, self.context_data)
-                    self.system_prompt["content"] = system_prompt
-                    self.conversation_history.update_system_prompt(system_prompt)
-
-                if self.call_hangup_message_config and self.context_data:
-                    if isinstance(self.call_hangup_message_config, dict):
-                        self.call_hangup_message_config = {
-                            lang: update_prompt_with_context(msg, self.context_data)
-                            for lang, msg in self.call_hangup_message_config.items()
-                        }
-                    else:
-                        self.call_hangup_message_config = update_prompt_with_context(
-                            self.call_hangup_message_config, self.context_data
-                        )
-
-                agent_welcome_message = self.kwargs.get("agent_welcome_message", "")
-
-                agent_welcome_message = update_prompt_with_context(agent_welcome_message, self.context_data)
-                logger.info(f"Updated agent welcome message after context data replacement - {agent_welcome_message}")
-                self.kwargs["agent_welcome_message"] = agent_welcome_message
-                if len(self.conversation_history) == 2 and agent_welcome_message:
-                    self.conversation_history.update_welcome_message(agent_welcome_message)
-            except Exception as e:
-                # Context injection is best-effort: a playground init without
-                # context_data (or an agent stored with null context) must never
-                # block the ack + welcome below, or the call stays silent with
-                # every transcript dropped as welcome_still_playing.
-                logger.warning(f"Ignoring init context update ({e}); continuing to welcome")
-
-            await self.tools["output"].send_init_acknowledgement()
-            self.first_message_task = asyncio.create_task(self.__first_message())
-        except Exception as e:
-            logger.error(f"Error occurred in handling init event - {e}")
+        return await _voice_welcome.handle_init_event(self, init_meta_data)
 
     ########################
     # Speech-to-speech conversation

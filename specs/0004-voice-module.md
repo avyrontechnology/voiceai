@@ -622,6 +622,89 @@ green — run() untouched). task_manager.py: 8,185 → 7,891 lines, exactly five
 lifecycle_runtime.py 50 — all under the 800 target. make sec clean; make cov 86.14%
 (≥ 85%; the formal cov gate returns at B13a).)
 
+B8: check=green; test-all=7/2501/2508 (net-new: 0; reconciliation: no existing test
+removed or rewritten — purely additive: +58 arch tests in 3 new files.
+tests/arch/modules/voice/session/test_welcome.py ×31 (the B5 test_s2s_runner / B7
+test_hangup precedent): TaskManager delegator pins for all four moved names (mangled
+_TaskManager__* spellings included), session-injection pins per delegator, lookup-site
+identity pins for the eight globals the welcome module now owns (R3), and behavior at
+the new home on stub sessions — forced_first_message (the exact preloaded-welcome
+packet incl. sequence_id=-1 and the full chunk-flag set, the request-log stamp via
+the NEW lookup site, the 100ms concrete duration stamp, the should_record ledger
+entry, the sip-trunk pcm→ulaw split, the no-audio mark-played short-circuit, the
+empty-text-drops-even-preloaded-audio quirk, the mangled-dispatch synth fallback
+seam, the stream-sid bail, the delay sleep via the module lookup site, and the
+0.256s duration-failure fallback), synthesize_welcome_audio (never-raises contract,
+processor preference, wav unwrap + resample via the NEW lookup sites, base64 text
+decode), first_message (web-call immediate synth with its exact meta, telephony
+stream-sid gate, turn-based bos/text/eos wrap, timeout → end-of-conversation via
+the mangled seam, default_io no-op, blank-text history skip), and handle_init_event
+(context injection across prompts/system-prompt/hangup-config/welcome, ack +
+scheduling through the mangled __first_message seam, the context-failure
+never-blocks-the-welcome quirk, the len==2 history-rewrite gate).
+tests/arch/modules/voice/session/test_dtmf.py ×6: delegator + injection pins and the
+consumer contract (dtmf_number: prefixed LLM turn with the exact base meta, per-digit
+ledger stamps sharing one burst offset, one-bad-burst isolation, cancellation
+tear-down). tests/arch/modules/voice/session/test_events.py ×21: delegator +
+injection pins ×4, lookup-site pins ×4, wait_for_safe_point (ended/idle/missing-input
+immediate answers, busy-poll timeout), listen_events (safe-point-then-generate with
+the node-entry-index snap, speaking-caller deferral keeping the node silence timer,
+unmatched-event silence, conversation-ended skip, the CancelledError-swallowing
+quiet break pinned as a quirk, per-event error isolation), the static-node md5
+synth path (concrete md5 packet, context substitution via the NEW lookup site,
+empty-message silence) vs the LLM-node flag+kickoff path, and generate_proactive
+(fresh-meta packet over the mangled meta seam, pipeline-busy flag, cancellation-as-
+interruption incl. the flag left set for the interruption path). The moves, all
+proven AST-identical bodies against HEAD during the step (a normalizing AST diff
+script; only the declared accommodations differ): original tm 1518-1662 (currently
+1307-1450: __forced_first_message + __synthesize_welcome_audio) and 7758-7894
+(currently 7087-7218: __first_message + handle_init_event) →
+session/welcome.py; 2982-3004 (currently 2625-2646: inject_digits_to_conversation)
+→ session/dtmf.py; 3005-3120 (currently 2648-2762: _listen_events /
+_wait_for_safe_point / _proactive_generate_for_event / _generate_proactive) →
+session/events.py — each as module-level functions taking the session as `self`
+behind the WelcomeSession / DtmfSession / EventSession facade Protocols; tm keeps a
+same-named thin delegator per moved body (mangled _TaskManager__* spellings keep
+resolving; the init_event_observable registration of handle_init_event rides the
+delegator). The tm:697 single-consumer guard on the dtmf queue did NOT move — it is
+constructor wiring (`dtmf_enabled and not self.__is_s2s()` at the __init__ call
+site, currently tm:569-571), stays verbatim in tm until composition (B13a), is
+pinned by the B1 construction matrix, and is documented in dtmf.py's docstring +
+the tm delegator comment. Deviations, made loud: TWO new adapter files beyond B3's
+five (the B4/B5/B6/B7 precedent) — adapters/welcome_runtime.py (the eight
+helpers.utils values welcome binds; resample rides the B3 adapters package surface)
+and adapters/events_runtime.py (the four helpers.utils values events binds); the
+new-home function names strip the mangled/underscore prefixes
+(forced_first_message, listen_events, ... — the B7 process_end_of_conversation
+precedent) while every TaskManager name is unchanged. Six compile-time
+name-mangling accommodations inside otherwise-verbatim bodies (the B5/B6/B7
+precedent): self.__await_stream_sid, self.__synthesize_welcome_audio,
+self.__process_end_of_conversation and self.__first_message in welcome, and
+self.__get_updated_meta_info in dtmf and again in events, spelled
+self._TaskManager__*. No monkeypatch string-path rewrites owed (R3): the only
+tm-path patches over names the moved bodies also read — convert_to_request_log
+(test_browser_leg_transcripts ×6, test_speculation_commit_logging ×7,
+test_pre_call_webhook ×11) and create_ws_data_packet (test_pre_call_webhook:363) —
+target the _handle_transcriber_output / _listen_transcriber /
+__execute_function_call lookup sites, which stay in tm; none exercises the moved
+paths. Mechanical accommodations: placeholder-less f-prefixes dropped ×3 (F541, the
+B4 precedent: the two "Executing the first message task" lines and "Shouldn't
+record"), noqa UP032+E501 on the verbatim `.format` duration-failure log, noqa E501
+on the verbatim deferring-to-conversation-flow log line and the two verbatim
+commented-out legacy lines in first_message's default_io branch, moved signatures
+gained annotations + Google docstrings, otobaai loggers (log content preserved).
+Preserved quirks carrying TODOs: handle_init_event's INFO logging of the init
+payload/context/welcome text (PII, rule §4) and listen_events' traceback.print_exc
+stderr write (rule 3); preserved without TODO as behavior pins: the empty-welcome-
+text-drops-preloaded-audio null, the 0.256s duration fallback, the sequence_id=-1
+ungated welcome/proactive sends, and the listener's CancelledError swallow. No new
+shims (tm keeps delegators; no legacy path emptied). task_manager.py: 7,891 → 7,547
+lines, exactly four hunks (import block + three region swaps); run() untouched by
+construction, tests/arch/test_taskmanager_pins.py + the goodbye-drain pin green.
+File sizes: welcome.py 429, events.py 236, dtmf.py 107, welcome_runtime.py 70,
+events_runtime.py 51 — all under the 800 target. make sec clean; make cov 86.55%
+(≥ 85%; the formal cov gate returns at B13a).)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
