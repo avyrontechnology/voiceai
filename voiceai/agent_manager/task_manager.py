@@ -160,6 +160,22 @@ from voiceai.modules.voice.session import s2s_runner as _voice_s2s_runner
 # voiceai.modules.voice.session.prompts.<name>.
 from voiceai.modules.voice.session import prompts as _voice_prompts
 
+# spec-0004 B7: the call-lifecycle bodies (__process_end_of_conversation, the dead
+# __update_preprocessed_tree_node beside it, _enter_hangup_state /
+# _should_ignore_transcriber_input / process_call_hangup, and the
+# __check_for_completion / __check_for_backchanneling watchdogs) live VERBATIM in
+# voiceai.modules.voice.session.lifecycle.hangup; the provider-health shadow
+# (Region O) lives in voiceai.modules.voice.session.health. TaskManager keeps
+# same-named thin delegators below and injects itself (the LifecycleSession /
+# HealthSession facades) on every call (§3.1 bridge 3), and flag groups A+D now
+# live on the CallLifecycle object behind forwarded_flag properties. The HANGUP
+# module is now the lookup site for the moved bodies' globals
+# (create_ws_data_packet, select_message_by_language, get_raw_audio_bytes,
+# resample, wav_bytes_to_pcm, ...): monkeypatch string paths for those target
+# voiceai.modules.voice.session.lifecycle.hangup.<name>.
+from voiceai.modules.voice.session import health as _voice_health
+from voiceai.modules.voice.session.lifecycle import hangup as _voice_hangup
+
 # Handoff clips are static per (voice, text): cache across calls so an N-language agent
 # doesn't pay N TTS renders per call, concurrent with the welcome message. Process-wide.
 HANDOFF_CLIP_CACHE: dict = {}
@@ -2745,86 +2761,43 @@ class TaskManager(BaseManager):
             logger.info("Proactive generation cancelled by interruption")
             return
 
+    # spec-0004 B7: the call-lifecycle bodies (__process_end_of_conversation and the dead
+    # __update_preprocessed_tree_node here; _enter_hangup_state /
+    # _should_ignore_transcriber_input / process_call_hangup and the
+    # __check_for_completion / __check_for_backchanneling watchdogs at their original
+    # sites below) live VERBATIM in voiceai.modules.voice.session.lifecycle.hangup.
+    # Each same-named thin delegator keeps this class the resolution site
+    # (patch.object, __new__ harnesses, __get__-rebinds and internal self-dispatch via
+    # the mangled _TaskManager__* spellings) and injects the session (self, the
+    # LifecycleSession facade) into the hangup module (§3.1 bridge 3). Flag groups A
+    # (hangup actuation) and D (teardown) now LIVE on the CallLifecycle object: the
+    # forwarded_flag properties below keep every `self.<flag>` read/write — __init__'s
+    # seeding above, run()'s goodbye-drain gate, and the Category-C harnesses that
+    # hand-set hangup_triggered/_end_call_in_progress on bare __new__ instances —
+    # flowing through the object, which is created LAZILY on first touch. A
+    # delegator/property is deleted only in the commit that ports its pinning tests
+    # (spec 0004 iron rule).
+
+    @property
+    def _call_lifecycle(self):
+        """The session's CallLifecycle state holder (lazily created; spec 0004 B7)."""
+        return _voice_hangup.session_lifecycle(self)
+
+    hangup_triggered = _voice_hangup.forwarded_flag("hangup_triggered")
+    hangup_triggered_at = _voice_hangup.forwarded_flag("hangup_triggered_at")
+    hangup_decision_at = _voice_hangup.forwarded_flag("hangup_decision_at")
+    _hangup_processing = _voice_hangup.forwarded_flag("_hangup_processing")
+    hangup_message_queued = _voice_hangup.forwarded_flag("hangup_message_queued")
+    conversation_ended = _voice_hangup.forwarded_flag("conversation_ended")
+    _end_of_conversation_in_progress = _voice_hangup.forwarded_flag("_end_of_conversation_in_progress")
+    _end_call_in_progress = _voice_hangup.forwarded_flag("_end_call_in_progress")
+    ended_by_assistant = _voice_hangup.forwarded_flag("ended_by_assistant")
+
     async def __process_end_of_conversation(self, web_call_timeout=False):
-        if self._end_of_conversation_in_progress or self.conversation_ended:
-            logger.info("__process_end_of_conversation: Already in progress or ended, skipping duplicate call")
-            return
-
-        self._end_of_conversation_in_progress = True
-        logger.info("Got end of conversation. I'm stopping now")
-
-        await self.wait_for_current_message()
-
-        # Check completion of agent_hangup_message sent from output
-        # Only wait for hangup chunk if a hangup message was actually queued
-        while self.hangup_triggered and self.hangup_message_queued:
-            try:
-                if self.tools["output"].hangup_sent():
-                    logger.info("final hangup chunk is now sent. Breaking now")
-                    break
-                else:
-                    logger.info("final hangup chunk has not been sent yet")
-                    await asyncio.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Error while checking queue: {e}", exc_info=True)
-                break
-
-        if self.hangup_message_queued and not web_call_timeout:
-            self.history.append(
-                {
-                    "role": "assistant",
-                    "content": self.call_hangup_message,
-                    "sequence_id": -1,
-                    "message_category": "agent_hangup",
-                }
-            )
-
-        self.conversation_ended = True
-        self.ended_by_assistant = True
-
-        # Cancel any running LLM / function-call tasks so they don't add phantom responses to
-        # the transcript after the call has ended. The end_call tool reaches this from inside
-        # llm_task itself, where cancelling would raise CancelledError at the first await below
-        # and lose the hangup. Dropping the reference is enough there: every path left in that
-        # task bails on conversation_ended.
-        if self.llm_task is not None and not self.llm_task.done():
-            if self.llm_task is asyncio.current_task():
-                logger.info("__process_end_of_conversation: teardown runs inside the LLM task, not cancelling it")
-            else:
-                logger.info("__process_end_of_conversation: Cancelling LLM task")
-                self.llm_task.cancel()
-            self.llm_task = None
-
-        # Turn-based chat clears its spinner only on the <end_of_stream> marker. When the
-        # conversation ends mid-turn, close() below would drop it, so flush it first.
-        if self.turn_based_conversation and "output" in self.tools and self.tools["output"] is not None:
-            try:
-                eos_meta_info = {"type": "text", "sequence_id": -1, "request_id": str(uuid.uuid4())}
-                await self.tools["output"].handle(create_ws_data_packet("<end_of_stream>", eos_meta_info))
-            except Exception as e:
-                logger.warning(f"Failed to flush end_of_stream marker before closing chat output handler: {e}")
-
-        # Close output handler to prevent sends after websocket close. This only sets a
-        # flag — the WebSocket stays open, so stop_handler() below can still hang up.
-        if "output" in self.tools and self.tools["output"] is not None:
-            self.tools["output"].close()
-
-        # stop_handler() is the single hangup path. On sip-trunk it first waits for Asterisk
-        # to finish playing out what it has buffered, then sends HANGUP. Hanging up from here
-        # instead would cut the agent's goodbye short — Asterisk is handed audio faster than
-        # real time, so a chunk of it is still queued when the conversation ends.
-        await self.tools["input"].stop_handler()
-        logger.info("Stopped input handler")
-        if "transcriber" in self.tools and not self.turn_based_conversation:
-            logger.info("Stopping transcriber")
-            await self.tools["transcriber"].toggle_connection()
-            await asyncio.sleep(2)  # Making sure whatever message was passed is over
-
-        self.voicemail_handler.cancel_task()
+        return await _voice_hangup.process_end_of_conversation(self, web_call_timeout=web_call_timeout)
 
     def __update_preprocessed_tree_node(self):
-        logger.info(f"It's a preprocessed flow and hence updating current node")
-        self.tools["llm_agent"].update_current_node()
+        return _voice_hangup.update_preprocessed_tree_node(self)
 
     ##############################################################
     # LLM task
@@ -3973,55 +3946,17 @@ class TaskManager(BaseManager):
         self.llm_processed_request_ids.add(self.current_request_id)
         llm_response = ""
 
+    # spec-0004 B7: bodies live VERBATIM in voiceai.modules.voice.session.lifecycle.hangup
+    # (see the lifecycle block above); these same-named delegators keep this class the
+    # resolution site and inject the session.
     def _enter_hangup_state(self):
-        self.hangup_triggered = True
-        if self.hangup_decision_at is None:
-            self.hangup_decision_at = time.time()
-        # Hangup gates transcriber input, so release the audio gate now or the goodbye stalls on WAIT.
-        self.interruption_manager.on_user_speech_ended(update_utterance_time=False)
+        return _voice_hangup.enter_hangup_state(self)
 
     def _should_ignore_transcriber_input(self) -> bool:
-        return self.hangup_triggered or self._end_call_in_progress or self.has_transfer
+        return _voice_hangup.should_ignore_transcriber_input(self)
 
     async def process_call_hangup(self):
-        if self.hangup_decision_at is None:
-            self.hangup_decision_at = time.time()
-        if self._hangup_processing or self.conversation_ended:
-            logger.info(f"process_call_hangup: Hangup already in progress or conversation ended, skipping")
-            return
-
-        self._hangup_processing = True
-        self.hangup_triggered = True
-        if self.__is_s2s():
-            # The model has already spoken the goodbye by now, prompted by the end_call result
-            # or _hangup_after_goodbye, and there is no synthesizer to render one here anyway.
-            self.hangup_message_queued = False
-            self.hangup_triggered_at = time.time()
-            await self.__process_end_of_conversation()
-            return
-
-        message = self.call_hangup_message if not self.voicemail_handler.detected else ""
-        if not message or message.strip() == "":
-            self.hangup_message_queued = False  # No hangup message to wait for
-            self.hangup_triggered_at = time.time()
-            await self.__process_end_of_conversation()
-        else:
-            self.hangup_message_queued = True  # Hangup message will be synthesized
-            await self.wait_for_current_message()
-            await self.__cleanup_downstream_tasks()
-            meta_info = {
-                "io": self.tools["output"].get_provider(),
-                "request_id": str(uuid.uuid4()),
-                "cached": False,
-                "sequence_id": -1,
-                "format": "pcm",
-                "message_category": "agent_hangup",
-                "end_of_llm_stream": True,
-            }
-            await self._synthesize(create_ws_data_packet(message, meta_info=meta_info))
-            # Stamp after goodbye is queued — actual disconnect happens after it plays
-            self.hangup_triggered_at = time.time()
-        return
+        return await _voice_hangup.process_call_hangup(self)
 
     async def _execute_transfer_call_webhook(self, called_fun, url, param, resp, meta_info):
         """POST the transfer payload to the telephony webhook and record transfer_start/end.
@@ -4605,65 +4540,27 @@ class TaskManager(BaseManager):
         else:
             logger.info(f"Need to separate out output task")
 
+    # spec-0004 B7: the provider-health shadow (Region O) lives VERBATIM in
+    # voiceai.modules.voice.session.health; these same-named delegators keep this class
+    # the resolution site (instance-attr AsyncMock overrides, __new__ harnesses and the
+    # s2s runner's session call sites included) and inject the session (the
+    # HealthSession facade, §3.1 bridge 3).
     async def _report_provider_health(self, service, provider, model, ok, latency_ms=None, phase=None, blocking=False):
-        """Per-provider health signal for the circuit breaker (shadow). Never affects the call.
-
-        phase distinguishes connection setup ("connect") from per-turn processing ("process", the
-        default). Fire-and-forget by default. On the error path pass blocking=True so the write lands
-        before the call tears down (a bare create_task would be cancelled by shutdown); the timeout
-        keeps a slow Redis from ever delaying teardown.
-        """
-        if not self.on_provider_health or not provider:
-            return
-        try:
-            coro = self.on_provider_health(service, provider, model, ok, latency_ms, phase)
-            if blocking:
-                await asyncio.wait_for(coro, timeout=2)
-                return
-            _cb = asyncio.create_task(coro)
-            self._cb_tasks.add(_cb)
-            _cb.add_done_callback(self._cb_tasks.discard)
-        except Exception:
-            pass
+        return await _voice_health.report_provider_health(
+            self, service, provider, model, ok, latency_ms=latency_ms, phase=phase, blocking=blocking
+        )
 
     def _active_tool(self, kind):
-        """Live pool member for a transcriber/synthesizer (or the tool itself when not pooled)."""
-        tool = self.tools.get(kind)
-        pool = getattr(tool, f"{kind}s", None)
-        if pool is not None and hasattr(tool, "active_label"):
-            return pool.get(tool.active_label, tool)
-        return tool
+        return _voice_health.active_tool(self, kind)
 
     def _component_model(self, kind):
-        """Model of the live transcriber/synthesizer. None where the provider has no model (azure ASR)."""
-        return getattr(self._active_tool(kind), "model", None)
+        return _voice_health.component_model(self, kind)
 
     async def _report_component_health(self, service, provider, process_latency_ms, connect_flag):
-        """Per-turn ASR/TTS success for the shadow breaker, plus the connection latency once."""
-        if not self.on_provider_health or not provider:
-            return
-        # Must match the model the component errors report, or successes and failures split across members.
-        model = self._component_model(service)
-        if not getattr(self, connect_flag):
-            conn_ms = getattr(self._active_tool(service), "connection_time", None)
-            if conn_ms is not None:
-                setattr(self, connect_flag, True)
-                await self._report_provider_health(service, provider, model, True, conn_ms, phase="connect")
-        await self._report_provider_health(service, provider, model, True, process_latency_ms, phase="process")
+        return await _voice_health.report_component_health(self, service, provider, process_latency_ms, connect_flag)
 
     async def _report_stream_connect(self):
-        """Media-stream (stream_sid) connect latency for the shadow breaker: telephony only, once/call."""
-        if not self.on_provider_health or self._cb_stream_reported or not self.stream_sid_ts:
-            return
-        provider = self.tools["input"].io_provider
-        if provider in (None, "default"):
-            return
-        self._cb_stream_reported = True
-        # welcome_message_delay is slept through before the poll; it is agent config, not carrier latency.
-        latency_ms = round(self.stream_sid_ts - self.conversation_start_init_ts - (self.welcome_message_delay or 0))
-        await self._report_provider_health(
-            "telephony_stream", provider, None, True, max(0, latency_ms), phase="connect"
-        )
+        return await _voice_health.report_stream_connect(self)
 
     async def _end_call_on_component_error(self, error, hangup_detail):
         """End the call gracefully when a critical pipeline component fails.
@@ -7176,207 +7073,16 @@ class TaskManager(BaseManager):
             self.last_transmitted_timestamp, min(time.time(), self.mark_event_meta_data.get_audio_playing_until())
         )
 
+    # spec-0004 B7: the completion/backchanneling watchdog bodies live VERBATIM in
+    # voiceai.modules.voice.session.lifecycle.hangup (see the lifecycle block above);
+    # these same-named delegators keep this class the resolution site — run()'s task
+    # creation below, the s2s runner's mangled call site and patch.object(TaskManager,
+    # "_TaskManager__check_for_completion", ...) all keep resolving.
     async def __check_for_completion(self):
-        logger.info(f"Starting task to check for completion")
-        while True:
-            await asyncio.sleep(2)
-
-            if self.is_web_based_call and time.time() - self.start_time >= int(
-                self.task_config["task_config"]["call_terminate"]
-            ):
-                logger.info("Hanging up for web call as max time of call has been reached")
-                await self.__process_end_of_conversation(web_call_timeout=True)
-                self.hangup_detail = HangupReason.WEB_CALL_MAX_DURATION_REACHED
-                break
-
-            if self.last_transmitted_timestamp == 0:
-                logger.info(f"Last transmitted timestamp is simply 0 and hence continuing")
-                continue
-
-            if self.hangup_triggered:
-                if self.conversation_ended:
-                    logger.info(f"Call hangup completed successfully")
-                    break
-
-                if self.hangup_triggered_at:
-                    time_since_hangup = time.time() - self.hangup_triggered_at
-                    if time_since_hangup > self.hangup_mark_event_timeout:
-                        logger.warning(
-                            f"Hangup mark event not received within {self.hangup_mark_event_timeout}s (waited {time_since_hangup:.1f}s), forcing conversation end"
-                        )
-                        # Set hangup_sent since mark event didn't arrive
-                        if "output" in self.tools:
-                            self.tools["output"].set_hangup_sent()
-                        await self.__process_end_of_conversation()
-                        break
-                    else:
-                        logger.info(
-                            f"Waiting for hangup mark event ({time_since_hangup:.1f}s / {self.hangup_mark_event_timeout}s)"
-                        )
-                continue
-
-            # An in-flight LLM task (including a tool-call API request + follow-up generation
-            # running inside it) means a response is still being produced even though
-            # response_in_pipeline has flipped False after the filler audio. Treat that
-            # window as busy so we don't synthesize "are you still there" over the
-            # upcoming follow-up response. hang_conversation_after intentionally remains
-            # ungated so a truly hung task still triggers the inactivity hangup.
-            has_pending_generation = (
-                (self.llm_task is not None and not self.llm_task.done())
-                or (self.execute_function_call_task is not None and not self.execute_function_call_task.done())
-                # An s2s tool call lives here instead, and outlasting the floor would otherwise
-                # read as no forward progress and hang up mid-tool.
-                or any(not task.done() for task in getattr(self, "_s2s_tool_tasks", ()))
-            )
-
-            time_since_last_spoken_ai_word = time.time() - self.compute_last_ai_audio_timestamp()
-            time_since_user_last_spoke = (
-                (time.time() - self.time_since_last_spoken_human_word)
-                if self.time_since_last_spoken_human_word > 0
-                else float("inf")
-            )
-
-            # Must run above the audio/pipeline gate below (see method docstring).
-            if self._should_stall_hangup(
-                audio_playing=self.tools["input"].is_audio_being_played_to_user(),
-                has_pending_generation=has_pending_generation,
-                time_since_last_spoken_ai_word=time_since_last_spoken_ai_word,
-                time_since_user_last_spoke=time_since_user_last_spoke,
-            ):
-                logger.warning(
-                    f"Stall backstop: no forward progress for {time_since_last_spoken_ai_word:.1f}s "
-                    f"(audio_playing=False, no pending generation, response_in_pipeline={self.response_in_pipeline}) "
-                    f"- forcing hangup"
-                )
-                await self._hangup_after_goodbye(HangupReason.INACTIVITY_TIMEOUT)
-                break
-
-            # Draining audio needs no term here: every branch below is gated on
-            # time_since_last_spoken_ai_word, which stays at 0 while the caller can still hear.
-            if self._pipeline_busy(self.tools["input"].is_audio_being_played_to_user()):
-                continue
-
-            if (
-                self.repeat_after_silence_seconds
-                and time_since_last_spoken_ai_word > self.repeat_after_silence_seconds
-                and time_since_user_last_spoke > self.repeat_after_silence_seconds
-                and not self.response_in_pipeline
-                and not has_pending_generation
-            ):
-                await self._inject_and_run_llm(
-                    f"[silence] User was silent for {self.repeat_after_silence_seconds} seconds"
-                )
-                continue
-
-            if (
-                self.hang_conversation_after > 0
-                and time_since_last_spoken_ai_word > self.hang_conversation_after
-                and time_since_user_last_spoke > self.hang_conversation_after
-            ):
-                logger.info(
-                    f"{time_since_last_spoken_ai_word} seconds since AI last spoke and {time_since_user_last_spoke} seconds since user last spoke, both exceed {self.hang_conversation_after}s timeout - hanging up"
-                )
-                await self._hangup_after_goodbye(HangupReason.INACTIVITY_TIMEOUT)
-                break
-
-            elif (
-                time_since_last_spoken_ai_word > self.trigger_user_online_message_after
-                and not self.asked_if_user_is_still_there
-                and time_since_user_last_spoke > self.trigger_user_online_message_after
-                and not has_pending_generation
-            ):
-                logger.info(
-                    f"Asking if the user is still there (agent silent for {time_since_last_spoken_ai_word:.2f}s, user silent for {time_since_user_last_spoke:.2f}s)"
-                )
-                self.asked_if_user_is_still_there = True
-
-                if self.check_if_user_online:
-                    user_online_message = select_message_by_language(
-                        self.check_user_online_message_config, self.language
-                    )
-
-                    if self.__is_s2s():
-                        # The model owns the audio stream and there is no synthesizer to render
-                        # this, so the path below would log speech the caller never hears.
-                        await self.tools["s2s"].trigger_response(
-                            instructions=f"Say exactly this, and nothing else: {user_online_message}"
-                        )
-                        self.conversation_history.append_assistant(user_online_message, exclude_from_llm=True)
-                        continue
-
-                    self.tools["input"].reset_response_heard_by_user()
-
-                    if self.should_record:
-                        meta_info = {
-                            "io": "default",
-                            "request_id": str(uuid.uuid4()),
-                            "cached": False,
-                            "sequence_id": -1,
-                            "format": "wav",
-                            "message_category": "is_user_online_message",
-                            "end_of_llm_stream": True,
-                        }
-                        await self._synthesize(create_ws_data_packet(user_online_message, meta_info=meta_info))
-                    else:
-                        meta_info = {
-                            "io": self.tools["output"].get_provider(),
-                            "request_id": str(uuid.uuid4()),
-                            "cached": False,
-                            "sequence_id": -1,
-                            "format": "pcm",
-                            "message_category": "is_user_online_message",
-                            "end_of_llm_stream": True,
-                        }
-                        await self._synthesize(create_ws_data_packet(user_online_message, meta_info=meta_info))
-                    self.conversation_history.append_assistant(
-                        user_online_message,
-                        exclude_from_llm=True,
-                        sequence_id=-1,
-                        message_category="is_user_online_message",
-                    )
-
-                    # Explicitly reset the audio flag after synthesizing the prompt.
-                    # handle_interruption() below sends clearAudio to Plivo and wipes the
-                    # mark dictionary, so the final-chunk mark echo will never arrive and
-                    # is_audio_being_played would stay stuck True forever — blocking the
-                    # silence-hangup gate in this loop indefinitely.
-                    self.tools["input"].update_is_audio_being_played(False)
-
-                # Just in case we need to clear messages sent before
-                await self.tools["output"].handle_interruption()
-            else:
-                logger.info(
-                    f"Only {time_since_last_spoken_ai_word} seconds since last spoken time stamp and hence not cutting the phone call"
-                )
+        return await _voice_hangup.check_for_completion(self)
 
     async def __check_for_backchanneling(self):
-        while True:
-            user_speaking_duration = self.interruption_manager.get_user_speaking_duration()
-            if (
-                self.interruption_manager.is_user_speaking()
-                and user_speaking_duration > self.backchanneling_start_delay
-            ):
-                filename = random.choice(self.filenames)
-                logger.info(f"Should send a random backchanneling words and sending them {filename}")
-                audio = await get_raw_audio_bytes(
-                    f"{self.backchanneling_audios}/{filename}", local=True, is_location=True
-                )
-                if not self.turn_based_conversation:
-                    # backchannel wavs are 8kHz; web/freeswitch play raw PCM at the synth rate
-                    # (self.sampling_rate, e.g. 24k) — sending them labeled 24k without upsampling
-                    # plays ~3x fast. mulaw telephony (twilio/plivo/exotel) stays 8k.
-                    # NB: the old `["output"] != "default"` compared a dict to a str (always True).
-                    output_provider = (self.task_config["tools_config"].get("output") or {}).get("provider")
-                    is_raw_pcm_output = self.is_web_based_call or output_provider == TelephonyProvider.FREESWITCH.value
-                    target_rate = self.sampling_rate if is_raw_pcm_output else 8000
-                    audio = resample(audio, target_sample_rate=target_rate, format="wav")
-                    audio = wav_bytes_to_pcm(audio)
-                await self.tools["output"].handle(create_ws_data_packet(audio, self.__get_updated_meta_info()))
-            else:
-                logger.info(
-                    f"Callee isn't speaking and hence not sending or {user_speaking_duration} is not greater than {self.backchanneling_start_delay}"
-                )
-            await asyncio.sleep(self.backchanneling_message_gap)
+        return await _voice_hangup.check_for_backchanneling(self)
 
     async def __first_message(self, timeout=10.0):
         logger.info(f"Executing the first message task")

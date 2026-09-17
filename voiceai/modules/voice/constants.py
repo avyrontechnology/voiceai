@@ -84,6 +84,33 @@ LID_FLOW_LLM_SWITCH: Final[str] = "llm_switch"
 LID_PATH_TURN_BOUNDARY: Final[str] = "turn_boundary"
 LID_PATH_IDLE_FLUSH: Final[str] = "idle_flush"
 
+# --- Call-lifecycle flag groups (spec 0004 B7; the seam map's groups A and D) -----------
+#: The instance ``__dict__`` slot the lazily-created `CallLifecycle` state holder lives
+#: in on the session (the TaskManager class property of the same name shadows it, so
+#: every attribute access keeps flowing through the object).
+LIFECYCLE_STATE_ATTR: Final[str] = "_call_lifecycle"
+
+#: Group A — hangup-actuation flags: written by ``_enter_hangup_state`` /
+#: ``process_call_hangup`` and read by the completion watchdog and ``run()``'s
+#: goodbye-drain gate. Category-C harnesses hand-set these on ``__new__`` instances,
+#: which is why TaskManager forwards them property-for-property.
+LIFECYCLE_FLAG_GROUP_A: Final[tuple[str, ...]] = (
+    "hangup_triggered",
+    "hangup_triggered_at",
+    "hangup_decision_at",
+    "_hangup_processing",
+    "hangup_message_queued",
+)
+
+#: Group D — teardown flags: written by ``__process_end_of_conversation`` and the
+#: end_call tool actuation, read across the turn loops as the conversation-over gates.
+LIFECYCLE_FLAG_GROUP_D: Final[tuple[str, ...]] = (
+    "conversation_ended",
+    "_end_of_conversation_in_progress",
+    "_end_call_in_progress",
+    "ended_by_assistant",
+)
+
 # --- Error details keys (client-safe identifiers, never payloads) -----------------------
 LABEL_KEY: Final[str] = "label"
 AVAILABLE_LABELS_KEY: Final[str] = "available"

@@ -539,6 +539,89 @@ delegators; no legacy path emptied). File sizes: prompts.py 391, report.py 780,
 prompt_runtime.py 84 — all under the 800 target. make sec clean; make cov 86.50%
 (≥ 85%; the formal cov gate returns at B13a).)
 
+B7: check=green; test-all=7/2443/2450 (net-new: 0; reconciliation: no existing test
+removed or rewritten — purely additive: +47 arch tests in 2 new files.
+tests/arch/modules/voice/session/lifecycle/test_hangup.py ×29 (the B5 test_s2s_runner
+precedent): TaskManager delegator pins for all seven moved names (mangled
+_TaskManager__* spellings included), session-injection pins (one mangled, one plain),
+lookup-site identity pins for the five globals the hangup module now owns (R3), the
+flag-group contract — LIFECYCLE_FLAG_GROUP_A+D enumerate exactly the nine forwarded
+names, each is a TaskManager class property, CallLifecycle seeds the legacy __init__
+defaults, hand-sets on bare __new__ instances materialize the lazy holder (and
+_call_lifecycle answers the same object), reads flow back, del restores the
+AttributeError semantics, and the CallLifecycle operations bind their session — and
+behavior at the new home on stub sessions: the ignore-gate truth table, the
+enter-hangup lock + audio-gate release + first-decision-stamp keep, process_call_hangup
+(the exact agent_hangup packet incl. sequence_id=-1, the empty-goodbye / voicemail /
+s2s immediate-end paths, the duplicate-guard with its decision-stamp quirk),
+process_end_of_conversation (goodbye history append, web_call_timeout skip, duplicate
+no-op), the completion watchdog's web-call-timeout (detail stamped AFTER teardown,
+verbatim quirk) / completed-hangup / mark-grace-expiry branches (module asyncio.sleep
+stubbed via the R3 lookup site), one backchanneling pass (clip fetch, updated-meta
+packet, gap sleep) + the resample-rate split (8k telephony vs synth-rate web), and the
+dead tree-node advance. tests/arch/modules/voice/session/test_health.py ×18: delegator
++ injection pins and report_provider_health's never-affects-the-call contract
+(missing-callback/provider no-ops, blocking exact-args await, fire-and-forget
+strong-ref-then-discard, raising callback swallowed), the _active_tool/_component_model
+pool resolvers, report_component_health connect-once-then-process (+ the
+unstamped-connection defer), and report_stream_connect (once-per-call latch,
+browser-leg/no-sid guards that do NOT latch, welcome-delay-excluded latency, negative
+clamp to 0). The moves, all proven AST-identical bodies against HEAD during the step:
+original regions 3121-3204 (__process_end_of_conversation + the dead
+__update_preprocessed_tree_node beside it), 4349-4398 (_enter_hangup_state /
+_should_ignore_transcriber_input / process_call_hangup) and 7556-7757
+(__check_for_completion + __check_for_backchanneling) → session/lifecycle/hangup.py
+as module-level functions taking the session as `self` behind the LifecycleSession
+facade Protocol; Region O (original 4977-5036: _report_provider_health, _active_tool,
+_component_model, _report_component_health, _report_stream_connect) →
+session/health.py behind HealthSession. tm keeps a same-named thin delegator per
+moved body. Flag groups A+D: the step said to enumerate them from the spec seam map,
+but no seam-map document exists in the repo — the groups were derived from the step
+text's examples plus the moved regions' ownership and PINNED in constants
+(LIFECYCLE_FLAG_GROUP_A = hangup_triggered, hangup_triggered_at, hangup_decision_at,
+_hangup_processing, hangup_message_queued; LIFECYCLE_FLAG_GROUP_D =
+conversation_ended, _end_of_conversation_in_progress, _end_call_in_progress,
+ended_by_assistant). They live on CallLifecycle; TaskManager forwards each through a
+forwarded_flag data property whose holder is created LAZILY
+(hangup.session_lifecycle, instance __dict__ slot constants.LIFECYCLE_STATE_ATTR), so
+the Category-C harnesses that hand-set hangup_triggered/_end_call_in_progress on
+__new__ instances keep working and __init__'s untouched seeding lines now flow
+through the setters. Deviations, made loud: hangup_detail did NOT move — it is
+conditionally initialized (task_id==0 only, tm:519) and stamped across subsystems,
+so moving it would silently widen the task_id!=0 AttributeError surface;
+has_transfer / asked_if_user_is_still_there / hangup_mark_event_timeout stay in tm
+(transfer state, watchdog scratch, tunable — not groups A/D); reading an A+D flag on
+a bare __new__ instance now returns the seeded default instead of raising
+AttributeError (benign widening; the del path restores the raise, and no harness
+read-before-set exists); the dead __update_preprocessed_tree_node (zero call sites
+repo-wide) moved because its region contains it; __check_for_backchanneling is not
+strictly hangup but the 7556-7757 range covers both watchdogs; the helper predicates
+the completion loop calls (_should_stall_hangup, _pipeline_busy,
+compute_last_ai_audio_timestamp, _inject_and_run_llm) are OUTSIDE the named regions
+and stay verbatim in tm — the three test_check_completion_* gate files pin them
+unbound and pass untouched; no monkeypatch string-path rewrites were owed (the one
+patched shared global, create_ws_data_packet in test_pre_call_webhook:363, targets
+the __execute_function_call lookup site, which stays in tm); one NEW adapter file
+beyond B3's five, adapters/lifecycle_runtime.py (the B4/B5/B6 precedent), binds
+create_ws_data_packet / select_message_by_language / get_raw_audio_bytes /
+wav_bytes_to_pcm, resample rides the B3 adapters package surface, and hangup.py
+re-exports all five as the lookup site (R3). Six compile-time name-mangling
+accommodations inside otherwise-verbatim bodies (the B5/B6 precedent):
+self.__process_end_of_conversation ×2, self.__is_s2s ×2,
+self.__cleanup_downstream_tasks and self.__get_updated_meta_info spelled
+self._TaskManager__*. Mechanical accommodations: placeholder-less f-prefixes dropped
+×5 (F541, the B4 precedent), noqa E501 ×5 on verbatim long log lines, noqa S311 on
+the verbatim random.choice clip pick, noqa S110 on the verbatim health swallow, one
+comment-only `# type: ignore[union-attr]` in active_tool (AST identical), moved
+signatures gained annotations + Google docstrings, otobaai loggers (log content
+preserved). Gate names all green: tests/test_check_completion_*.py ×3,
+test_end_call_teardown_self_cancel, test_hangup_goodbye_drain_on_teardown
+(untouched-by-construction; the goodbye-drain source pin and the A0 meta-test stay
+green — run() untouched). task_manager.py: 8,185 → 7,891 lines, exactly five hunks
+(import block + four region swaps). File sizes: hangup.py 671, health.py 151,
+lifecycle_runtime.py 50 — all under the 800 target. make sec clean; make cov 86.14%
+(≥ 85%; the formal cov gate returns at B13a).)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
