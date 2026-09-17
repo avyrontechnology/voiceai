@@ -9,18 +9,23 @@
   tasks_to_cancel gather, after the snapshot is taken.
 - The undrained detector buffer is age-bounded so a skipped generation cannot lend its duration
   or text to a later turn.
+
+Ported at spec 0004 B9a: the pure evidence readers and the snapshot are pinned at their new
+home (``voiceai.modules.voice.session.language.lid_gate`` — the same function objects the
+TaskManager staticmethod bindings resolve to), and the fixture now hands back a
+`LanguageSwitchCoordinator` over the same fake session; the assertions are unchanged.
 """
 
 import time
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
-
-from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers.language_switcher import LanguageSwitcher
 from voiceai.lid.base import LIDBackend
+from voiceai.modules.voice.session.language import lid_gate
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
-RECENT = TaskManager._TaskManager__recent_detected_turns
+RECENT = lid_gate.recent_detected_turns
 
 
 def test_no_matching_segment_contributes_zero_duration():
@@ -69,26 +74,24 @@ def test_switch_marker_travels_and_renders():
 
 async def test_switch_path_holds_gate_until_cleanup(language_switch_tm):
     class GateWatcher:
-        def __init__(self, tm):
-            self.tm = tm
+        def __init__(self, session):
+            self.session = session
             self.gate_at_cleanup = "unset"
 
         async def cleanup(self):
-            self.gate_at_cleanup = self.tm.lid_playback_gate
+            self.gate_at_cleanup = self.session.lid_playback_gate
 
-    tm = language_switch_tm(audio_playing=True)
+    co = language_switch_tm(audio_playing=True)
+    tm = co.session
     live_task = MagicMock()
     live_task.done.return_value = False  # a live decide, must not be retired as stale
     gate = {"sequence_id": 1, "task": live_task, "armed_at": time.monotonic(), "language": "hi", "deadline": 1e18}
     tm.lid_playback_gate = gate
-    tm._TaskManager__release_lid_playback_gate = TaskManager._TaskManager__release_lid_playback_gate.__get__(
-        tm, TaskManager
-    )
+    tm._TaskManager__release_lid_playback_gate = partial(lid_gate.release_lid_playback_gate, tm)
     tm._TaskManager__record_lid_event = MagicMock()
     watcher = GateWatcher(tm)
     tm._TaskManager__cleanup_downstream_tasks = AsyncMock(side_effect=watcher.cleanup)
-    run = TaskManager._TaskManager__run_language_switch.__get__(tm, TaskManager)
-    await run("garbled hi", {"sequence_id": 1}, "hi")
+    await co.run_language_switch("garbled hi", {"sequence_id": 1}, "hi")
     # HELD through cleanup (the race window), cleared after.
     assert watcher.gate_at_cleanup is gate
     assert tm.lid_playback_gate is None
@@ -108,7 +111,7 @@ def test_snapshot_flushes_detector_health():
 
     pool._record_detector_health = record
     tm.tools = {"transcriber": pool}
-    snap = TaskManager._TaskManager__snapshot_lid_events(tm)
+    snap = lid_gate.snapshot_lid_events(tm)
     assert {"type": "detector_health"} in snap
 
 

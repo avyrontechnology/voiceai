@@ -12,11 +12,14 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ["OPENAI_API_KEY"] = "test-key"
 
 import socket  # noqa: E402
+from functools import partial
 
 import pytest  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock
 
-from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.voice.session.language import LanguageSwitchCoordinator
+from voiceai.modules.voice.session.language import lid_gate as _voice_lid_gate
+from voiceai.modules.voice.session.language import switcher as _voice_switcher
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
@@ -85,7 +88,16 @@ _SWITCH_DECISION = {"target_language": "mr", "target_confidence": 0.95, "reasoni
 
 @pytest.fixture
 def language_switch_tm(monkeypatch):
-    """Build a TaskManager double wired to drive the real __run_language_switch."""
+    """Build a LanguageSwitchCoordinator over a fake session (spec 0004 B9a port).
+
+    The session double (``coordinator.session``) is the same MagicMock the fixture
+    always built; the coordinator drives the REAL moved bodies at their new home
+    (`voiceai.modules.voice.session.language`), and the five real private helpers
+    the old fixture re-bound off TaskManager — the three switch tunables,
+    ``record_lid_event`` and the ``detector_corroborates`` static — are re-bound
+    onto the double from those same moved functions, so internal mangled dispatch
+    keeps hitting the real bodies.
+    """
 
     def _build(gap=0.0, audio_playing=True):
         monkeypatch.setenv("LANGUAGE_SWITCH_SETTLE_MS", "0")  # skip the detector-tail settle
@@ -128,10 +140,10 @@ def language_switch_tm(monkeypatch):
         tm._TaskManager__prepare_followup_generation = MagicMock(return_value=None)
         tm.conversation_history = MagicMock()
         tm.conversation_history.replace_last_user.return_value = True
-        for name in ("switch_audio_gap_s", "switch_settle_ms", "switch_decide_timeout_s", "record_lid_event"):
-            attr = f"_TaskManager__{name}"
-            setattr(tm, attr, getattr(TaskManager, attr).__get__(tm, TaskManager))
-        tm._TaskManager__detector_corroborates = TaskManager._TaskManager__detector_corroborates
-        return tm
+        for name in ("switch_audio_gap_s", "switch_settle_ms", "switch_decide_timeout_s"):
+            setattr(tm, f"_TaskManager__{name}", partial(getattr(_voice_switcher, name), tm))
+        tm._TaskManager__record_lid_event = partial(_voice_lid_gate.record_lid_event, tm)
+        tm._TaskManager__detector_corroborates = _voice_lid_gate.detector_corroborates
+        return LanguageSwitchCoordinator(tm)
 
     return _build

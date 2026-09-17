@@ -192,10 +192,27 @@ from voiceai.modules.voice.session import dtmf as _voice_dtmf
 from voiceai.modules.voice.session import events as _voice_events
 from voiceai.modules.voice.session import welcome as _voice_welcome
 
-# Handoff clips are static per (voice, text): cache across calls so an N-language agent
-# doesn't pay N TTS renders per call, concurrent with the welcome message. Process-wide.
-HANDOFF_CLIP_CACHE: dict = {}
-HANDOFF_CLIP_CACHE_MAX = 256
+# spec-0004 B9a: the language-subsystem bodies (Region Q — LID evidence + the playback
+# gate + the idle watcher, the Switch-LLM decision path incl. the public
+# handle_language_switch / switch_language, and the handoff clips) live VERBATIM in
+# voiceai.modules.voice.session.language.{lid_gate,switcher,handoff}. TaskManager keeps
+# a same-named thin delegator per moved name below (mangled _TaskManager__* spellings
+# included) and injects itself (the LanguageSession facade) on every call (§3.1
+# bridge 3). Those modules are now the lookup sites for the moved bodies' globals:
+# monkeypatch string paths for those target
+# voiceai.modules.voice.session.language.<module>.<name> (R3).
+from voiceai.modules.voice.session.language import handoff as _voice_handoff
+from voiceai.modules.voice.session.language import lid_gate as _voice_lid_gate
+from voiceai.modules.voice.session.language import switcher as _voice_switcher
+
+# spec-0004 B9a: the process-wide handoff clip cache moved WITH its owning subsystem
+# (rule 1g; flagged at B3) into voiceai.modules.voice.session.language.handoff. These
+# same-named bindings keep THIS module a lookup/import site by IDENTITY — the binding
+# IS the one cache dict, so tests/test_handoff_prewarm.py's import-and-clear keeps
+# operating on the real cache (the B3 welcome_pcm_upsampled precedent). The `as`
+# spelling makes each binding an EXPLICIT re-export (no_implicit_reexport).
+from voiceai.modules.voice.session.language.handoff import HANDOFF_CLIP_CACHE as HANDOFF_CLIP_CACHE
+from voiceai.modules.voice.session.language.handoff import HANDOFF_CLIP_CACHE_MAX as HANDOFF_CLIP_CACHE_MAX
 
 _NON_NODE_RESPONSE_CATEGORIES = frozenset(
     {"is_user_online_message", "filler", "backchanneling", "agent_welcome_message", "handoff"}
@@ -4877,305 +4894,73 @@ class TaskManager(BaseManager):
         """Check if sequence_id is valid. Delegates to InterruptionManager."""
         return self.interruption_manager.is_valid_sequence(sequence_id)
 
+    # spec-0004 B9a: the language-subsystem bodies (Region Q) live VERBATIM in
+    # voiceai.modules.voice.session.language.{lid_gate,switcher,handoff}. Each
+    # same-named thin delegator below keeps this class the resolution site
+    # (patch.object, __get__-rebinds, __new__ harnesses, fixture doubles and internal
+    # self-dispatch via the mangled _TaskManager__* spellings) and injects the session
+    # (self, the LanguageSession facade) on every call (§3.1 bridge 3). The class-level
+    # lid_playback_gate default above is UNTOUCHED — a pinned behavior-invariant
+    # (tests/test_language_switch_race.py asserts it at CLASS level, so it can never
+    # become a descriptor); the LanguageSwitchCoordinator's delegating property
+    # forwards to the session attribute instead. The three pure evidence readers are
+    # bound as staticmethods of the MOVED functions, so
+    # TaskManager._TaskManager__buffered_language_evidence(pool, ...) and friends keep
+    # resolving by identity. Those modules are now the lookup sites for the moved
+    # bodies' globals (the pool classes' isinstance checks, the LANGUAGE_SWITCH_*
+    # constants, trailing_utterance_text, build_lid_decision_record,
+    # is_alphanumeric_readout, create_ws_data_packet, convert_to_request_log,
+    # update_prompt_with_context, audio_to_mulaw8k, audio_to_pcm, LANGUAGE_NAMES,
+    # SUPPORTED_OUTPUT_TELEPHONY_HANDLERS, WEBCALL_TTS_SAMPLE_RATE): monkeypatch
+    # string paths for those target voiceai.modules.voice.session.language.<module>.<name>.
+    # A delegator is deleted only in the commit that ports its pinning tests
+    # (spec 0004 iron rule; B9b owns the remaining language test files). The
+    # speculation-commit trio below (__log_committed_speculation /
+    # __log_discarded_speculation / __speculative_followup_text) deliberately stays in
+    # this class: step B10 (the history/interruption commit path) owns its
+    # tests/test_speculation_commit_logging.py patch-path repoints (R3).
     def _collect_flux_lid_events(self) -> list:
-        """Collect flux_lid_events from the transcriber or all transcribers in a pool."""
-        t = self.tools.get("transcriber")
-        if isinstance(t, TranscriberPool):
-            events = []
-            for transcriber in t.transcribers.values():
-                events.extend(getattr(transcriber, "flux_lid_events", []))
-            return events
-        return list(getattr(t, "flux_lid_events", []))
+        return _voice_lid_gate.collect_flux_lid_events(self)
 
     def __language_switch_enabled(self) -> bool:
-        """Per-call gate for LLM-driven language switching (controlled rollout).
-
-        Single source of truth: tools_config["llm_language_switch"], set per call
-        by dashboard-backend from the LANGUAGE_SWITCH/llm_language_switch feature
-        flag (user- or org-level grant). Truthy → new flow (unbiased detector +
-        Switch LLM); false/absent → legacy flow (switch tool + LID heuristic).
-        """
-        return bool(self.task_config.get("tools_config", {}).get("llm_language_switch"))
+        return _voice_lid_gate.language_switch_enabled(self)
 
     def __arm_lid_playback_gate(self, sequence_id, decision_task) -> None:
-        """Hold this turn's AUDIO (not its generation) until the switch decision resolves.
-
-        Generation starts immediately, so a turn that ends up staying pays nothing: by the time
-        the reply is synthesized the decision has usually landed and the gate is already open.
-        Only a turn that really switches waits — and its audio is discarded by the truncate
-        instead of being played in the old language.
-        """
-        if sequence_id is None or sequence_id == -1:
-            return  # -1 is the always-valid handoff/system sequence; never gate it
-        self.lid_playback_gate = {
-            "sequence_id": sequence_id,
-            "task": decision_task,
-            "armed_at": time.monotonic(),
-            "language": self.language,
-            # Wall-clock backstop. Every other escape depends on state that could in principle
-            # stop changing; this one cannot, so the gate can never wedge the output loop.
-            # monotonic, not time.time(): a backwards wall-clock step (ntp makestep, VM resume)
-            # would suppress the one escape that makes a wedged output loop impossible.
-            "deadline": time.monotonic()
-            + float(os.getenv("LANGUAGE_SWITCH_MAX_HOLD_S", str(LANGUAGE_SWITCH_MAX_HOLD_S))),
-        }
+        return _voice_lid_gate.arm_lid_playback_gate(self, sequence_id, decision_task)
 
     def __lid_playback_gate_holds(self, sequence_id) -> bool:
-        """True only while THIS turn's switch decision is still open.
-
-        Self-defending: every reason to release is checked here, because the output loop's WAIT
-        branch has no exit of its own — it holds the dequeued message and re-polls, so anything
-        queued behind it (including a goodbye) waits with it.
-        """
-        gate = self.lid_playback_gate
-        if gate is None or self.language_switcher is None:
-            return False  # legacy/multilingual-off calls reach the loop but never the gate
-        if sequence_id is None or sequence_id == -1 or sequence_id != gate["sequence_id"]:
-            return False
-        if self.hangup_triggered or self.conversation_ended or self._should_ignore_transcriber_input():
-            self.__release_lid_playback_gate(gate, "teardown")
-            return False  # never delay a goodbye or a transfer
-        if gate["task"].done():
-            self.__release_lid_playback_gate(gate, "decided")
-            return False
-        if time.monotonic() >= gate["deadline"]:
-            # Expired: the decide outran the gate, so old-language audio plays after all. This is
-            # the outcome that says the deadline is too tight (or the judge too slow) — the whole
-            # reason the gate needs telemetry rather than a log line.
-            self.__release_lid_playback_gate(gate, "expired")
-            return False
-        return True
+        return _voice_lid_gate.lid_playback_gate_holds(self, sequence_id)
 
     def __release_lid_playback_gate(self, gate: dict, outcome: str, clear: bool = True) -> None:
-        """Open the gate once and record how long it held and why it opened.
+        return _voice_lid_gate.release_lid_playback_gate(self, gate, outcome, clear=clear)
 
-        The generation hold this replaced wrote reply_hold records; without an equivalent there is
-        no way to tell a gate that worked (outcome=decided, held < deadline) from one that expired
-        and leaked the old language, nor to compute the played/dropped ratio.
-
-        clear=False records telemetry but leaves the gate HOLDING: the switch path needs the hold
-        to survive until cleanup invalidates the sequence, else a 50ms output-loop poll in that
-        window ships the old-language audio the gate existed to stop.
-        """
-        if clear:
-            self.lid_playback_gate = None  # one-shot: open and forget
-        if gate.get("recorded"):
-            return  # telemetry already written by the clear=False release
-        gate["recorded"] = True
-        held_ms = round((time.monotonic() - gate["armed_at"]) * 1000, 1)
-        logger.info(f"LanguageSwitcher: playback gate opened ({outcome}) after {held_ms}ms")
-        self.__record_lid_event(
-            {
-                "type": "playback_gate",
-                "outcome": outcome,
-                "held_ms": held_ms,
-                "sequence_id": gate["sequence_id"],
-                "from_language": gate["language"],
-            }
-        )
-
-    @staticmethod
-    def __recent_detected_turns(pool, limit: int = 4) -> list:
-        """(detected_language, longest_segment_s OF THAT LANGUAGE) for the last few Switch-LLM
-        firings, oldest first — the cross-turn evidence the judge needs to spot sustained drift.
-        Read from the telemetry we already append per firing, so it costs nothing extra."""
-
-        def detected_lang_duration(r):
-            # Duration from the detected language's OWN segments only. No fallback to the
-            # buffer max: when NO segment carries the detected tag, the detector never heard
-            # that language — borrowing another language's duration handed rule 8 fake
-            # "real speech" entries (e.g. en(2.5) built entirely from hi-tagged audio).
-            detected_short = (r.get("detected_language") or "").split("-")[0].lower()
-            segment_durations = [
-                float(seg.get("audio_s") or 0.0)
-                for seg in r.get("detector_segments") or []
-                if (seg.get("lang") or "").split("-")[0].lower() == detected_short
-            ]
-            return max(segment_durations) if segment_durations else 0.0
-
-        # Filter THEN slice: handoff and legacy records share this list, so slicing first let
-        # them displace real turns — right after a switch the tail is all handoff records and the
-        # judge got "(none)" exactly when drift evidence matters most.
-        turns = [
-            (r.get("detected_language"), detected_lang_duration(r), r.get("switched_to"))
-            for r in pool.lid_detection_events
-            if r.get("flow") == "llm_switch" and r.get("detected_language")
-        ]
-        return turns[-limit:]
-
-    @staticmethod
-    def __detector_corroborates(segments, target) -> bool:
-        """True when a SUBSTANTIVE detector segment independently agrees with the judge's target.
-
-        Per-segment on purpose: the buffer's language/prob describe only its final fragment while
-        its max-duration describes any segment, so combining those aggregates let a sub-second
-        acknowledgment inherit a long utterance's substance. Requiring one segment to carry the
-        target tag, a confident prob AND the duration keeps the evidence about one utterance.
-        """
-        if not target:
-            return False
-        short_target = target.split("-")[0].lower()
-        min_prob = float(os.getenv("LANGUAGE_SWITCH_DETECTOR_MIN_PROB", "0.8"))
-        min_segment_s = float(
-            os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-        )
-        for segment in segments or []:
-            lang = (segment.get("lang") or "").split("-")[0].lower()
-            if lang != short_target:
-                continue
-            prob = segment.get("prob")
-            if prob is None:  # backend reports no score — no evidence, not low confidence
-                continue
-            if float(prob) >= min_prob and float(segment.get("audio_s") or 0.0) >= min_segment_s:
-                return True
-        return False
-
-    @staticmethod
-    def __buffered_language_evidence(pool, active_short: str) -> tuple:
-        """(saw_tags, foreign_languages, foreign_max_segment_s) for the whole buffer,
-        foreign oldest-first, foreign_max_segment_s = longest FOREIGN-tagged segment.
-
-        Unsupported tags count as foreign on purpose — rule 4 lets the judge remap a
-        confusable-cluster mis-tag (kn↔te) onto a supported language.
-
-        saw_tags distinguishes "read the buffer, everything is the active language" from "learned
-        nothing" — a backend without buffer_segments returns [] (transcriber_pool.py), and an odd
-        API could raise. Only the first case may skip a decide; the others must still fire, or
-        switching would go permanently inert on that backend. Never raises: the idle watcher's
-        outer handler exits its loop on any exception, which would kill stuck-language recovery
-        for the rest of the call.
-        """
-        foreign = []
-        saw_tags = False
-        foreign_max_s = 0.0
-        try:
-            for segment in pool.lid_buffer_segments() or []:
-                lang = (segment.get("lang") or "").split("-")[0].lower()
-                if not lang:
-                    continue
-                saw_tags = True
-                if lang != active_short:
-                    if lang not in foreign:
-                        foreign.append(lang)
-                    # Foreign segments only: the buffer-wide max let a long active turn lend
-                    # its duration to a mis-tagged fragment (armed the gate for a sure "stay").
-                    foreign_max_s = max(foreign_max_s, float(segment.get("audio_s") or 0.0))
-        except (AttributeError, TypeError) as e:
-            logger.warning(f"LanguageSwitcher: could not read detector segments ({e}) — will not skip the decide")
-            return False, [], 0.0
-        return saw_tags, foreign, foreign_max_s
+    __recent_detected_turns = staticmethod(_voice_lid_gate.recent_detected_turns)
+    __detector_corroborates = staticmethod(_voice_lid_gate.detector_corroborates)
+    __buffered_language_evidence = staticmethod(_voice_lid_gate.buffered_language_evidence)
 
     def __switch_decide_timeout_s(self) -> float:
-        """Switch-LLM decide ceiling (the asyncio.wait_for around decide())."""
-        return float(os.getenv("LANGUAGE_SWITCH_DECIDE_TIMEOUT_S", str(LANGUAGE_SWITCH_DECIDE_TIMEOUT_S)))
+        return _voice_switcher.switch_decide_timeout_s(self)
 
     def __switch_settle_ms(self) -> int:
-        """Detector-tail settle before draining its buffer. Shared with the hold budget."""
-        return int(os.getenv("LANGUAGE_SWITCH_SETTLE_MS", str(LANGUAGE_SWITCH_SETTLE_MS)))
+        return _voice_switcher.switch_settle_ms(self)
 
     def __switch_audio_gap_s(self) -> float:
-        """Silence after cutting audible old-language audio. tools_config first (the gap
-        depends on the carrier's clear semantics, so it is per-agent tunable), env fallback —
-        same precedence as language_switch_lid_provider."""
-        configured = self.task_config.get("tools_config", {}).get("language_switch_audio_gap_s")
-        if configured is not None:
-            return float(configured)
-        return float(os.getenv("LANGUAGE_SWITCH_AUDIO_GAP_S", str(LANGUAGE_SWITCH_AUDIO_GAP_S)))
+        return _voice_switcher.switch_audio_gap_s(self)
 
     def _spawn_language_switch_decision(self, transcriber_message: str, meta_info: dict) -> asyncio.Task | None:
-        """Fire the once-per-turn language-switch decision as a background task.
-
-        Single home for the hook so the turn-boundary and eager call sites can't
-        drift: snapshots meta_info once (it doubles as the idle-flush follow-up
-        template) and spawns the decision. No-op when switching isn't gated on.
-        """
-        if self.language_switcher is None:
-            return None
-        snapshot = dict(meta_info)
-        self._last_turn_meta_info = snapshot
-        decision_task = asyncio.create_task(
-            self.handle_language_switch(transcriber_message, snapshot, spawn_language=self.language)
-        )
-        # Arm here, not at the call sites: the eager (Flux) path spawns the decision too, and
-        # arming only at the turn boundary left every eager turn playing the old-language reply.
-        if self.__detector_language_mismatch():
-            self.__arm_lid_playback_gate(snapshot.get("sequence_id"), decision_task)
-        return decision_task
+        return _voice_switcher.spawn_language_switch_decision(self, transcriber_message, meta_info)
 
     def __detector_language_mismatch(self) -> bool:
-        """True when the unbiased detector tagged the buffered turn as a language other
-        than the active one and both pools support it — a switch decision is likely to
-        land, so the main reply should wait for it."""
-        pool = self.tools.get("transcriber")
-        if not isinstance(pool, TranscriberPool):
-            return False
-        active_short = (self.language or "").split("-")[0].lower()
-        # Read the WHOLE buffer, exactly as the idle watcher does. Reading only the newest tag
-        # made a foreign turn whose tail fragment is mis-tagged as the active language look like
-        # no mismatch at all, so its audio was never gated and got truncated mid-sentence.
-        saw_tags, foreign_langs, foreign_max_s = self.__buffered_language_evidence(pool, active_short)
-        detected = next((lang for lang in foreign_langs if lang in pool.labels), None)
-        if detected is None:
-            return False
-        # Substance measured on the FOREIGN segments themselves, like __detector_corroborates.
-        min_segment_s = float(
-            os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-        )
-        if foreign_max_s < min_segment_s:
-            return False
-        synth = self.tools.get("synthesizer")
-        return not isinstance(synth, SynthesizerPool) or detected in synth.labels
+        return _voice_lid_gate.detector_language_mismatch(self)
 
     def __snapshot_lid_events(self) -> list:
-        """lid_detection_events for task_output, with detector_health flushed FIRST.
-
-        The pool's cleanup() also records health, but cleanup is only awaited at the
-        tasks_to_cancel gather — after this snapshot — so a record written there never
-        reached the DB (log-only). Recording here, idempotently, closes that gap.
-        """
-        pool = self.tools.get("transcriber")
-        if pool is None:
-            return []
-        record = getattr(pool, "_record_detector_health", None)
-        if callable(record):
-            try:
-                record()
-            except Exception as e:
-                logger.warning(f"detector_health record failed: {e}")
-        self.__record_lid_usage(pool)
-        return list(getattr(pool, "lid_detection_events", []))
+        return _voice_lid_gate.snapshot_lid_events(self)
 
     def __record_lid_usage(self, pool) -> None:
-        """One per-call spend record in lid_detection_events: judge tokens + detector audio seconds."""
-        events = getattr(pool, "lid_detection_events", None)
-        if events is None or any(e.get("type") == "lid_usage" for e in events):
-            return
-        switcher = self.language_switcher
-        detector_seconds = pool.lid_audio_seconds()
-        if switcher is None and not detector_seconds:
-            return
-        record = {"type": "lid_usage", "ts": time.time(), "detector_audio_seconds": detector_seconds}
-        if switcher is not None:
-            record.update(
-                {
-                    # Every model that answered this call — the runtime fallback can swap mid-call.
-                    "judge_models": switcher.models_used or [switcher.model],
-                    "judge_model": switcher.model,
-                    "judge_requests": switcher.usage_totals.get("requests", 0),
-                    "judge_input_tokens": switcher.usage_totals.get("input_tokens", 0),
-                    "judge_output_tokens": switcher.usage_totals.get("output_tokens", 0),
-                    "judge_cached_tokens": switcher.usage_totals.get("cached_tokens", 0),
-                }
-            )
-        events.append(record)
+        return _voice_lid_gate.record_lid_usage(self, pool)
 
     def __record_lid_event(self, record: dict) -> None:
-        """Append a metrics record to the pool's lid_detection_events (persisted to
-        lid_shadow_events JSONB) so new switch behaviors are measurable, not log-only."""
-        pool = self.tools.get("transcriber")
-        if isinstance(pool, TranscriberPool):
-            record["ts"] = time.time()
-            pool.lid_detection_events.append(record)
+        return _voice_lid_gate.record_lid_event(self, record)
 
     async def handle_language_switch(
         self,
@@ -5183,168 +4968,10 @@ class TaskManager(BaseManager):
         meta_info: dict | None = None,
         spawn_language: str | None = None,
     ) -> None:
-        """Decide + apply a language switch from BOTH transcripts of the current turn.
-
-        Fired once per conversational turn (from _handle_transcriber_output or the eager
-        Flux path), or by the idle-flush watcher with no arguments when the locked ASR
-        couldn't decode the caller's speech and no main turn fired. Feeds the Switch LLM
-        both the unbiased detector transcript (drained from the pool buffer) and the live
-        language-locked transcript (active_transcript). The model returns a per-language
-        confidence distribution + a target; we switch if the target is supported by BOTH
-        pools, ≠ the current language, and clears LANGUAGE_SWITCH_MIN_CONFIDENCE.
-
-        On a switch, the locked-pool transcript of this turn is garbled (wrong-language
-        ASR) or absent, so after switching we put the unbiased detector transcript into
-        conversation history (replacing the garbled turn, or appending it in the
-        idle-flush case) and spawn a follow-up response — the agent then answers what
-        the caller actually said, in the new language.
-
-        Decisions are serialized via language_switch_lock — background-only, the
-        caller-facing ASR→LLM→TTS pipeline never waits on it; worst case a second
-        decision queues ~2s behind the first.
-        """
-        spec = None
-        try:
-            try:
-                async with self.language_switch_lock:
-                    followup = await self.__run_language_switch(active_transcript, meta_info, spawn_language)
-            finally:
-                # Claim our own spec task while the lock is still effectively ours (no await
-                spec = self._spec_followup_task
-                self._spec_followup_task = None
-            # Generate outside the lock (streamed, multi-second). A later confirmed switch
-            if followup is not None:
-                await self.__generate_switch_followup(*followup)
-        except Exception as e:
-            logger.error(f"LanguageSwitcher: handler error: {e}\n{traceback.format_exc()}")
-        finally:
-            # Discard any unconsumed speculative generation — covers every exit path
-            # (stay decisions, gate rejections, timeouts, exceptions) without littering
-            # the run with per-return cancels.
-            if spec is not None:
-                if not spec.done():
-                    spec.cancel()
-                    logger.info("LanguageSwitcher: speculative follow-up discarded")
-                elif not spec.cancelled() and spec.exception() is None:
-                    discarded_text, discarded_capture = spec.result()
-                    self.__log_discarded_speculation(discarded_text, discarded_capture)
+        return await _voice_switcher.handle_language_switch(self, active_transcript, meta_info, spawn_language)
 
     async def __lid_idle_watcher(self):
-        """Recover the stuck-language deadlock.
-
-        The switch decision normally fires at the main transcriber's turn boundary —
-        but a language-locked ASR yields NO turn for speech it can't decode, so the
-        decision would never run and the agent stays stuck. The unbiased detector still
-        hears that speech: if its buffer has content that has gone idle (caller finished
-        speaking) and no main turn drained it within the threshold, run the decision on
-        the buffered transcript.
-        """
-        idle_flush_s = float(os.getenv("LANGUAGE_SWITCH_IDLE_FLUSH_S", "2.0"))
-        # When saaras has already tagged the buffered speech as a DIFFERENT language
-        # than the active one, the long accumulate window is pointless caution — the
-        # mismatch itself is the signal. Use a shorter threshold (still above typical
-        # 0.3-0.8s inter-segment gaps so we don't fire mid-utterance).
-        mismatch_idle_flush_s = float(os.getenv("LANGUAGE_SWITCH_MISMATCH_IDLE_FLUSH_S", "1.2"))
-        try:
-            skip_logged = False  # one skip line per buffer generation, not one per 2s re-poll
-            while not self.conversation_ended:
-                # No switches once hangup / end-call / transfer is underway — a switch here
-                # truncates the goodbye and deadlocks teardown. Just as important: on these states
-                # __run_language_switch abandons the decision PRE-drain (the _should_ignore check
-                # below its entry), leaving the aged detector buffer intact and >= threshold. Without
-                # this guard the fire branch below would re-invoke the decision every iteration with
-                # no awaiting yield — a synchronous spin that pegs and blocks the pod's event loop,
-                # starving co-tenant calls of media/TTS (Jul 2026 transcript-missing incident).
-                if self._should_ignore_transcriber_input():
-                    await asyncio.sleep(0.5)
-                    continue
-                pool = self.tools.get("transcriber")
-                if not isinstance(pool, TranscriberPool):
-                    await asyncio.sleep(0.5)
-                    continue
-                age = pool.lid_buffer_age()
-                if age is None:
-                    skip_logged = False  # buffer drained — the next skip is news again
-                    # Nothing buffered — sleep until speech actually arrives (event set
-                    # on each detector segment) instead of polling. The timeout keeps
-                    # the conversation_ended check alive and covers backends without
-                    # the event (feature is inert on those anyway).
-                    buffer_event = pool.lid_buffer_event()
-                    if buffer_event is None:
-                        await asyncio.sleep(0.5)
-                        continue
-                    try:
-                        await asyncio.wait_for(buffer_event.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        pass
-                    continue
-                buffered_lang = pool.lid_buffer_language()
-                active_short = (self.language or "").split("-")[0].lower()
-                # Any foreign-tagged segment counts, not just the newest: a turn that opened in
-                # another language and ended on an active-language word is still evidence, and
-                # reading only the latest tag made it wait out the slower same-language window.
-                saw_tags, foreign_langs, foreign_max_s = self.__buffered_language_evidence(pool, active_short)
-                mismatch = bool(foreign_langs)
-                threshold = mismatch_idle_flush_s if mismatch else idle_flush_s
-                # An all-active-language buffer can only produce "stay", so firing would spend
-                # ~1.5-2s of decide (and the lock it holds) on a foregone conclusion. Skipping
-                # deliberately does NOT drain: if the main ASR later delivers this turn, the
-                # turn-boundary decide still sees the full transcript.
-                nothing_to_decide = saw_tags and not mismatch
-                # Mid-utterance suppression: interims flowing means the main turn is coming and
-                # will drain this buffer — firing now slices the utterance across two decides.
-                # Stale-flag escape: the flag claims speech but the detector (same audio) has
-                # produced nothing for the whole cap — the flag is stale, fire anyway.
-                caller_speaking = bool(getattr(self.interruption_manager, "callee_speaking", False))
-                if caller_speaking and age < LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S:
-                    await asyncio.sleep(0.1)
-                    continue
-                if age >= threshold and not nothing_to_decide:
-                    logger.info(
-                        f"LanguageSwitcher: idle-flush — detector speech idle {age:.1f}s with no main turn "
-                        f"(buffered_lang={buffered_lang!r}, active={self.language!r}, threshold={threshold}s, "
-                        f"caller_speaking={caller_speaking}); running switch decision"
-                    )
-                    await self.handle_language_switch(spawn_language=self.language)
-                    # Spin-guard: a healthy decision drains the buffer (age → None) and the loop
-                    # parks on the buffer event next iteration. If it returned WITHOUT draining
-                    # (e.g. an ignore-input flag flipped after the loop-top guard), the buffer stays
-                    # >= threshold and we would re-fire immediately with no yield. Force one so the
-                    # loop can never busy-spin the event loop, whatever the return path.
-                    if pool.lid_buffer_age() is not None:
-                        await asyncio.sleep(0.1)
-                    continue
-                # Not firing — either not idle long enough, or nothing a decide could change.
-                # Either way: wait for new speech and re-evaluate. The clear-then-wait (not a plain
-                # sleep) is what makes switch_language's poke receivable: with speech buffered the
-                # event is already set, so an unclear-ed wait returns instantly and spins. That poke
-                # is how a switch gets this schedule recomputed for the new language's threshold
-                # instead of sleeping out the old one.
-                if nothing_to_decide and age >= threshold:
-                    if not skip_logged:
-                        # Once per buffer generation — this branch re-wakes every 2s otherwise.
-                        logger.info(
-                            f"LanguageSwitcher: idle-flush skipped — buffer is all active language "
-                            f"('{active_short}', idle {age:.1f}s); no decide can change it"
-                        )
-                        skip_logged = True
-                    remaining = 2.0  # nothing pending; just wait for the next segment
-                else:
-                    remaining = max(threshold - age, 0.05)
-                buffer_event = pool.lid_buffer_event()
-                if buffer_event is None:
-                    await asyncio.sleep(remaining)
-                    continue
-                buffer_event.clear()
-                try:
-                    await asyncio.wait_for(buffer_event.wait(), timeout=remaining)
-                    skip_logged = False  # event fired: new segment or a switch poke — re-evaluate loudly
-                except asyncio.TimeoutError:
-                    pass
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"LanguageSwitcher: idle watcher error: {e}\n{traceback.format_exc()}")
+        return await _voice_lid_gate.lid_idle_watcher(self)
 
     async def __run_language_switch(
         self,
@@ -5352,675 +4979,31 @@ class TaskManager(BaseManager):
         meta_info: dict | None,
         spawn_language: str | None = None,
     ) -> tuple | None:
-        if not self.language_switcher:
-            return
-        # Abandon if the call is ending/transferring: a switch here truncates the goodbye
-        if self.conversation_ended or self._should_ignore_transcriber_input():
-            logger.info("LanguageSwitcher: hangup/transfer/teardown in progress — abandoning switch (pre-decide)")
-            return None
-        pool = self.tools.get("transcriber")
-        if not isinstance(pool, TranscriberPool):
-            return
-        labels = pool.labels
-        if len(labels) < 2:
-            return
-
-        # Stale-decision guard: the language changed while this decision waited on the lock,
-        # so its LIVE transcript is mislabeled (it came from the PRE-switch recognizer) — that
-        # mislabeling caused the mr→hi→mr ping-pong in QA 1a16da82. Drop the DECISION only.
-        # The detector buffer is kept: the tap runs language-code=unknown, so its speech means
-        # the same before and after a switch, and draining it here deleted a caller's explicit
-        # "Can you speak in English?" mid-switch, costing a repeat + ~28s (QA 971254c0).
-        if spawn_language is not None and spawn_language != self.language:
-            retained = pool.lid_buffer_age()
-            logger.info(
-                f"LanguageSwitcher: language changed since capture ('{spawn_language}' → '{self.language}') — "
-                f"dropping stale decision (detector buffer retained, age={retained})"
-            )
-            return None
-
-        # The unbiased detector is a separate socket with its own latency, so at this
-        # (main transcriber's) turn boundary its buffer may still be missing the tail of
-        # this turn. Let it settle briefly so we drain a complete turn rather than a
-        # partial one. This runs in a background task while the main LLM already answers,
-        # so the delay never blocks the caller-facing pipeline. Skipped on the idle-flush
-        # path (no active_transcript): the buffer is already ≥ the idle threshold old, so
-        # settling would only extend the lock hold for nothing.
-        # Also skipped when the detector has ALREADY been quiet longer than the settle window:
-        # nothing is in flight, so waiting cannot add a segment — it only holds the lock and
-        # delays the flip. Same reasoning as the idle-flush skip, applied to the turn path.
-        settle_ms = self.__switch_settle_ms()
-        if settle_ms > 0 and active_transcript:
-            detector_idle_s = pool.lid_buffer_age()
-            if detector_idle_s is None or detector_idle_s < settle_ms / 1000:
-                await asyncio.sleep(settle_ms / 1000)
-
-        buffered_max_segment_s = pool.lid_buffer_max_segment_seconds()
-        # Peek confidence + segments before take_lid_transcript() drains the buffer.
-        detector_lang_confidence = pool.lid_buffer_language_confidence()
-        detector_segments = pool.lid_buffer_segments()
-        detector_transcript, detected_lang = pool.take_lid_transcript()
-        if not detector_transcript:
-            return
-        # One selection, used by BOTH the speculative copy and the real history append —
-        idle_flush_user_text = trailing_utterance_text(detector_segments) or detector_transcript
-        # Pre-decide snapshot: a turn landing meanwhile would be duplicated below.
-        history_signature_at_decide = self.conversation_history.user_turn_signature()
-        active = self.language
-
-        # Foreign-segment max, not the buffer-lifetime max: the idle-flush skip leaves the buffer
-        # undrained, so a stale long ACTIVE-language segment could otherwise carry a short
-        # mis-tagged fragment past the substance gate below.
-        active_short = (active or "").split("-")[0].lower()
-        foreign_max_segment_s = max(
-            (
-                float(s.get("audio_s") or 0.0)
-                for s in detector_segments
-                if (s.get("lang") or "").split("-")[0].lower() not in ("", active_short)
-            ),
-            default=0.0,
-        )
-        min_segment_s = float(
-            os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-        )
-        # Late arm: the spawn-time arm reads the buffer at one instant, and an idle-flush decide's
-        # drain (or a segment landing just after) leaves it empty there — the reply then plays in
-        # the old language while this decide runs. Arm here from the drained evidence instead.
-        stale_gate = self.lid_playback_gate
-        if stale_gate is not None and stale_gate["task"].done():
-            # Its audio finished before the decide did, so no chunk ever polled it open —
-            # left in place it would block this arm forever (only chunk polls release).
-            self.__release_lid_playback_gate(stale_gate, "decided")
-        if (
-            self.lid_playback_gate is None
-            and detected_lang
-            and detected_lang != active
-            and detected_lang in labels
-            and foreign_max_segment_s >= min_segment_s
-        ):
-            late_synth = self.tools.get("synthesizer")
-            if not isinstance(late_synth, SynthesizerPool) or detected_lang in late_synth.labels:
-                self.__arm_lid_playback_gate((meta_info or {}).get("sequence_id"), asyncio.current_task())
-
-        # Speculative follow-up: generate the reply on the main LLM in parallel with the
-        spec_task = None
-        spec_target = None
-        # Speculation runs generate() concurrently with any in-flight main generation
-        # on the SAME agent instance. Only simple_llm_agent is reentrant-safe (per-call
-        # local state); graph/custom agents mutate shared routing state
-        # (current_node_id, node_history) and would corrupt under concurrency.
-        spec_agent_type = self.task_config["tools_config"]["llm_agent"].get("agent_type", "simple_llm_agent")
-        if (
-            spec_agent_type == "simple_llm_agent"
-            and not self.language_switcher.explicit_only
-            and detected_lang
-            and detected_lang != active
-            and detected_lang in labels
-            and detected_lang in self.multilingual_prompts
-        ):
-            spec_synth = self.tools.get("synthesizer")
-            if not isinstance(spec_synth, SynthesizerPool) or detected_lang in spec_synth.labels:
-                spec_target = detected_lang
-                spec_task = asyncio.create_task(
-                    self.__speculative_followup_text(
-                        spec_target, detector_transcript, active_transcript, idle_flush_user_text
-                    )
-                )
-                self._spec_followup_task = spec_task
-                logger.info(f"LanguageSwitcher: speculative follow-up started for '{spec_target}'")
-
-        # Telemetry: record EVERY Switch-LLM firing (switch, stay, or gated) into the
-        # pool's lid_detection_events list — surfaced in task_output and persisted by the
-        # backend into lid_shadow_events.lid_detection_events (JSONB). That column is
-        # empty in the LLM-driven flow, so we reuse it (no schema change); a
-        # "flow":"llm_switch" discriminator keeps these records distinct from the legacy
-        # heuristic shape for aggregation. Captures fired-time, decide latency, BOTH ASR
-        # transcripts (unbiased detector + locked main), the decision, the outcome, and
-        # the context note + timestamp handed to the main LLM.
-        decide_started_at = time.time()
-        decision = None
-
-        def emit_lid_decision(outcome, switched_to=None, context_note=None, inflight_activity=None):
-            # pool is a confirmed TranscriberPool here (guarded at function entry).
-            # Snapshot the in-flight response now unless the caller passed a pre-truncation
-            activity = inflight_activity if inflight_activity is not None else self._inflight_response_activity()
-            pool.lid_detection_events.append(
-                build_lid_decision_record(
-                    outcome=outcome,
-                    fired_at=decide_started_at,
-                    now=time.time(),
-                    active_transcript=active_transcript,
-                    active=active,
-                    detector_transcript=detector_transcript,
-                    detector_lang_tag=detected_lang,
-                    detector_lang_confidence=detector_lang_confidence,
-                    detector_segments=detector_segments,
-                    decision=decision,
-                    buffered_max_segment_s=buffered_max_segment_s,
-                    speculation_started=spec_task is not None,
-                    switched_to=switched_to,
-                    context_note=context_note,
-                    inflight_activity=activity,
-                )
-            )
-
-        # Timeout strictly around the LLM call (NOT the switch itself — cancelling
-        # mid-switch could leave the pools half-switched). The litellm default is
-        # minutes; a hung decide would hold language_switch_lock that entire time,
-        # silently killing switching for the rest of the call. Timeout = no decision
-        # = stay (fail-safe), and wait_for cancels the underlying request.
-        decide_timeout_s = self.__switch_decide_timeout_s()
-        try:
-            decision = await asyncio.wait_for(
-                self.language_switcher.decide(
-                    detector_transcript,
-                    active_transcript,
-                    active,
-                    recent_turns=None if self.language_switcher.explicit_only else self.__recent_detected_turns(pool),
-                    last_agent_turn=self.conversation_history.last_assistant_content(),
-                ),
-                timeout=decide_timeout_s,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"LanguageSwitcher: decide() timed out after {decide_timeout_s}s — skipping decision, lock released"
-            )
-            emit_lid_decision("timeout")
-            return None
-        if not decision:
-            emit_lid_decision("no_decision")
-            return
-        # decide() can take seconds; a hangup/transfer may have started meanwhile — re-check
-        if self.conversation_ended or self._should_ignore_transcriber_input():
-            logger.info("LanguageSwitcher: hangup/transfer/teardown in progress — abandoning switch (post-decide)")
-            emit_lid_decision("gated:hangup")
-            return None
-        target = decision.get("target_language")
-        reasoning = (decision.get("reasoning") or "").strip()
-        languages = decision.get("languages") or []
-
-        # Re-read the live language: a prior turn's decision may have switched during
-        # this (~1-2s) LLM call, so compare against the current language, not the snapshot.
-        current = self.language
-        if not target or target == current:
-            logger.info(
-                f"LanguageSwitcher: stay on '{current}' (detected_lang={detected_lang}, langs={languages}, reason={reasoning})"
-            )
-            emit_lid_decision("stay")
-            return
-        if target not in labels:
-            logger.info(
-                f"LanguageSwitcher: target '{target}' not supported by agent {labels} — logged, no switch "
-                f"(detector={detector_transcript[:60]!r})"
-            )
-            emit_lid_decision("gated:unsupported")
-            return
-        # The synthesizer pool must also have this language — otherwise switch_language
-        # would flip the transcriber and then fail on the voice, leaving the agent
-        # half-switched (new-language ears, old-language mouth).
-        synth_pool = self.tools.get("synthesizer")
-        if isinstance(synth_pool, SynthesizerPool) and target not in synth_pool.labels:
-            logger.info(
-                f"LanguageSwitcher: target '{target}' has no synthesizer voice configured "
-                f"(synth labels={synth_pool.labels}) — no switch"
-            )
-            emit_lid_decision("gated:no_synth")
-            return
-
-        # Confidence gate (fail-closed): missing/low confidence → stay. 0.7 threshold — below
-        # that the judge's own uncertainty is the signal, and a wrong switch is audible.
-        min_conf = float(os.getenv("LANGUAGE_SWITCH_MIN_CONFIDENCE", "0.7"))
-
-        def as_float(value):
-            # LLM JSON can drift (e.g. "0.78" as a string); unparseable → None,
-            # which the gate below treats as below-threshold (fail-closed) instead
-            # of crashing the decision on a TypeError.
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return None
-
-        target_conf = as_float(decision.get("target_confidence"))
-        if target_conf is None:
-            short_target = (target or "").split("-")[0].lower()
-            target_conf = as_float(
-                next(
-                    (
-                        lang.get("confidence")
-                        for lang in languages
-                        if isinstance(lang, dict)
-                        and str(lang.get("language") or "").split("-")[0].lower() == short_target
-                    ),
-                    None,
-                )
-            )
-        # Explicit-only mode: a switch is authorized iff the judge returned a consistent
-        # explicit verdict (request_status="switch" AND explicit_request) — the ambient
-        # detection gates below grade evidence the explicit contract does not produce.
-        if self.language_switcher.explicit_only:
-            if decision.get("request_status") != "switch" or not decision.get("explicit_request"):
-                logger.info(
-                    f"LanguageSwitcher: explicit-only mode — target '{target}' without an explicit verdict "
-                    f"(status={decision.get('request_status')}, explicit={decision.get('explicit_request')}) — no switch"
-                )
-                emit_lid_decision("gated:not_explicit")
-                return
-            logger.info(
-                f"LanguageSwitcher: explicit-only mode — switch to '{target}' authorized "
-                f"(status=switch, source={decision.get('request_source')}, conf={target_conf})"
-            )
-        else:
-            # Corroboration: when the detector independently agrees on the target, accept a lower LLM
-            # self-report. Both signals are noisy alone (the LLM's float is self-assessed; the detector
-            # tag can be wrong) but they fail independently, so agreement is real evidence.
-            # Only ever LOWERS the bar, never raises it.
-            #
-            # Read the evidence from a SUBSTANTIVE segment tagged as the target, not from the buffer's
-            # last-segment aggregates: those describe different segments of the turn (buffer_language /
-            # its prob come from the FINAL fragment, buffer_max_segment_seconds is a max over ALL of
-            # them), so a one-token "okay" could lend its 1.0 token-share purity to a whole Hindi turn.
-            corroborated = self.__detector_corroborates(detector_segments, target)
-            effective_min_conf = min_conf
-            if corroborated:
-                effective_min_conf = float(os.getenv("LANGUAGE_SWITCH_CORROBORATED_MIN_CONFIDENCE", "0.55"))
-            if target_conf is None or target_conf < effective_min_conf:
-                logger.info(
-                    f"LanguageSwitcher: target '{target}' confidence {target_conf} below {effective_min_conf} "
-                    f"(corroborated={corroborated}, detector_prob={detector_lang_confidence}) (or missing) — "
-                    f"no switch (reason={reasoning})"
-                )
-                emit_lid_decision("gated:low_confidence")
-                return
-
-            # Substance gate: acknowledgment-length audio mis-tags languages. Short turns need at
-            # least one substantive segment — an explicit by-name request is legitimately short and
-            # bypasses instead. Its bar defaults to min_conf, never above it: a stricter explicit
-            # bar would reject the caller-asked case while admitting the incidental one.
-            explicit_min_conf = float(os.getenv("LANGUAGE_SWITCH_EXPLICIT_MIN_CONFIDENCE", str(min_conf)))
-            explicit_bypass = bool(decision.get("explicit_request")) and (target_conf or 0.0) >= explicit_min_conf
-            if not explicit_bypass and foreign_max_segment_s < min_segment_s:
-                logger.info(
-                    f"LanguageSwitcher: target '{target}' but longest foreign segment "
-                    f"{foreign_max_segment_s:.2f}s < {min_segment_s}s (buffer max {buffered_max_segment_s:.2f}s) "
-                    f"and no confident explicit request "
-                    f"(explicit={decision.get('explicit_request')}, conf={target_conf}) — "
-                    f"no switch (short audio is unreliable LID evidence; reason={reasoning})"
-                )
-                emit_lid_decision("gated:short_audio")
-                return
-
-            # Rule-3a backstop: the judge still reads "This B1" as English.
-            if not explicit_bypass and is_alphanumeric_readout(detector_transcript):
-                logger.info(
-                    f"LanguageSwitcher: target '{target}' vetoed — rule-3a alphanumeric readout "
-                    f"({detector_transcript[:60]!r}); no switch (reason={reasoning})"
-                )
-                emit_lid_decision("gated:alphanumeric_readout")
-                return
-
-        # Truncate the in-flight old-language reply (barge-in cleanup) before switching.
-        activity = self._inflight_response_activity()  # captured pre-truncation for telemetry
-        # Release the gate before cleanup: cleanup invalidates this sequence, so the output
-        # loop never re-polls it — the switched case wrote no playback_gate record at all.
-        # Record now (held_ms is honest here) but keep HOLDING until the sequence is invalid —
-        # clearing early left a window where the output loop shipped the held old-language audio.
-        held_gate = self.lid_playback_gate
-        if held_gate is not None:
-            self.__release_lid_playback_gate(held_gate, "decided", clear=False)
-        if self.function_call_in_flight:
-            # Not truncating: this reply is meant to keep playing, so open the gate now.
-            self.lid_playback_gate = None
-            logger.info("LanguageSwitcher: in-flight function call — switching in parallel, not truncating the action")
-            if target != self.language:
-                context_note = self.__language_directive(target)
-                await self.switch_language(target, triggered_by="lid_llm", context_note=context_note)
-                emit_lid_decision("switched", switched_to=target, context_note=context_note, inflight_activity=activity)
-            else:
-                emit_lid_decision("gated:concurrent_switch", inflight_activity=activity)
-            return None
-
-        if any(activity.values()):
-            logger.info(f"LanguageSwitcher: truncating in-flight old-language response before switch ({activity})")
-            # Truncating wipes the mark dict, so the final-chunk ack that would clear this flag
-            # never arrives — clear it here as the barge-in path does, or it latches True and
-            # blocks the silence prompt and the stall backstop for the rest of the call.
-            if "input" in self.tools:
-                self.tools["input"].update_is_audio_being_played(False)
-            await self.__cleanup_downstream_tasks()
-            # Sequence invalidated — the held audio can no longer ship; safe to open the gate.
-            self.lid_playback_gate = None
-            if activity.get("audio_playing"):
-                # Brief silence between cutting the old-language audio and the first
-                # new-language audio, so one voice doesn't slam into the next.
-                audio_gap_s = self.__switch_audio_gap_s()
-                if audio_gap_s > 0:
-                    await asyncio.sleep(audio_gap_s)
-                    # The gap is an await like any other: teardown may have started during it,
-                    # and a switch applied now would flip the pools under a goodbye.
-                    if self.conversation_ended or self._should_ignore_transcriber_input():
-                        logger.info("LanguageSwitcher: hangup/transfer during audio gap — abandoning switch")
-                        emit_lid_decision("gated:hangup", inflight_activity=activity)
-                        return None
-
-        # No-activity path reaches here without cleanup — nothing was pending, so opening is safe.
-        self.lid_playback_gate = None
-        # Re-read after the truncate: a concurrent decision may have switched while we
-        # were clearing, so re-check against the live language before applying.
-        current = self.language
-        if target == current:
-            emit_lid_decision("gated:concurrent_switch", inflight_activity=activity)
-            return
-
-        context_note = self.__language_directive(target)
-        logger.info(
-            f"LanguageSwitcher: switching '{current}' → '{target}' (confidence={target_conf}, langs={languages}, reason={reasoning})"
-        )
-        await self.switch_language(target, triggered_by="lid_llm", context_note=context_note)
-        emit_lid_decision("switched", switched_to=target, context_note=context_note, inflight_activity=activity)
-
-        # Put the caller's actual words into conversation history. Turn-boundary path:
-        # the locked-pool ASR garbled this turn, so replace it with the unbiased
-        # transcript — guarded on the original content so a newer turn that arrived
-        # during the decision is never overwritten. Idle-flush path: the locked ASR
-        # produced no turn at all, so append the detector transcript as the user turn.
-        transcript_corrected = True
-        if active_transcript:
-            replaced = self.conversation_history.replace_last_user(active_transcript, detector_transcript)
-            if not replaced:
-                # A newer turn landed during decide; the truncate cancelled its generation,
-                transcript_corrected = False
-                logger.info(
-                    "LanguageSwitcher: newer user turn arrived during decision — skipping transcript "
-                    "correction, generating follow-up for the latest turn"
-                )
-            else:
-                logger.info(
-                    f"LanguageSwitcher: corrected user turn to detector transcript {detector_transcript[:80]!r}"
-                )
-        elif self.conversation_history.user_turn_signature() != history_signature_at_decide:
-            # A main turn landed during the decide; appending would re-route on phantom input.
-            transcript_corrected = False
-            logger.info(
-                "LanguageSwitcher: idle-flush skipped — user turn arrived during decide; "
-                "generating follow-up for the latest turn"
-            )
-        else:
-            self.user_spoke = True
-            # Reply to the caller's LAST utterance, not the whole buffer — with the
-            self.conversation_history.append_user(idle_flush_user_text)
-            logger.info(
-                f"LanguageSwitcher: idle-flush — appended detector transcript as user turn {idle_flush_user_text[:80]!r}"
-            )
-
-        # Handoff first (no-op if none configured), then the reply — it masks the
-        # reply-generation gap when the speculative follow-up isn't ready yet.
-        await self.__play_switch_handoff(target)
-
-        # Commit the speculative follow-up if it matches the confirmed target — it has
-        # been generating throughout the decide, so it's ready or nearly ready now.
-        # Not when a newer turn superseded the transcript it was generated against:
-        # the speculation answers stale content, so fall through to fresh generation
-        # (the caller's finally discards the unconsumed task).
-        if spec_task is not None and spec_target == target and transcript_corrected:
-            spec_text, spec_capture = "", None
-            try:
-                spec_text, spec_capture = await asyncio.wait_for(spec_task, timeout=6.0)
-            except asyncio.CancelledError:
-                # Always re-raise: wait_for cancels spec_task BEFORE raising, so a
-                # cancelled spec_task is the signature of THIS handler being cancelled
-                # (teardown) — swallowing it would keep a cancelled handler running.
-                # The timeout fallback is the separate TimeoutError path below.
-                raise
-            except asyncio.TimeoutError:
-                logger.info("LanguageSwitcher: speculative follow-up timed out — falling back")
-            except Exception as e:
-                logger.info(f"LanguageSwitcher: speculative follow-up unavailable ({e!r}) — falling back")
-            self._spec_followup_task = None
-            # The spec await above can straddle a hangup; re-check so we don't truncate the goodbye.
-            if self.hangup_triggered or self.conversation_ended:
-                logger.info("LanguageSwitcher: hangup during speculation — not speaking follow-up")
-                return None
-            if spec_text:
-                # Tagged here, not via _stage_assistant_history — this append bypasses staging,
-                # so without the tag the row cannot anchor to its own playback burst.
-                self.conversation_history.append_assistant(spec_text, message_category="language_switch_followup")
-                self.__log_committed_speculation(spec_text, spec_capture)
-                synth_meta = {
-                    "io": self.tools["output"].get_provider(),
-                    "request_id": str(uuid.uuid4()),
-                    "cached": False,
-                    "sequence_id": -1,
-                    "format": "pcm",
-                    "message_category": "language_switch_followup",
-                    "end_of_llm_stream": True,
-                }
-                logger.info(
-                    f"LanguageSwitcher: speaking speculative follow-up ({len(spec_text)} chars) — "
-                    f"decide latency hidden behind generation"
-                )
-                await self._synthesize(create_ws_data_packet(spec_text, meta_info=synth_meta))
-                return None
-            # Empty text (tool-call abort / generation error) — fall through to the
-            # normal follow-up below (the handoff already played above).
-
-        # Prepare the follow-up that answers what the caller actually said, in the new
-        # language (generated by the caller AFTER the lock is released).
-        return self.__prepare_followup_generation(meta_info)
+        return await _voice_switcher.run_language_switch(self, active_transcript, meta_info, spawn_language)
 
     def __prepare_followup_generation(self, meta_info=None):
-        """Build (messages, followup_meta_info, next_step) for a switch follow-up.
-
-        Mirrors the legacy switch tool's follow-up. In the idle-flush case there is
-        no turn meta_info, so the most recent turn's is reused as a template — fine
-        because _spawn_followup_meta_info allocates a fresh sequence_id/turn_id
-        anyway. Used by __run_language_switch.
-        """
-        if meta_info is None and self._last_turn_meta_info is not None:
-            meta_info = dict(self._last_turn_meta_info)
-        if meta_info is None:
-            # First-utterance switch: the locked ASR never completed a turn, so no
-            # template exists. Fall back to the transcriber's meta_info — the same
-            # base __get_updated_meta_info(None) uses for other silence-driven
-            # responses. Without this the agent switches and then sits silent until
-            # the user-online check fires (QA call f338090b: switch → 11s silence →
-            # "are you still there" → hangup).
-            pool = self.tools.get("transcriber")
-            meta_info = dict((pool.get_meta_info() if pool is not None else None) or {})
-            logger.info("LanguageSwitcher: no turn meta_info template — using transcriber meta_info for follow-up")
-        if self.conversation_ended or self.hangup_triggered:
-            return None
-        messages = self.conversation_history.get_copy()
-        followup_meta_info = self._spawn_followup_meta_info(meta_info)
-        # A transcriber-meta template has no response_uid lineage, which would leave
-        # response_group_uid None — re-anchor it to the freshly allocated response_uid.
-        if not followup_meta_info.get("response_group_uid"):
-            followup_meta_info["response_group_uid"] = followup_meta_info.get("response_uid")
-        next_step = self._get_next_step(meta_info.get("sequence", 0), "llm")
-        return messages, followup_meta_info, next_step
+        return _voice_switcher.prepare_followup_generation(self, meta_info)
 
     async def __play_switch_handoff(self, target: str) -> None:
-        """Speak the target language's handoff line (new voice, sequence_id=-1) to cover
-        the post-switch reply-generation gap."""
-        # Don't synthesize into a tearing-down pipeline (would truncate the goodbye).
-        if self.hangup_triggered or self.conversation_ended:
-            return
-        handoff_text = self.__handoff_text_for(target)
-        if not handoff_text:
-            return
-
-        handoff_meta = {
-            "io": self.tools["output"].get_provider(),
-            "request_id": str(uuid.uuid4()),
-            "sequence_id": -1,
-            "message_category": "handoff",
-            "text": handoff_text,
-            "type": "audio",
-        }
-        clip = self.handoff_audio_cache.get(target)
-        if clip:
-            # Pre-warmed wire-format clip pushed straight to the transport. Both end-flags required
-            handoff_meta.update(
-                {
-                    "format": "mulaw" if self.__handoff_mulaw_wire() else "pcm",
-                    "end_of_llm_stream": True,
-                    "end_of_synthesizer_stream": True,
-                    "is_first_chunk": True,
-                }
-            )
-            # Cached synth logs — else the spoken handoff is invisible in the run log.
-            for direction in (LogDirection.REQUEST, LogDirection.RESPONSE):
-                convert_to_request_log(
-                    message=handoff_text,
-                    meta_info=handoff_meta,
-                    component=LogComponent.SYNTHESIZER,
-                    direction=direction,
-                    model=self.synthesizer_provider,
-                    is_cached=True,
-                    engine=self.tools["synthesizer"].get_engine(),
-                    run_id=self.run_id,
-                )
-            self.__enqueue_chunk(clip, 0, 1, handoff_meta)
-            self.conversation_history.append_assistant(handoff_text, sequence_id=-1, message_category="handoff")
-            self.__record_lid_event({"type": "handoff", "source": "prewarmed", "target": target})
-            logger.info(f"LanguageSwitcher: playing pre-warmed handoff clip: {handoff_text!r}")
-            return
-
-        # Cold cache → live synthesis on the target voice (socket already warm).
-        handoff_meta.update({"cached": False, "format": "pcm", "end_of_llm_stream": True})
-        await self._synthesize(create_ws_data_packet(handoff_text, meta_info=handoff_meta))
-        self.conversation_history.append_assistant(handoff_text, sequence_id=-1, message_category="handoff")
-        self.__record_lid_event({"type": "handoff", "source": "live", "target": target})
-        logger.info(f"LanguageSwitcher: playing handoff to cover reply generation: {handoff_text!r}")
+        return await _voice_handoff.play_switch_handoff(self, target)
 
     def __handoff_text_for(self, label):
-        template = self.switch_handoff_messages.get(label, "")
-        if not template:
-            return ""
-        text = template.replace("{agent_name}", self._get_voice_name_for_label(label)).replace(
-            "{language}", LANGUAGE_NAMES.get(label, label)
-        )
-        # As in the legacy handoff: render after the runtime placeholders so {customer_name} resolves.
-        return update_prompt_with_context(text, self.context_data)
+        return _voice_handoff.handoff_text_for(self, label)
 
     def __handoff_mulaw_wire(self) -> bool:
-        """True on telephony (mu-law@8k clip), False on web/freeswitch (raw PCM@24k)."""
-        return self.tools["output"].get_provider() in SUPPORTED_OUTPUT_TELEPHONY_HANDLERS
+        return _voice_handoff.handoff_mulaw_wire(self)
 
     async def __prewarm_handoff_clips(self):
-        """Pre-render each language's handoff on its own voice via one-shot synthesize().
-        Clips are static for the call; non-active labels first (likely first targets)."""
-        pool = self.tools.get("synthesizer")
-        if not isinstance(pool, SynthesizerPool):
-            return
-
-        # A call has exactly one transport, so render in its wire format only.
-        mulaw_wire = self.__handoff_mulaw_wire()
-
-        async def render(label, synth):
-            text = self.__handoff_text_for(label)
-            if not text:
-                return
-            cache_key = (
-                synth.__class__.__name__,
-                getattr(synth, "voice_id", None) or getattr(synth, "voice", None),
-                text,
-                "mulaw" if mulaw_wire else f"pcm{WEBCALL_TTS_SAMPLE_RATE}",
-            )
-            cached = HANDOFF_CLIP_CACHE.get(cache_key)
-            if cached:
-                self.handoff_audio_cache[label] = cached
-                return
-            # Under ~50ms is a failed one-shot returning a sentinel, not a clip.
-            min_clip_bytes = 400 if mulaw_wire else 2400
-            try:
-                clip = None
-                # Prefer a native one-shot in the wire format when the provider offers it.
-                if mulaw_wire:
-                    telephony_one_shot = getattr(synth, "synthesize_telephony_clip", None)
-                    if telephony_one_shot is not None:
-                        clip = await telephony_one_shot(text)
-                else:
-                    pcm_one_shot = getattr(synth, "synthesize_pcm_clip", None)
-                    if pcm_one_shot is not None:
-                        clip = await pcm_one_shot(text, WEBCALL_TTS_SAMPLE_RATE)
-                # Before the fallback, so synthesize() still gets its turn.
-                if clip and len(clip) < min_clip_bytes:
-                    logger.warning(
-                        f"LanguageSwitcher: one-shot for '{label}' returned {len(clip)}B — falling back to synthesize()"
-                    )
-                    clip = None
-                if not clip:
-                    audio = await synth.synthesize(text)
-                    if not audio:
-                        return
-                    # pydub decode shells out to ffprobe/ffmpeg — keep it off the event loop.
-                    clip = await asyncio.to_thread(self.__handoff_clip_convert, synth, audio, mulaw_wire)
-                if clip and len(clip) < min_clip_bytes:
-                    logger.error(f"LanguageSwitcher: handoff clip for '{label}' is {len(clip)}B — discarding")
-                    return
-                if clip:
-                    self.handoff_audio_cache[label] = clip
-                    if len(HANDOFF_CLIP_CACHE) >= HANDOFF_CLIP_CACHE_MAX:
-                        HANDOFF_CLIP_CACHE.pop(next(iter(HANDOFF_CLIP_CACHE)))
-                    HANDOFF_CLIP_CACHE[cache_key] = clip
-                    synth.synthesized_characters = getattr(synth, "synthesized_characters", 0) + len(text)
-                    logger.info(f"LanguageSwitcher: pre-warmed handoff clip '{label}' ({len(clip)} bytes)")
-            except Exception as e:
-                logger.error(f"LanguageSwitcher: handoff prewarm failed for '{label}': {e}")
-
-        await asyncio.gather(*(render(label, synth) for label, synth in pool.synthesizers.items()))
+        return await _voice_handoff.prewarm_handoff_clips(self)
 
     def __handoff_clip_convert(self, synth, audio, mulaw_wire):
-        """Decode a one-shot render into the wire format. Blocking — run off-loop."""
-        kwargs = {
-            "rate_hint": getattr(synth, "sampling_rate", 0) or getattr(synth, "sample_rate", 0) or 8000,
-            "format_hint": getattr(synth, "format", "") or "",
-        }
-        if mulaw_wire:
-            clip = audio_to_mulaw8k(audio, **kwargs)
-        else:
-            clip = audio_to_pcm(audio, target_sample_rate=WEBCALL_TTS_SAMPLE_RATE, **kwargs)
-        if clip is None:
-            logger.error(
-                f"LanguageSwitcher: handoff clip for {synth.__class__.__name__} is a compressed container "
-                f"pydub can't decode into {'mulaw' if mulaw_wire else 'pcm'} — skipping"
-            )
-        return clip
+        return _voice_handoff.handoff_clip_convert(self, synth, audio, mulaw_wire)
 
     def __language_directive(self, label: str) -> str:
-        """The one standing language order, installed at setup and on every switch."""
-        name = LANGUAGE_NAMES.get(label, label)
-        return (
-            f"## Language note:\nThe user is now speaking {name} ('{label}'). From this point onward, "
-            f"respond only in {name}, regardless of the language used earlier in the conversation or "
-            f"elsewhere in this prompt. This instruction overrides all other language preferences, "
-            f"language-selection rules, and multilingual script variants. "
-            f"For the remainder of the call, use only the {name} version of every question, FAQ, "
-            f"sample response, objection-handling response, and closing line. If a {name} version "
-            f"is not provided, translate the available version into clear, natural {name} while "
-            f"preserving its exact meaning. Never translate or alter proper nouns, brand names, "
-            f"alphanumeric identifiers, digits, codes, or lines these instructions mark as "
-            f"verbatim/legal — read those exactly as written; they are language-neutral."
-        )
+        return _voice_switcher.language_directive(self, label)
 
     def __apply_language_directive(self, label: str, context_note: str = None) -> None:
-        """Install or refresh the language directive at the end of the system prompt.
-
-        Unconditional on purpose. The previous install was gated on a per-language prompt
-        variant existing AND a context_note being passed, which left the main LLM with no
-        standing language order on tool-driven switches and on agents without multilingual
-        prompt variants — the drift QA kept attributing to LID (a Hindi line mid-Telugu
-        call, an English closing line). Replacement, not accumulation: when no variant
-        exists for this label, the current prompt is reused with any prior note stripped.
-        """
-        base = self.multilingual_prompts.get(label)
-        if base is None:
-            current = self.system_prompt.get("content") or ""
-            marker_idx = current.find("\n\n## Language note:")
-            base = current[:marker_idx] if marker_idx != -1 else current
-        new_prompt = f"{base}\n\n{context_note or self.__language_directive(label)}"
-        self.conversation_history.update_system_prompt(new_prompt)
-        self.system_prompt["content"] = new_prompt
+        return _voice_switcher.apply_language_directive(self, label, context_note)
 
     def __log_committed_speculation(self, spec_text: str, capture):
         """Log a committed speculative follow-up exactly like a normal turn:
@@ -6193,105 +5176,12 @@ class TaskManager(BaseManager):
         return text, capture
 
     async def __generate_switch_followup(self, messages, followup_meta_info, next_step):
-        """Generate the post-switch follow-up response (runs outside language_switch_lock).
-
-        No llm_task cancel here, on purpose: by this point the switch path has either
-        truncated the old turn via __cleanup_downstream_tasks (which cancelled and
-        nulled llm_task) or skipped truncation because nothing was in flight — so any
-        non-done llm_task seen here can only belong to a NEWER concurrent turn, and
-        cancelling that would kill the wrong response.
-        """
-        # Bypasses _process_conversation_task, so stamp the eager stub here to record the turn normally.
-        followup_meta_info["llm_start_time"] = time.time()
-        self._append_eager_llm_stub(followup_meta_info)
-        # Revalidate the follow-up's sequence_id — the truncate path's
-        # invalidate_pending_responses would otherwise leave its audio permanently BLOCKed.
-        self.interruption_manager.revalidate_sequence_id(followup_meta_info["sequence_id"])
-        self.response_in_pipeline = True
-        await self.__do_llm_generation(
-            messages, followup_meta_info, next_step, should_bypass_synth=False, should_trigger_function_call=True
-        )
+        return await _voice_switcher.generate_switch_followup(self, messages, followup_meta_info, next_step)
 
     async def switch_language(self, label, components=None, triggered_by: str = "manual", context_note: str = None):
-        """Switch the active language for multilingual pools.
-
-        Args:
-            label: language label to switch to (e.g. "hi", "en").
-            components: list of component names to switch. Defaults to both.
-            triggered_by: "manual" (legacy LLM tool call) or "lid_llm" (Switch LLM).
-                          Used in post-call telemetry.
-            context_note: optional one-line note (transcript + language + reasoning)
-                          appended to the swapped system prompt so the main LLM has
-                          context on why the language changed. Replaced on each switch.
-        """
-        components = components or ["transcriber", "synthesizer"]
-
-        # Record every switch so shadow-eval can compare LID detections vs.
-        # actual LLM-decided switches on the same call.
-        self.language_switch_events.append(
-            {
-                "to_label": label,
-                "from_label": self.language,
-                "triggered_by": triggered_by,
-                "switched_at": time.time(),
-            }
+        return await _voice_switcher.switch_language(
+            self, label, components=components, triggered_by=triggered_by, context_note=context_note
         )
-
-        # Serial on purpose: the transcriber must succeed before the voice flips. Running these
-        # concurrently saved a little latency but removed the short-circuit, so a transcriber
-        # switch that raised (label missing from that pool) still let the synthesizer flip —
-        # leaving the agent listening in one language and speaking another.
-        if "transcriber" in components and isinstance(self.tools.get("transcriber"), TranscriberPool):
-            await self.tools["transcriber"].switch(label)
-        if "synthesizer" in components and isinstance(self.tools.get("synthesizer"), SynthesizerPool):
-            await self.tools["synthesizer"].switch(label)
-
-        # Update TaskManager state so silence detection, fillers, and LLM
-        # language stay in sync with the active pools.
-        self.language = label
-        # Reset silence timers to prevent __check_for_completion from
-        # interpreting the switch gap as inactivity and hanging up.
-        self.last_transmitted_timestamp = time.time()
-        self.time_since_last_spoken_human_word = time.time()
-        self.asked_if_user_is_still_there = False
-        logger.info(f"Language switched to '{label}'")
-
-        # Poke the idle watcher: a switch changes the mismatch threshold for any speech
-        # already sitting in the detector buffer, so wake it to recompute instead of
-        # letting it sleep out a schedule computed for the previous language. Only when
-        # speech is actually buffered — setting the event with an empty buffer would
-        # busy-loop the watcher's empty-branch wait (it relies on unset-while-empty).
-        poke_pool = self.tools.get("transcriber")
-        if isinstance(poke_pool, TranscriberPool) and poke_pool.lid_buffer_age() is not None:
-            poke_event = poke_pool.lid_buffer_event()
-            if poke_event is not None:
-                poke_event.set()
-
-        # Unconditional — the old `if label in self.multilingual_prompts` guard meant agents
-        # without per-language prompt variants never got ANY language order, and tool-driven
-        # switches (context_note=None) stripped whatever note a previous LID switch installed.
-        self.__apply_language_directive(label, context_note)
-        logger.info(f"Switched system prompt language directive to '{label}'")
-
-        active_transcriber_info = (
-            self.tools.get("transcriber").get_active_transcriber_info()
-            if isinstance(self.tools.get("transcriber"), TranscriberPool)
-            else None
-        )
-        active_synthesizer_info = (
-            self.tools.get("synthesizer").get_active_synthesizer_info()
-            if isinstance(self.tools.get("synthesizer"), SynthesizerPool)
-            else None
-        )
-        if active_transcriber_info:
-            if "provider" in active_transcriber_info and active_transcriber_info["provider"]:
-                self.transcriber_provider = active_transcriber_info["provider"]
-
-        if active_synthesizer_info:
-            if "provider" in active_synthesizer_info and active_synthesizer_info["provider"]:
-                self.synthesizer_provider = active_synthesizer_info["provider"]
-            if "voice" in active_synthesizer_info and active_synthesizer_info["voice"]:
-                self.synthesizer_voice = active_synthesizer_info["voice"]
 
     async def __listen_synthesizer(self):
         all_text_to_be_synthesized = []

@@ -705,6 +705,117 @@ File sizes: welcome.py 429, events.py 236, dtmf.py 107, welcome_runtime.py 70,
 events_runtime.py 51 — all under the 800 target. make sec clean; make cov 86.55%
 (≥ 85%; the formal cov gate returns at B13a).)
 
+B9a: check=green; test-all=7/2578/2585 (net-new: 0; reconciliation: the
+language_switch_tm funnel rewritten in place 1↔1 — tests/conftest.py's fixture now
+builds a LanguageSwitchCoordinator over the SAME MagicMock session double (the five
+real private bodies it re-bound off TaskManager — __switch_audio_gap_s /
+__switch_settle_ms / __switch_decide_timeout_s / __record_lid_event /
+__detector_corroborates — are re-bound onto the double from the MOVED functions),
+and its exactly-3 files re-land under unchanged paths and test names:
+tests/test_language_switch_audio_gap.py ×12, tests/test_stale_decision_guard.py ×3,
+tests/test_recent_turns_and_gate_lifecycle.py ×7 (the last also re-pins
+recent_detected_turns / snapshot_lid_events at the new home). Additive: +77 arch
+tests in 4 new files under tests/arch/modules/voice/session/language/ —
+test_lid_gate.py ×20 (delegator + session-injection pins for all ten lid_gate
+names, the staticmethod-identity pins for the three pure evidence readers, the
+lid_playback_gate stays-a-plain-class-attribute-None pin, R3 lookup-site identity
+pins, and gate/evidence/telemetry behavior on concrete values), test_switcher.py
+×21 (delegator + injection pins for all eleven switcher names incl. the two public
+ones, the FIVE fixture-rebound bodies pinned on CONCRETE VALUES through both the
+new-home functions and the TaskManager delegators — the B9a "rebind tests", R3
+lookup-site pins, directive/followup behavior, and the coordinator's construction +
+delegating lid_playback_gate property), test_handoff.py ×10 (cache-identity,
+delegator/injection, R3 and play/text/wire behavior) and test_behavior.py ×26 (an
+arch mirror of the ported fixture driving the REAL moved bodies: run_language_switch
+outcomes — switched incl. history correction + handoff + followup, timeout, stay,
+unsupported, no_synth, alphanumeric veto, explicit-only both ways,
+function-call-in-flight, both idle-flush history paths, speculation commit, empty
+drain — the handle_language_switch lock/discard wrapper ×4, spawn + mismatch, the
+real lid_idle_watcher fire/skip/speaking-deferral, the real switch_language full and
+subset paths, prewarm render/cache/sentinel/inert paths, and a coordinator
+passthrough sweep). Census (verified by grep, the step's honest-math instruction):
+19 test files touch language mangled names; the fixture funnels exactly 3;
+__run_language_switch 13 hits ✓, __prewarm_handoff_clips 11 ✓,
+__buffered_language_evidence 6 hits in 5 files, __arm_lid_playback_gate 6 hits in
+2 files — the remaining ~16 files (substance_gate, explicit, race, drift, tunables,
+handoff_prewarm, spec_cleanup, lid_idle_watcher ×2, speculation_commit_logging,
+speculative_followup_history, simple_agent_language_directive, lid_usage_tracking,
+live_marker_and_pin, switch_tool_injection, characterization_output_loop_invariants)
+pass UNTOUCHED through the delegators (run individually before and after the port:
+166 passed) and migrate at B9b. The moves, all proven AST-identical against HEAD by
+a normalizing checker (mangled spellings, docstrings, annotation-stripping, the
+declared return-None accommodation): Region Q scoped as the CONTIGUOUS language
+cluster, currently tm 4880-6295 minus the speculation trio —
+voiceai/modules/voice/session/language/lid_gate.py (collect_flux_lid_events,
+__language_switch_enabled, the playback-gate trio, the three pure evidence readers,
+__detector_language_mismatch, __snapshot_lid_events, __record_lid_usage/event,
+__lid_idle_watcher), switcher.py (the three tunables,
+_spawn_language_switch_decision, handle_language_switch, __run_language_switch,
+__prepare_followup_generation, the directive pair, __generate_switch_followup,
+switch_language, + the LanguageSwitchCoordinator facade, the B7 CallLifecycle
+precedent) and handoff.py (__play_switch_handoff, __handoff_text_for,
+__handoff_mulaw_wire, __prewarm_handoff_clips, __handoff_clip_convert, + the
+process-wide HANDOFF_CLIP_CACHE/_MAX, the rule-1g module state flagged at B3, moved
+WITH its owner; task_manager.py re-binds both names by identity so
+test_handoff_prewarm's import-and-clear keeps operating on the one real cache — the
+B3 welcome_pcm_upsampled precedent). tm keeps a same-named thin delegator per moved
+name (mangled _TaskManager__* spellings included; the three pure readers stay
+class-reachable as staticmethod bindings of the MOVED function objects BY IDENTITY,
+so unbound TaskManager._TaskManager__buffered_language_evidence(pool, ...) calls
+keep resolving) and injects itself (the LanguageSession facade) on every call (§3.1
+bridge 3). Deviations, made loud: (1) the speculation-commit trio
+(__speculative_followup_text / __log_committed_speculation /
+__log_discarded_speculation) did NOT move although it sits inside the contiguous
+cluster — step B10 explicitly owns the tests/test_speculation_commit_logging.py
+patch-path repoints (its 7 patches on voiceai.agent_manager.task_manager.
+convert_to_request_log exercise exactly those bodies), and R3's same-commit-rewrite
+step list names B10, not B9; the trio stays verbatim in tm and the moved bodies
+reach it through the session's mangled names, so B9a owes ZERO patch-string
+rewrites. (2) The step text's "tm keeps the class attribute lid_playback_gate +
+delegating property" was resolved as: the class attribute stays a PLAIN None (the
+checklist entry, pinned at CLASS level by tests/test_language_switch_race.py:198 —
+a descriptor would break it) and the DELEGATING PROPERTY lives on
+LanguageSwitchCoordinator, forwarding to the session attribute; an arch test pins
+both facts. (3) The scattered language-adjacent members OUTSIDE the contiguous
+cluster stay in tm with their owning regions (language property/setter,
+_invalidate_response_chain, _inject_language_instruction,
+__inject_switch_language_tool — setup regions, B13a; _maybe_update_tts_language —
+transcriber region, B11d); the substance-gate getsource pin
+(test_substance_gate_foreign_max.py:119) targets the eager CALL SITE in
+_listen_transcriber, which stays, so it passes untouched until B9b rewrites it. One
+NEW adapter file beyond B3's five, adapters/language_runtime.py (the B4-B8
+precedent), binding the two pool classes (as PLAIN aliases so mypy keeps narrowing
+the verbatim isinstance checks; retire at B12b/B12c), five helpers.utils values and
+the eight language constants; each language module re-exports what it reads as its
+own lookup site (R3), with trailing_utterance_text / build_lid_decision_record /
+is_alphanumeric_readout imported from the B3 static_methods home and
+SUPPORTED_OUTPUT_TELEPHONY_HANDLERS from the B3 registry. Thirty compile-time
+name-mangling accommodations inside otherwise-verbatim bodies (the B5-B8
+precedent): every self.__<name> dispatch spelled self._TaskManager__<name> (19
+switcher, 6 lid_gate, 5 handoff — incl. the seams to the not-yet-moved
+__cleanup_downstream_tasks, __do_llm_generation, __enqueue_chunk and the
+speculation trio). Mechanical accommodations, reported: 13 bare `return` →
+`return None` in run_language_switch (mypy requires the explicit value under an
+Optional return annotation; value-identical), `events: list = []` in
+collect_flux_lid_events, three comment-only type: ignore (one no-any-return on the
+prepare seam, two union-attr on the verbatim get_active_*_info ternaries — the B7
+precedent), noqa E501 ×3 (two verbatim long log lines + the recent_turns ternary
+that crossed 120 chars once mangled), moved signatures AND inner defs
+(detected_lang_duration, as_float, emit_lid_decision, render) gained annotations +
+Google docstrings, new-home names strip the mangle prefixes (the B7/B8 precedent),
+otobaai loggers (log content preserved). No new shims (tm keeps delegators; no
+legacy path emptied; the burn-down list is unchanged). task_manager.py: 7,547 →
+6,437 lines, exactly the named edits (import/cache-binding hunk + the two region
+swaps around the kept trio); run() untouched by construction,
+tests/arch/test_taskmanager_pins.py + the goodbye-drain pin green. File sizes:
+lid_gate.py 519, handoff.py 276, language_runtime.py 110, __init__.py 33 — under
+the 800 target; switcher.py 1,139 (> 800 target, < 1,500 cap): ~700 verbatim
+Region-Q lines plus the SwitcherSession facade and the LanguageSwitchCoordinator —
+flagged residual for the B14 line-count audit (the B5 s2s_runner precedent). make
+sec clean; make cov dipped to 82.12% mid-step (the moved decision core's tests live
+in the legacy tree) and closes at 86.31% (≥ 85%) with the arch behavior mirror; the
+formal cov gate returns at B13a.)
+
 ## Risks (register for both tranches)
 
 - **R1 name-mangled tests (31 files):** class/module frozen; same-named delegators per
