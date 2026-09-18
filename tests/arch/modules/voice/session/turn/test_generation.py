@@ -150,7 +150,6 @@ def test_store_into_history_appends_stages_and_syncs_interim():
     history = MagicMock()
     stub = SimpleNamespace(
         task_id=0,
-        llm_response_generated=False,
         on_turn_usage=None,
         on_overflow=None,
         _usage_tasks=set(),
@@ -163,7 +162,6 @@ def test_store_into_history_appends_stages_and_syncs_interim():
     messages: list = []
     with patch.object(generation, "convert_to_request_log"):
         generation.store_into_history(stub, meta, messages, "spoken reply")
-    assert stub.llm_response_generated is True
     assert messages == [{"role": "assistant", "content": "spoken reply", "turn_id": 2, "response_uid": "r2"}]
     stub._stage_assistant_history.assert_called_once_with(meta, "spoken reply")
     history.sync_interim.assert_called_once_with(messages)

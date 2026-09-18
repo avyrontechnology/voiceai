@@ -141,7 +141,6 @@ class GenerationSession(Protocol):
     current_request_id: Any  # why: request id is str or None
     llm_processed_request_ids: set  # why: legacy id set crosses the seam
     non_fatal_llm_error_events: list
-    llm_response_generated: bool
     conversation_start_init_ts: float
     synthesizer_tasks: list  # why: legacy task list is untyped
     buffered_output_queue: Any  # why: legacy queue crosses the seam
@@ -259,7 +258,6 @@ async def process_conversation_preprocessed_task(
                 )
             )
         logger.info(f"Interim history after the LLM task {messages}")
-        self.llm_response_generated = True
         self.conversation_history.sync_interim(messages)
 
 
@@ -310,7 +308,6 @@ def store_into_history(
     overflowed: bool = False,
 ) -> None:
     """Log one LLM turn and commit it to history (staged when a function call follows)."""
-    self.llm_response_generated = True
     # task 0 only, so aux LLMs (hangup/voicemail) never tally, and never an overflowed turn,
     # which ran on another backend. Cached is exempt and output is weighted by the consumer.
     if self.task_id == 0 and input_tokens:

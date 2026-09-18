@@ -81,6 +81,10 @@ class Environment(BaseModel):
     allowed_origins: tuple[str, ...] = ()
     #: Tri-state: `True`/`False` force the cookie flag, `None` defers to `app_env`.
     cookie_secure: bool | None = None
+    #: Cutover flag for the new-architecture voice WS route (spec 0004 B14): `False`
+    #: (default) keeps ``/chat/v1/{agent_id}`` dark — the handler closes immediately —
+    #: while quickstart stays the deployed entry. ``VOICE_WS_ENABLED`` in the environment.
+    voice_ws_enabled: bool = False
 
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod

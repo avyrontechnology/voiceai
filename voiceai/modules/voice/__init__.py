@@ -11,11 +11,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter
-
 from voiceai.common.logger import get_logger
 from voiceai.modules import ModuleDef
 from voiceai.modules.voice.constants import MODULE_NAME
+from voiceai.modules.voice.controller import router
 from voiceai.modules.voice.errors import (
     LlmError,
     S2SError,
@@ -46,17 +45,18 @@ from voiceai.modules.voice.service import VoiceCallService
 if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives at call time
     from voiceai.core.container import Container
 
-#: Mounted by the app factory under the API prefix. Empty on purpose: the flagged WS
-#: controller lands in step B14, and mounting a router with no routes changes nothing
-#: observable meanwhile (the A1 precedent).
-router: APIRouter = APIRouter()
+#: Mounted by the app factory under the API prefix. Carries the flagged WS route
+#: (dark unless ``Environment.voice_ws_enabled`` — spec 0004 B14); mounting it changes
+#: nothing observable while the flag is off (the A1 precedent).
 
 
 def register(container: Container) -> None:
-    """Bind this module's providers into a container (AGENTS.md rule 9; spec 0004 B4).
+    """Bind this module's providers into a container (AGENTS.md rule 9; spec 0004 B13a).
 
-    B4 binds exactly `VoiceCallService` — the seam the quickstart WS handler resolves;
-    B13a adds the adapters and the `AgentDefinitionPort` wiring. The adapter import
+    B4 bound exactly `VoiceCallService` — the seam the quickstart WS handler resolves.
+    B13a adds the prompt-store wiring: the service resolves `AgentSessionStorePort`
+    (bound by the agents module; absent when agents is not composed) and prefetches
+    prompt payloads through it, retiring the legacy prompt fetch. The adapter import
     lives inside the provider on purpose: building an app without ever resolving the
     service (every arch controller test) must not drag the legacy engine stack in.
 
@@ -65,14 +65,18 @@ def register(container: Container) -> None:
             infrastructure.
     """
 
-    def build_voice_call_service(_scope: Container) -> VoiceCallService:
+    def build_voice_call_service(scope: Container) -> VoiceCallService:
         """Build the call service over the legacy-bridging adapters (§3.1 bridge 1)."""
+        from voiceai.modules.agents import AgentSessionStorePort
         from voiceai.modules.voice.adapters.manager import build_assistant_manager, record_execution
 
+        # The agents module binds the port when composed; absent, the legacy fetch stays.
+        session_store = scope.resolve(AgentSessionStorePort) if scope.has(AgentSessionStorePort) else None
         return VoiceCallService(
             manager_factory=build_assistant_manager,
             execution_recorder=record_execution,
             logger=get_logger(MODULE_NAME),
+            session_store=session_store,
         )
 
     container.register(VoiceCallService, build_voice_call_service)

@@ -160,7 +160,6 @@ class HistorySession(Protocol):
     regen_settle_payload: Any  # why: regen payload is an open dict by contract
     eager_history_snapshot: Any  # why: history snapshot is an open structure
     eager_meta_info: Any  # why: meta_info is the free-form engine seam
-    started_transmitting_audio: bool
     last_transmitted_timestamp: float
     multilingual_prompts: dict
     llm_latencies: Any  # why: legacy latency record crosses the seam
@@ -712,7 +711,6 @@ async def cleanup_downstream_tasks(self: HistorySession) -> None:
 
     # restart output task
     self.output_task = asyncio.create_task(self._TaskManager__process_output_loop())
-    self.started_transmitting_audio = False  # Since we're interrupting we need to stop transmitting as well
     self.last_transmitted_timestamp = time.time()
     # clear_data() normally drops the playout estimate, but it runs after the provider's
     # clear send and is skipped if that raises, leaving a stale future deadline that would

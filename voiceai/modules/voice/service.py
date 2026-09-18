@@ -19,6 +19,8 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, Final, Protocol
 
+from voiceai.modules.voice.session.prompts import prompt_responses_from_store
+
 __all__ = ["AssistantManagerFactory", "AssistantRunHandle", "ExecutionRecorder", "VoiceCallService"]
 
 #: Direction label the WS entrypoint has always recorded for engine executions.
@@ -50,6 +52,7 @@ class AssistantManagerFactory(Protocol):
         assistant_id: Any,  # why: legacy accepts any identifier-ish value
         *,
         is_web_based_call: Any,  # why: raw truthiness flag, forwarded verbatim
+        prompt_responses: dict[str, Any] | None = None,
     ) -> AssistantRunHandle:
         """Return a run handle for the given agent config and socket."""
         ...
@@ -86,6 +89,7 @@ class VoiceCallService:
         manager_factory: AssistantManagerFactory,
         execution_recorder: ExecutionRecorder,
         logger: logging.Logger,
+        session_store: Any = None,  # why: AgentSessionStorePort; None keeps the legacy prompt fetch
     ) -> None:
         """Wire the service's collaborators (composition happens in ``register()``).
 
@@ -93,10 +97,13 @@ class VoiceCallService:
             manager_factory: Builds the engine manager for one call.
             execution_recorder: Persists the finished run, best-effort.
             logger: The module's ``otobaai.voice`` logger.
+            session_store: The agents module's prompt-payload port (B13a seam), or
+                ``None`` when uncomposed — the legacy prompt fetch then still fires.
         """
         self._manager_factory = manager_factory
         self._execution_recorder = execution_recorder
         self._logger = logger
+        self._session_store = session_store
 
     async def run_call(
         self,
@@ -128,7 +135,25 @@ class VoiceCallService:
         Raises:
             Exception: Whatever the engine run raises, re-raised after the record.
         """
-        assistant_manager = self._manager_factory(agent_config, ws, agent_id, is_web_based_call=is_web_based_call)
+        # B13a prompt seam: prefetch the prompt payload through the agents port so
+        # load_prompt's EXISTING prompt_responses kwarg carries it and the legacy
+        # get_prompt_responses branch never fires. Any store failure (or no store at
+        # all) degrades to None — the legacy fetch then runs exactly as before.
+        prompt_responses: dict[str, Any] | None = None
+        if self._session_store is not None:
+            try:
+                prompt_responses = await prompt_responses_from_store(self._session_store, agent_id)
+            except Exception as prefetch_error:  # why: prefetch must never fail the call
+                self._logger.warning("Prompt prefetch skipped: %s", prefetch_error)
+                prompt_responses = None
+        # The kwarg travels only when the store served: factories written against the
+        # B4 contract (without prompt_responses) keep working unchanged.
+        factory_kwargs: dict[str, Any] = {}
+        if prompt_responses is not None:
+            factory_kwargs["prompt_responses"] = prompt_responses
+        assistant_manager = self._manager_factory(
+            agent_config, ws, agent_id, is_web_based_call=is_web_based_call, **factory_kwargs
+        )
         task_outputs: list[dict[str, Any]] = []
         try:
             async for _task_id, task_output in assistant_manager.run(local=True):

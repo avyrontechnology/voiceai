@@ -33,6 +33,7 @@ def build_assistant_manager(
     assistant_id: Any,  # why: legacy accepts any identifier-ish value (str in practice)
     *,
     is_web_based_call: Any,  # why: raw truthiness flag, exactly as the legacy handler passed it
+    prompt_responses: dict[str, Any] | None = None,
 ) -> AssistantManager:
     """Construct the legacy ``AssistantManager`` exactly as the quickstart WS handler did.
 
@@ -42,11 +43,17 @@ def build_assistant_manager(
         ws: The live websocket the engine speaks over.
         assistant_id: The agent's id (positional in the legacy constructor).
         is_web_based_call: Browser-leg flag, forwarded as the same keyword.
+        prompt_responses: Prefetched prompt payload (B13a seam) — forwarded into the
+            manager kwargs so ``load_prompt`` finds it and the legacy fetch retires.
+            ``None`` (default) preserves the legacy fetch exactly.
 
     Returns:
         The manager whose ``run(local=True)`` drives the call.
     """
-    return AssistantManager(agent_config, ws, assistant_id, is_web_based_call=is_web_based_call)
+    extra: dict[str, Any] = {}
+    if prompt_responses is not None:
+        extra["prompt_responses"] = prompt_responses
+    return AssistantManager(agent_config, ws, assistant_id, is_web_based_call=is_web_based_call, **extra)
 
 
 async def record_execution(

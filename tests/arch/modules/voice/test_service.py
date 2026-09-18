@@ -160,6 +160,91 @@ async def test_run_exception_still_records_then_propagates():
     assert recorder.calls[0]["task_outputs"] == [{"messages": ["partial"]}]
 
 
+class SimpleNamespaceShim:
+    """Minimal AgentSessionStorePort double: serves get_prompts from one async function."""
+
+    def __init__(self, get_prompts):
+        self._get_prompts = get_prompts
+
+    async def get_prompts(self, agent_id):
+        return await self._get_prompts(agent_id)
+
+
+async def test_session_store_prefetch_reaches_the_factory():
+    """B13a prompt seam: a served payload travels store → factory kwargs (legacy fetch retires)."""
+    outputs = [{"messages": ["hi"]}]
+    manager = _FakeManager(outputs)
+    recorder = _Recorder()
+    factory_calls = []
+
+    async def get_prompts(agent_id):
+        assert agent_id == "agent-9"
+        return {"task_1": {"system_prompt": "be kind"}}
+
+    def factory(agent_config, ws, assistant_id, *, is_web_based_call, prompt_responses=None):
+        factory_calls.append({"prompt_responses": prompt_responses})
+        return manager
+
+    service = VoiceCallService(
+        manager_factory=factory,
+        execution_recorder=recorder,
+        logger=logging.getLogger("otobaai.voice.test"),
+        session_store=SimpleNamespaceShim(get_prompts),
+    )
+    await service.run_call(agent_config={}, ws=object(), agent_id="agent-9")
+
+    assert factory_calls == [{"prompt_responses": {"task_1": {"system_prompt": "be kind"}}}]
+
+
+async def test_missing_payload_falls_back_to_the_legacy_fetch():
+    """A store miss sends no payload — load_prompt then runs its legacy fetch."""
+    manager = _FakeManager([{"messages": ["hi"]}])
+    recorder = _Recorder()
+    factory_calls = []
+
+    async def get_prompts(agent_id):
+        return None
+
+    def factory(agent_config, ws, assistant_id, *, is_web_based_call, **kwargs):
+        factory_calls.append(dict(kwargs))
+        return manager
+
+    service = VoiceCallService(
+        manager_factory=factory,
+        execution_recorder=recorder,
+        logger=logging.getLogger("otobaai.voice.test"),
+        session_store=SimpleNamespaceShim(get_prompts),
+    )
+    await service.run_call(agent_config={}, ws=object(), agent_id="agent-9")
+
+    assert factory_calls == [{}]
+
+
+async def test_broken_store_never_fails_the_call(caplog):
+    """A raising store degrades to the legacy fetch with a warning, never an exception."""
+    manager = _FakeManager([{"messages": ["hi"]}])
+    recorder = _Recorder()
+
+    async def get_prompts(agent_id):
+        raise RuntimeError("store down")
+
+    def factory(agent_config, ws, assistant_id, *, is_web_based_call, **kwargs):
+        assert "prompt_responses" not in kwargs
+        return manager
+
+    service = VoiceCallService(
+        manager_factory=factory,
+        execution_recorder=recorder,
+        logger=logging.getLogger("otobaai.voice.test"),
+        session_store=SimpleNamespaceShim(get_prompts),
+    )
+    with caplog.at_level(logging.WARNING, logger="otobaai.voice.test"):
+        result = await service.run_call(agent_config={}, ws=object(), agent_id="agent-9")
+
+    assert result == [{"messages": ["hi"]}]
+    assert any("Prompt prefetch skipped" in record.getMessage() for record in caplog.records)
+
+
 def test_register_binds_a_singleton_voice_call_service():
     """The module's real register() composes a resolvable, cached service (rule 9)."""
     container = Container()

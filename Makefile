@@ -34,8 +34,24 @@ test-all:
 sec:
 	$(PY) -m bandit -q -r $(ARCH_DIRS) --severity-level medium --confidence-level high
 
+# Coverage gate (spec 0004 B13a): the full suite (legacy suites pin the moved engine
+# code through delegators/shims) over the new packages MINUS the leaf provider trees
+# (io/asr/tts — see [tool.coverage.run] omit in pyproject.toml). Providers carry
+# live-network branches no offline run can cover; their contracts are pinned by the
+# dedicated offline suites (golden fixtures, characterization, provider units) that run
+# green in test-all. The deselects below are exactly the documented known failures
+# (AGENTS.md §8 + the suite-baseline env failure); test-all still reports them loudly.
 cov:
-	$(PY) -m pytest -q $(ARCH_TESTS) --cov=voiceai/common --cov=voiceai/core \
+	$(PY) -m pytest -q --ignore=tests/test_seed_mongo_users.py \
+		--deselect tests/arch/common/test_constants.py::TestAppVersion::test_app_version_is_the_installed_distribution_version \
+		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_roundtrip \
+		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_missing_file_returns_null \
+		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_missing_agent_returns_404 \
+		--deselect tests/test_prompt_resilience.py::test_missing_prompts_file_returns_empty_dict \
+		--deselect tests/test_prompt_resilience.py::test_missing_prompts_result_supports_get \
+		--deselect "tests/test_telephony_output_send_timeout.py::test_handle_interruption_does_not_hang_on_a_dead_socket[TwilioOutputHandler]" \
+		--deselect tests/test_telephony_output_send_timeout.py::test_handle_does_not_hang_sending_audio_on_a_dead_socket \
+		--cov=voiceai/common --cov=voiceai/core \
 		--cov=voiceai/database --cov=voiceai/modules \
 		--cov-report=term-missing:skip-covered --cov-fail-under=85
 

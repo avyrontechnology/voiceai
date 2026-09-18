@@ -12,8 +12,9 @@ The step-B2 ports (`ActiveTranscriberProbePort`, `WelcomeStateSetterPort`,
 `SequenceGatePort`'s synthesizer seam) are proven on fakes AND, since B2 landed, on the
 legacy classes themselves (`TranscriberPool` probe members, the input handlers'
 `set_welcome_message_played`, `BaseSynthesizer`'s preferred `sequence_gate`). This
-file also carries the B0 module-def assertions (empty router; register rewritten at B4
-from the no-op pin to the VoiceCallService binding) and the skeleton behavior tests for
+file also carries the B0 module-def assertions (router: empty until B14 flipped it to
+the flagged WS route; register rewritten at B4 from the no-op pin to the
+VoiceCallService binding) and the skeleton behavior tests for
 `models`/`helpers`/`utils`/`exceptions`, since B0's test ownership is exactly this file
 (deviation noted in the step report).
 """
@@ -477,7 +478,7 @@ def test_graph_brain_fake_conforms_to_the_extension_port():
     assert graph._event_triggered_generation is False
 
 
-# --- Module definition: empty router + the B4 service binding ---------------------------
+# --- Module definition: flagged WS router + the B4 service binding ----------------------
 
 
 def test_module_is_a_frozen_module_def_named_voice():
@@ -494,9 +495,12 @@ def test_voice_module_is_registered_in_all_modules():
     assert voice.MODULE in ALL_MODULES
 
 
-def test_router_mounts_no_routes_yet():
-    """An empty router changes nothing observable; the WS controller arrives in B14."""
-    assert voice.MODULE.router.routes == []
+def test_router_mounts_exactly_the_flagged_ws_route():
+    """B14 flip of the B0 empty-router pin (1<->1, same precedent as the B2/B4 pin flips):
+    the router carries exactly the dark-until-cutover WS route and nothing else."""
+    from voiceai.modules.voice.constants import CHAT_WS_PATH
+
+    assert [route.path for route in voice.MODULE.router.routes] == [CHAT_WS_PATH]
 
 
 def test_register_binds_exactly_the_voice_call_service():

@@ -35,7 +35,9 @@ from voiceai.modules.voice.constants import (
 from voiceai.modules.voice.session.lifecycle import hangup
 
 #: Every lifecycle method the B7 contract moved; each keeps a TaskManager delegator.
+#: B13b appends the run()-residue drain (same delegator contract).
 MOVED_NAMES = (
+    "drain_hangup_goodbye",
     "_enter_hangup_state",
     "_should_ignore_transcriber_input",
     "process_call_hangup",

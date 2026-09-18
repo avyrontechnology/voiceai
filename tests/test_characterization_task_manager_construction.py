@@ -172,7 +172,8 @@ async def test_interruption_manager_is_constructed_default_first_then_reconfigur
         calls.append(kwargs)
         return InterruptionManager(*args, **kwargs)
 
-    with patch("voiceai.agent_manager.task_manager.InterruptionManager", side_effect=_spy):
+    # B13a lookup site (R3): the double construction moved into composition.
+    with patch("voiceai.modules.voice.session.composition.InterruptionManager", side_effect=_spy):
         tm = _build(_task(SIMPLE_AGENT, {"number_of_words_for_interruption": 5, "incremental_delay": 250}))
 
     # Preserved quirk (tm:634 vs tm:836): a defaults-only instance is built for every

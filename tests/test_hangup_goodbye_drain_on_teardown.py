@@ -6,8 +6,8 @@ goodbye to drain first.
 """
 
 import asyncio
-import inspect
 import time
+from types import SimpleNamespace
 
 
 from voiceai.agent_manager.task_manager import TaskManager
@@ -152,11 +152,24 @@ async def test_wait_is_bounded_when_marks_never_ack():
     assert len(tm.mark_event_meta_data.mark_event_meta_data) > 0  # returned without the mark ever acking
 
 
-def test_run_gates_terminal_sync_on_in_flight_hangup():
-    src = inspect.getsource(TaskManager.run)
-    gate_idx = src.find("if self.hangup_triggered and not self.conversation_ended:")
-    sync_idx = src.find(
-        "await self.sync_history(\n                        self.mark_event_meta_data.mark_event_meta_data.items(),"
-    )
-    assert gate_idx != -1 and sync_idx != -1
-    assert gate_idx < sync_idx
+async def test_run_gates_terminal_sync_on_in_flight_hangup():
+    # Behavior guard (spec 0004, B13b): the getsource pin is retired — drive the REAL
+    # drain at the coordinator seam and assert the CONCRETE order (goodbye wait first,
+    # terminal trim second) on an in-flight hangup.
+    order = []
+    tm = TaskManager.__new__(TaskManager)
+    tm.hangup_triggered = True
+    tm.conversation_ended = False
+    tm.mark_event_meta_data = SimpleNamespace(mark_event_meta_data={"m0": {"type": ""}})
+    tm.tools = {"input": SimpleNamespace(response_heard_by_user="", reset_response_heard_by_user=lambda: None)}
+
+    async def _wait():
+        order.append("wait")
+
+    async def _sync(*args, **kwargs):
+        order.append("sync")
+
+    tm.wait_for_current_message = _wait
+    tm.sync_history = _sync
+    await tm.drain_hangup_goodbye()
+    assert order == ["wait", "sync"]

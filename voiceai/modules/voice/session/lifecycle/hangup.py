@@ -76,6 +76,7 @@ __all__ = [
     "check_for_backchanneling",
     "check_for_completion",
     "create_ws_data_packet",
+    "drain_hangup_goodbye",
     "enter_hangup_state",
     "forwarded_flag",
     "get_raw_audio_bytes",
@@ -153,7 +154,11 @@ class LifecycleSession(Protocol):
     execute_function_call_task: Any  # why: asyncio.Task or None
 
     # --- legacy session methods the lifecycle calls back into ---
+    mark_event_meta_data: Any  # why: legacy mark ledger crossed by the terminal trim
     async def wait_for_current_message(self) -> Any: ...  # noqa: D102
+    async def sync_history(  # noqa: D102
+        self, mark_events_data: Any, interruption_processed_at: float, extend_with_playback_estimate: bool = ...
+    ) -> Any: ...
     async def _synthesize(self, packet: Any) -> Any: ...  # noqa: D102
     def compute_last_ai_audio_timestamp(self) -> float: ...  # noqa: D102
     def _should_stall_hangup(
@@ -212,6 +217,10 @@ class CallLifecycle:
     async def process_end_of_conversation(self, web_call_timeout: bool = False) -> None:
         """Tear the conversation down (see `process_end_of_conversation`)."""
         return await process_end_of_conversation(self.session, web_call_timeout=web_call_timeout)
+
+    async def drain_hangup_goodbye(self) -> None:
+        """Drain an in-flight hangup goodbye before the terminal trim (see `drain_hangup_goodbye`)."""
+        return await drain_hangup_goodbye(self.session)
 
     async def check_for_completion(self) -> None:
         """Run the completion watchdog loop (see `check_for_completion`)."""
@@ -361,6 +370,34 @@ async def process_end_of_conversation(self: LifecycleSession, web_call_timeout: 
         await asyncio.sleep(2)  # Making sure whatever message was passed is over
 
     self.voicemail_handler.cancel_task()
+
+
+async def drain_hangup_goodbye(self: LifecycleSession) -> None:
+    """Drain an in-flight hangup goodbye before the terminal history trim (spec 0004, B13b).
+
+    Verbatim ``TaskManager.run`` teardown residue: when the transcriber socket
+    idle-closes mid-goodbye, ``gather()`` returns while the goodbye is still playing
+    in ``llm_task`` — trimming history immediately would cut the goodbye to the
+    prefix the caller had heard so far. Waiting first lets it drain. The terminal
+    trim then runs over marks plus actually-heard text with the playback estimate.
+
+    Args:
+        self: The live call session (injected by the TaskManager delegator).
+    """
+    # _listen_transcriber can exit (transcriber idle-closes) while a hangup
+    # goodbye is still playing in llm_task; let it drain before trimming.
+    if self.hangup_triggered and not self.conversation_ended:
+        await self.wait_for_current_message()
+
+    has_pending_marks = len(self.mark_event_meta_data.mark_event_meta_data) > 0
+    has_response_heard = bool(self.tools["input"].response_heard_by_user)
+    if has_pending_marks or has_response_heard:
+        await self.sync_history(
+            self.mark_event_meta_data.mark_event_meta_data.items(),
+            time.time(),
+            extend_with_playback_estimate=True,
+        )
+    self.tools["input"].reset_response_heard_by_user()
 
 
 def update_preprocessed_tree_node(self: LifecycleSession) -> None:

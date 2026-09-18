@@ -179,7 +179,6 @@ class ListenerSession(Protocol):
     has_transfer: bool
     function_call_in_flight: bool
     transcriber_message: str
-    first_message_passing_time: float
     current_request_id: Any  # why: request id is str or None
     previous_request_id: Any  # why: request id is str or None
     llm_rejected_request_ids: set  # why: legacy id set crosses the seam
@@ -894,7 +893,6 @@ async def listen_transcriber(self: ListenerSession) -> None:
                         interim_content = message["data"].get("content", "")
                         self._trigger_voicemail_check(interim_content, meta_info, is_final=False)
 
-                    self.llm_response_generated = False
 
                 elif isinstance(message.get("data"), dict) and message["data"].get("type", "") == "eager_end_of_turn":
                     eager_transcript = message["data"].get("content", "").strip()
@@ -1207,7 +1205,6 @@ async def handle_accumulated_message(self: ListenerSession) -> None:
     while True:
         if self.tools["input"].welcome_message_played():
             logger.info("Welcome message has been played")
-            self.first_message_passing_time = time.time()
             if len(self.transcriber_message):
                 logger.info(f"Sending the accumulated transcribed message - {self.transcriber_message}")
                 await self._TaskManager__send_first_message(self.transcriber_message)

@@ -125,3 +125,13 @@ AVAILABLE_LABELS_KEY: Final[str] = "available"
 
 # --- Error messages (operator-facing; identifiers only) ---------------------------------
 UNKNOWN_LABEL_MESSAGE_TEMPLATE: Final[str] = "Unknown component label '{label}'"
+
+# --- Voice WS route (spec 0004, B14 cutover flag) ---------------------------------------
+#: The realtime call route, mounted under the app factory's API prefix; dark unless
+#: ``Environment.voice_ws_enabled`` (``VOICE_WS_ENABLED``) is set — quickstart stays
+#: the deployed entry until the endgame cutover spec flips it.
+CHAT_WS_PATH: Final[str] = "/chat/v1/{agent_id}"
+#: WS close code when the cutover flag is off (mirrors HTTP 403, app-code range).
+WS_CLOSE_DARK: Final[int] = 4403
+#: WS close code when no agent definition exists for the id (mirrors HTTP 404).
+WS_CLOSE_UNKNOWN_AGENT: Final[int] = 4404
