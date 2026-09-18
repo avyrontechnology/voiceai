@@ -1,25 +1,34 @@
-import os
+"""Local quickstart entry: legacy agent CRUD plus the platform routers.
+
+Spec 0006 (E2) dual-mount: the module auth controller rides alongside the legacy
+``/auth`` router — bare shapes stay at ``/auth``, envelopes serve at
+``/api/v1/auth`` — until E4 unmounts the legacy surface. The agent-CRUD gates below
+resolve through the container ``AuthService``, and legacy ``/auth`` responses carry
+sunset headers so external clients can migrate in time.
+"""
+
 import copy
+import os
 import traceback
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from collections.abc import Awaitable, Callable
+from typing import Final
+
 import redis.asyncio as redis
 from dotenv import load_dotenv
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from voiceai.common.constants import API_PREFIX, CONTAINER_KEY_REDIS, CONTAINER_STATE_ATTR, HTTP_SERVICE_UNAVAILABLE
+from voiceai.common.errors import AppError
+from voiceai.core.container import Container
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
-from voiceai.common.constants import CONTAINER_KEY_REDIS
-from voiceai.core.container import Container
+from voiceai.modules import auth as auth_module
 from voiceai.modules.agents import AgentNotFoundError, AgentService
 from voiceai.modules.agents import register as register_agents_module
 from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice import register as register_voice_module
-from voiceai.platform.auth import (
-    Principal,
-    get_store as auth_store,
-    redeem_ws_ticket,
-    require_scope,
-    token_hash,
-)
 
 load_dotenv()
 logger = configure_logger(__name__)
@@ -27,6 +36,21 @@ logger = configure_logger(__name__)
 redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
+
+#: Sunset of the legacy bare-shape `/auth` surface (spec 0006, E2): 30 days after the
+#: dual-mount lands, RFC 1123. Served on every legacy `/auth*` response next to
+#: `Deprecation: true` so external clients migrate to `/api/v1/auth` in time.
+LEGACY_AUTH_SUNSET: Final[str] = "Sun, 18 Oct 2026 00:00:00 GMT"
+
+_LEGACY_AUTH_PATH: Final[str] = "/auth"
+_DEPRECATION_HEADER: Final[str] = "Deprecation"
+_SUNSET_HEADER: Final[str] = "Sunset"
+_DEPRECATION_VALUE: Final[str] = "true"
+# Mirrors the frozen `platform.auth.SESSION_COOKIE` value without importing it: the E2
+# contract allows no new `platform.*` imports, and the cookie name is wire-stable.
+_SESSION_COOKIE: Final[str] = "otoba_session"
+_AUTHORIZATION_HEADER: Final[str] = "authorization"
+_PLATFORM_STORE_ATTR: Final[str] = "platform_store"
 
 
 class _AgentRedisSeam:
@@ -95,27 +119,137 @@ app.add_middleware(
 )
 
 
+def _auth_service_from_app(app: FastAPI) -> auth_module.AuthService:
+    """Resolve the auth service for a connection, preferring the container (spec 0006, E2).
+
+    The container `AuthStorePort` binding (E1) wins so the dual-mounted controller and
+    these gates share one store; without a container binding the legacy
+    `app.state.platform_store` seam serves, keeping single-process dev working.
+
+    Args:
+        app: The application carrying `state.container` and/or `state.platform_store`.
+
+    Returns:
+        An `AuthService` over the resolved store (local limiter default, per E3).
+
+    Raises:
+        HTTPException: 503 with the legacy `get_store` string when neither seam has a store.
+    """
+    container: Container | None = getattr(app.state, CONTAINER_STATE_ATTR, None)
+    store: auth_module.AuthStorePort | None = None
+    if container is not None and container.has(auth_module.AuthStorePort):
+        store = container.resolve(auth_module.AuthStorePort)  # type: ignore[type-abstract]
+    if store is None:
+        store = getattr(app.state, _PLATFORM_STORE_ATTR, None)
+    if store is None:
+        raise HTTPException(status_code=HTTP_SERVICE_UNAVAILABLE, detail="Platform store unavailable")
+    return auth_module.AuthService(store)
+
+
+def require_scope(scope: str) -> Callable[[Request], Awaitable[None]]:
+    """Gate a route on one auth scope behind the container service (spec 0006, E2).
+
+    Drop-in for the legacy `platform.auth.require_scope` these routes used: the same
+    401/403 statuses and verbatim detail strings, but the principal resolves through
+    `AuthService.authenticate` over the container store instead of the legacy app.state
+    path. The gate result is discarded (callers keep the `_auth` name only so the
+    dependency still executes), so the dependency answers `None`.
+
+    Args:
+        scope: The required scope (for example `"agents:read"`).
+
+    Returns:
+        A FastAPI dependency enforcing the scope.
+    """
+
+    async def _gate(request: Request) -> None:
+        """Authenticate the request and enforce the closed-over scope.
+
+        Args:
+            request: The incoming request, carrying the session cookie / bearer key.
+        """
+        service = _auth_service_from_app(request.app)
+        principal = await service.authenticate(
+            request.cookies.get(_SESSION_COOKIE),
+            request.headers.get(_AUTHORIZATION_HEADER, ""),
+        )
+        if not principal.has_scope(scope):
+            raise auth_module.ForbiddenError(f"Requires {scope} scope")
+        return None
+
+    return _gate
+
+
+@app.exception_handler(AppError)
+async def _auth_gate_denial(request: Request, exc: AppError) -> JSONResponse:
+    """Render gate denials with the legacy bare-detail shape (spec 0006, E2).
+
+    The migrated gates raise module errors; without this mapping the app would answer
+    500. Statuses and `detail` strings stay byte-identical to the legacy
+    `platform.auth` deps (`{"detail": ...}`), so envelopes never leak onto these routes.
+
+    Args:
+        request: The incoming request (unused — a denial carries no request context).
+        exc: The gate denial.
+
+    Returns:
+        The legacy-shaped denial response.
+    """
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.public_message})
+
+
+@app.middleware("http")
+async def _legacy_auth_sunset(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Stamp sunset headers on legacy `/auth*` responses only (spec 0006, E2).
+
+    The enveloped `/api/v1/auth*` mount and every other route pass through untouched;
+    the legacy router file itself stays frozen — the wrap lives at this mount site.
+
+    Args:
+        request: The incoming request.
+        call_next: The rest of the application stack.
+
+    Returns:
+        The downstream response, sunset-stamped on the legacy auth paths.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == _LEGACY_AUTH_PATH or path.startswith(_LEGACY_AUTH_PATH + "/"):
+        response.headers[_DEPRECATION_HEADER] = _DEPRECATION_VALUE
+        response.headers[_SUNSET_HEADER] = LEGACY_AUTH_SUNSET
+    return response
+
+
 class CreateAgentPayload(BaseModel):
-    agent_config: AgentModel = Field(..., description="The main agent configuration including tools, tasks, and settings.")
+    agent_config: AgentModel = Field(
+        ..., description="The main agent configuration including tools, tasks, and settings."
+    )
     # Values are usually strings (system_prompt, welcome_message) but may be
     # nested blocks such as task_1.multilingual_prompts, which the engine
     # reads at runtime for language switching.
-    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(None, description="Optional prompts mapped by intent/context.")
+    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(
+        None, description="Optional prompts mapped by intent/context."
+    )
+
 
 class ErrorResponse(BaseModel):
     detail: str = Field(..., description="Error description message.")
+
 
 class AgentCreatedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the created agent.")
     state: str = Field("created", description="State of the agent creation.")
 
+
 class AgentUpdatedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the updated agent.")
     state: str = Field("updated", description="State of the agent update.")
 
+
 class AgentDeletedResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the deleted agent.")
     state: str = Field("deleted", description="State of the agent deletion.")
+
 
 class AgentPromptsResponse(BaseModel):
     agent_id: str = Field(..., description="The unique identifier for the agent.")
@@ -123,9 +257,11 @@ class AgentPromptsResponse(BaseModel):
         None, description="Stored prompts mapped by task (e.g. task_1), or null when none were saved."
     )
 
+
 class AgentListItem(BaseModel):
     agent_id: str = Field(..., description="The ID of the agent.")
     data: dict = Field(..., description="The agent configuration data.")
+
 
 class AgentListResponse(BaseModel):
     agents: List[AgentListItem] = Field(..., description="List of all available agents.")
@@ -139,10 +275,10 @@ class AgentListResponse(BaseModel):
     responses={
         200: {"description": "Agent configuration successfully retrieved."},
         404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+        500: {"model": ErrorResponse, "description": "Internal server error."},
+    },
 )
-async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
+async def get_agent(agent_id: str, _auth: None = Depends(require_scope("agents:read"))):
     """Fetches an agent's information by ID."""
     try:
         # legacy-parity(spec-0002): the missing-agent 404 stays swallowed into the 500
@@ -163,10 +299,10 @@ async def get_agent(agent_id: str, _auth: Principal = Depends(require_scope("age
     response_model=AgentPromptsResponse,
     responses={
         404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+        500: {"model": ErrorResponse, "description": "Internal server error."},
+    },
 )
-async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_scope("agents:read"))):
+async def get_agent_prompts(agent_id: str, _auth: None = Depends(require_scope("agents:read"))):
     """Fetches an agent's stored prompts by ID."""
     try:
         return await agent_service.get_agent_prompts(agent_id)
@@ -187,11 +323,9 @@ async def get_agent_prompts(agent_id: str, _auth: Principal = Depends(require_sc
     tags=["Agents"],
     response_model=AgentCreatedResponse,
     status_code=201,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses={500: {"model": ErrorResponse, "description": "Internal server error."}},
 )
-async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depends(require_scope("agents:write"))):
+async def create_agent(agent_data: CreateAgentPayload, _auth: None = Depends(require_scope("agents:write"))):
     """Creates a new agent from the provided configuration and prompts."""
     # legacy-parity(spec-0002): no catch-all here — the old handler had none, so failures
     # (extraction generation included) still propagate as unhandled 500s.
@@ -206,13 +340,13 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depend
     response_model=AgentUpdatedResponse,
     responses={
         404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+        500: {"model": ErrorResponse, "description": "Internal server error."},
+    },
 )
 async def edit_agent(
     agent_id: str,
     agent_data: CreateAgentPayload = Body(...),
-    _auth: Principal = Depends(require_scope("agents:write")),
+    _auth: None = Depends(require_scope("agents:write")),
 ):
     """Edits an existing agent based on the provided agent_id."""
     try:
@@ -234,10 +368,10 @@ async def edit_agent(
     response_model=AgentDeletedResponse,
     responses={
         404: {"model": ErrorResponse, "description": "Agent not found."},
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+        500: {"model": ErrorResponse, "description": "Internal server error."},
+    },
 )
-async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("agents:write"))):
+async def delete_agent(agent_id: str, _auth: None = Depends(require_scope("agents:write"))):
     """Deletes an agent by ID."""
     try:
         # legacy-parity(spec-0002): the missing-agent 404 stays swallowed into the 500
@@ -255,11 +389,9 @@ async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("
     description="Fetches all agents and their configurations currently stored in Redis.",
     tags=["Agents"],
     response_model=AgentListResponse,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error."}
-    }
+    responses={500: {"model": ErrorResponse, "description": "Internal server error."}},
 )
-async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read"))):
+async def get_all_agents(_auth: None = Depends(require_scope("agents:read"))):
     """Fetches all agents stored in Redis."""
     try:
         # The bare-UUID `KEYS *` scan (":"-keys skipped before GET, per-key failures
@@ -286,30 +418,33 @@ try:
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
     logger.warning(f"Platform routers not mounted: {exc}")
 
+# Spec 0006 (E2): dual-mount — the module controller serves envelopes at `/api/v1/auth`
+# next to the legacy bare shapes at `/auth` (prefixes already differ, so nothing
+# collides). The legacy router unmounts in E4 after external clients migrate.
+app.include_router(auth_module.MODULE.router, prefix=API_PREFIX)
+
 
 #############################################################################################
 # Websocket
 #############################################################################################
-async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str]) -> bool:
+async def _authorize_voice_socket(websocket: WebSocket, token: str | None) -> bool:
     """Gate live voice on a session cookie or a single-use ?token= ticket.
 
     Requires calls:write (member+): viewers may watch telemetry but never
     place live or simulated calls.
     """
     try:
-        store = getattr(websocket.app.state, "platform_store", None)
-        if store is None:
+        try:
+            service = _auth_service_from_app(websocket.app)
+        except HTTPException:
             logger.warning("Voice socket denied: platform store unavailable")
             return False
-        principal = None
-        if token:
-            principal = await redeem_ws_ticket(store, token)
+        principal = await service.redeem_ticket(token)
         if principal is None:
-            session_token = websocket.cookies.get("otoba_session")
-            if session_token:
-                from voiceai.platform.auth import _principal_from_session
-
-                principal = await _principal_from_session(store, session_token)
+            try:
+                principal = await service.authenticate(websocket.cookies.get(_SESSION_COOKIE), None)
+            except auth_module.InvalidCredentialsError:
+                principal = None
         if principal is None or not principal.has_scope("calls:write"):
             logger.warning("Voice socket denied: unauthenticated or missing calls:write")
             return False
