@@ -46,14 +46,14 @@ from voiceai.modules.auth.models.invite import Invite
 from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.session import SessionRecord
 from voiceai.modules.auth.models.user import User, UserRole
-from voiceai.modules.auth.ports import AuthStorePort
+from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter
 from voiceai.modules.auth.static_methods import (
     hash_password,
     new_token,
     token_hash,
     verify_password,
 )
-from voiceai.modules.auth.utils import check_login_allowed
+from voiceai.modules.auth.utils import LocalLoginLimiter
 
 __all__ = ["AuthService"]
 
@@ -65,10 +65,13 @@ class AuthService:
 
     Args:
         store: The auth persistence behind ``AuthStorePort`` (a fake in tests).
+        limiter: The login-throttle seam (spec 0006, E3); `None` keeps the
+            in-process ledger so existing behavior is unchanged.
     """
 
-    def __init__(self, store: AuthStorePort) -> None:
+    def __init__(self, store: AuthStorePort, *, limiter: LoginLimiter | None = None) -> None:
         self._store = store
+        self._limiter: LoginLimiter = limiter if limiter is not None else LocalLoginLimiter()
 
     # -- sessions -----------------------------------------------------------
 
@@ -180,7 +183,7 @@ class AuthService:
             TooManyAttemptsError: When the IP exhausted its window.
             InvalidCredentialsError: When the email/password/disabled gate fails.
         """
-        check_login_allowed(client_ip)
+        await self._limiter.check(client_ip)
         user = await self._store.get_user_by_email(email)
         if not user or user.disabled or not verify_password(password, user.password_hash):
             await self.audit("login_failed", email=email.strip().lower())

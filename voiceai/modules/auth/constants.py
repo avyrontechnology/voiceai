@@ -32,6 +32,11 @@ LOGIN_WINDOW_S: Final[int] = 60
 #: Max login attempts per IP inside the window.
 LOGIN_MAX_ATTEMPTS: Final[int] = 5
 
+#: Redis key prefix for the shared per-IP login-throttle counters (spec 0006, E3).
+#: Full keys read ``auth:throttle:{ip}``; values are ephemeral counters with a
+#: ``LOGIN_WINDOW_S`` TTL, not persisted models (no `Collections` entry).
+THROTTLE_KEY_PREFIX: Final[str] = "auth:throttle:"
+
 #: PBKDF2 iterations for password hashing (frozen by spec 0005 non-goals).
 PBKDF2_ITERATIONS: Final[int] = 600_000
 

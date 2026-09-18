@@ -13,7 +13,7 @@ from voiceai.modules.auth.models.invite import Invite
 from voiceai.modules.auth.models.session import SessionRecord
 from voiceai.modules.auth.models.user import User
 
-__all__ = ["AuthStorePort"]
+__all__ = ["AuthStorePort", "LoginLimiter"]
 
 from typing import Protocol, runtime_checkable
 
@@ -96,4 +96,25 @@ class AuthStorePort(Protocol):
 
     async def list_user_sessions(self, user_id: str) -> list[SessionRecord]:
         """Return every session record of a user (password-change sweep)."""
+        ...
+
+
+@runtime_checkable
+class LoginLimiter(Protocol):
+    """Shared login-throttle seam behind `AuthService.login` (spec 0006, E3).
+
+    The local ledger (`utils.check_login_allowed`) and the redis counter
+    (`utils.RedisLoginLimiter`) both satisfy this structurally, so the service
+    never knows which window it is checking.
+    """
+
+    async def check(self, ip: str) -> None:
+        """Record one login attempt, rejecting an exhausted window.
+
+        Args:
+            ip: Client address (already extracted from headers or connection info).
+
+        Raises:
+            TooManyAttemptsError: When the IP exhausted its window.
+        """
         ...
