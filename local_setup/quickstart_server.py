@@ -400,6 +400,14 @@ try:
         # Bare paths stay byte-identical; duplicate operation_ids warn only.
         app.include_router(_router, prefix=API_PREFIX)
     app.state.platform_store = RedisStore(redis_client)
+    # Cutover follow-up (spec 0006 post-E4): the module controller resolves its
+    # service from `state.container`, which quickstart never set — every
+    # `/api/v1/auth/*` request died there. Bind the SAME store instance the
+    # legacy seam serves (one session ledger, not two). Deliberately not
+    # auth.register(): that factory would resolve CONTAINER_KEY_REDIS to the
+    # agents RedisLike seam, which is not a driver client.
+    _agents_container.register(auth_module.AuthStorePort, app.state.platform_store)  # type: ignore[type-abstract]
+    app.state.container = _agents_container
     logger.info("Platform routers mounted")
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
     logger.warning(f"Platform routers not mounted: {exc}")

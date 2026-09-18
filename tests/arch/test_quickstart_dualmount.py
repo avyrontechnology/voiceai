@@ -122,6 +122,33 @@ async def _signup_owner(client: AsyncClient) -> dict[str, Any]:
     return data
 
 
+def test_import_time_wiring_binds_the_live_store() -> None:
+    """Quickstart's own container resolves the SAME store the seam serves (no 500s).
+
+    Regression for the deployed `/api/v1/auth/*` 500s: the controller depends on
+    `state.container`, which quickstart now sets at startup (the fixture below
+    overrides it per-test, so this pins the import-time wiring instead).
+    """
+    from voiceai.modules.auth.ports import AuthStorePort
+
+    qs = _quickstart()
+
+    container = qs.app.state.container
+    assert container.resolve(AuthStorePort) is qs.app.state.platform_store  # type: ignore[type-abstract]
+
+
+async def test_import_time_wiring_serves_auth_without_500(
+    client_factory: Callable[..., AsyncClient],
+) -> None:
+    """Anonymous `/api/v1/auth/me` on the import-time app reads 401, never 500."""
+    qs = _quickstart()
+
+    async with client_factory(qs.app) as client:
+        response = await client.get(NEW_ME_PATH)
+
+    assert response.status_code == 401, response.text
+
+
 async def test_legacy_auth_is_dark(
     wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
 ) -> None:
