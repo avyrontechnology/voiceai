@@ -1360,9 +1360,27 @@ def build_routers() -> list[APIRouter]:
 
 
 def create_platform_app(store: Optional[MemoryStore] = None) -> FastAPI:
-    """Standalone app for tests/dev. Production mounts routers on the main server."""
+    """Build the standalone platform app with dual-served routers (spec 0007).
+
+    Every router from `build_routers()` mounts twice — bare (today) plus the
+    shared `API_PREFIX` mount (new) — sharing one handler, so shapes stay
+    byte-identical on both mounts. Duplicate operation_ids across the two
+    mounts warn only. The tombstoned zero-route auth router mounts twice
+    harmlessly and needs no special case.
+
+    Args:
+        store: Backing store; a fresh `MemoryStore` when omitted.
+
+    Returns:
+        The FastAPI application with each router mounted bare and prefixed.
+    """
+    from voiceai.common.constants import API_PREFIX
+
     app = FastAPI(title="VoiceAI Platform", version="0.1.0")
     app.state.platform_store = store or MemoryStore()
     for router in build_routers():
         app.include_router(router)
+        # Spec 0007: dual-serve — the same handler answers under `/api/v1` too.
+        # Bare paths stay byte-identical; duplicate operation_ids warn only.
+        app.include_router(router, prefix=API_PREFIX)
     return app

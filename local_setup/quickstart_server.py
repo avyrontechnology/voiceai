@@ -238,6 +238,9 @@ class AgentListResponse(BaseModel):
     agents: List[AgentListItem] = Field(..., description="List of all available agents.")
 
 
+# Spec 0007: dual-serve — each direct route below registers twice (bare + API_PREFIX).
+# The stacked decorator carries the path only; both mounts share one handler.
+@app.get(f"{API_PREFIX}/agent/{{agent_id}}")
 @app.get(
     "/agent/{agent_id}",
     summary="Get Agent Configuration",
@@ -262,6 +265,7 @@ async def get_agent(agent_id: str, _auth: None = Depends(require_scope("agents:r
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.get(f"{API_PREFIX}/agent/{{agent_id}}/prompts")
 @app.get(
     "/agent/{agent_id}/prompts",
     summary="Get Agent Prompts",
@@ -287,6 +291,7 @@ async def get_agent_prompts(agent_id: str, _auth: None = Depends(require_scope("
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.post(f"{API_PREFIX}/agent")
 @app.post(
     "/agent",
     summary="Create New Agent",
@@ -303,6 +308,7 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: None = Depends(req
     return await agent_service.create_agent(agent_data.agent_config, agent_data.agent_prompts)
 
 
+@app.put(f"{API_PREFIX}/agent/{{agent_id}}")
 @app.put(
     "/agent/{agent_id}",
     summary="Update Existing Agent",
@@ -331,6 +337,7 @@ async def edit_agent(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.delete(f"{API_PREFIX}/agent/{{agent_id}}")
 @app.delete(
     "/agent/{agent_id}",
     summary="Delete Agent",
@@ -354,6 +361,7 @@ async def delete_agent(agent_id: str, _auth: None = Depends(require_scope("agent
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.get(f"{API_PREFIX}/all")
 @app.get(
     "/all",
     summary="List All Agents",
@@ -388,6 +396,9 @@ try:
         if _router.prefix == _RETIRED_AUTH_PREFIX:
             continue
         app.include_router(_router)
+        # Spec 0007: dual-serve — the same handler answers under `/api/v1` too.
+        # Bare paths stay byte-identical; duplicate operation_ids warn only.
+        app.include_router(_router, prefix=API_PREFIX)
     app.state.platform_store = RedisStore(redis_client)
     logger.info("Platform routers mounted")
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
