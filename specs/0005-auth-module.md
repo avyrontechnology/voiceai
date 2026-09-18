@@ -1,6 +1,6 @@
 # Spec 0005 — Auth module (platform auth strangler, tranche C)
 
-- **Status:** in progress
+- **Status:** done (steps C0-C5 landed, C4 folded into C3; shim burn-down stays open until the endgame cutover spec)
 - **Branch:** `revamp/arch` (base: `master`)
 - **Owner:** Monazir
 - **Depends on:** spec 0001 (foundation); spec 0002 (ports-and-adapters precedent, agents `__all__` discipline); AGENTS.md §3.1
@@ -161,9 +161,18 @@ quirk with TODO, owned by the platform strangler, never re-fixed here).
   - Normalization note: the STORES lowercase inside `get_user_by_email`, so login
     is case-insensitive in both worlds; invite keeps the saner normalized dup
     check (legacy raw lookup could double-register `User@X` over `user@x`).
-- **C6 — Closeout + shim audit.** Burn-down reconciled; an arch test asserts the
-  controller's error→status map covers every service error; line-count proof; final
-  `make check` + `test-all` + `sec` + `cov`.
+- **C6 — Closeout + shim audit (DONE, commit `feat(auth)` [spec-0005]).**
+  `test_error_map.py` (map complete over all 9 raisable errors, statuses + details
+  pinned) + `test_burndown.py` (27 legacy names resolve, 7-model shim, 14-route
+  legacy router, both stores carry the additive method, module homes owned).
+  Line-count proof: new tree 1,735 src + 1,843 test lines; tranche legacy delta is
+  shims-only (`auth.py` −62 net delegators, `models.py` −134 net shim,
+  `store.py` +16 additive, router + quickstart untouched).
+  Final gates green (see Verification); spec closed.
+  - REGRESSION CAUGHT + FIXED: C3 had dropped the legacy `hmac.compare_digest`
+    on the API-key path (plain `==`); C6 restored it, test-pinned. Invite lookup
+    stays plain `==` — that IS verbatim legacy (only the key comparison was ever
+    constant-time); the crypto note below is corrected to match.
 
 ## Security notes
 
@@ -175,8 +184,9 @@ quirk with TODO, owned by the platform strangler, never re-fixed here).
 - **Secrets:** hashes only at rest (PBKDF2/SHA-256, `secrets` module); `db_url`-style
   handling N/A (no new secret env vars — cookie flags already declared); `redact_secrets`
   before logging any mapping; the signup INFO email line is a preserved PII quirk + TODO.
-- **Crypto:** PBKDF2-SHA256/600k + `hmac.compare_digest` preserved verbatim (both
-  comparisons); parameters frozen by non-goal above.
+- **Crypto:** PBKDF2-SHA256/600k + `hmac.compare_digest` on the API-key path
+  (verbatim; the invite digest lookup is plain `==` in legacy too — hardening it
+  is endgame material, not this strangler); parameters frozen by non-goal above.
 - **Abuse:** login throttle preserved verbatim (per-process 5/min/IP documented limit,
   multi-worker caveat rides along); password change keeps the kill-others semantics.
 - **Injection:** no string-built queries (store dicts only); no `eval`; file paths N/A.

@@ -20,6 +20,7 @@ deltas are mechanical:
 
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import timedelta, timezone
 from typing import Literal
@@ -121,7 +122,7 @@ class AuthService:
             if not key.key_hash:
                 continue  # legacy key minted before hashing; rotate it
             prefix_ok = secret.startswith(key.prefix) if key.prefix else True
-            if prefix_ok and key.key_hash == digest:
+            if prefix_ok and hmac.compare_digest(key.key_hash, digest):
                 if key.expires_at and key.expires_at.replace(tzinfo=timezone.utc) < utc_now():
                     return None
                 key.last_used_at = utc_now()

@@ -24,7 +24,7 @@ def test_module_is_a_frozen_module_def_named_auth() -> None:
 
 def test_router_mounts_the_auth_surface_at_c5() -> None:
     """The controller landed: all thirteen routes ride the module router (C5)."""
-    assert sorted({route.path for route in MODULE.router.routes}) == sorted(
+    assert sorted({getattr(route, "path", "") for route in MODULE.router.routes}) == sorted(
         [
             "/auth/signup",
             "/auth/login",
