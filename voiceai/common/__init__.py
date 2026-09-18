@@ -5,6 +5,7 @@ from voiceai.common.constants import (
     APP_NAME,
     APP_VERSION,
     DEFAULT_PAGE_SIZE,
+    EMAIL_PATTERN,
     LOGGER_NAME,
     MAX_PAGE_SIZE,
     REQUEST_ID_HEADER,
@@ -24,6 +25,7 @@ from voiceai.common.errors import (
     UnauthorizedError,
 )
 from voiceai.common.exceptions import ensure, ensure_found, ensure_valid
+from voiceai.common.ids import new_id
 from voiceai.common.logger import configure_logging, get_logger, get_request_id, set_request_id
 from voiceai.common.pagination import Page, PaginationParams, paginate
 from voiceai.common.responses import (
@@ -68,6 +70,7 @@ __all__ = [
     "RateLimitedError",
     "UnauthorizedError",
     "configure_logging",
+    "EMAIL_PATTERN",
     "ensure",
     "ensure_found",
     "ensure_valid",
@@ -78,6 +81,7 @@ __all__ = [
     "get_request_id",
     "is_safe_outbound_url",
     "isoformat_z",
+    "new_id",
     "paginate",
     "paginated_response",
     "parse_iso",

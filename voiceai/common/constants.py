@@ -52,6 +52,11 @@ REDACTED_VALUE: Final[str] = "***"
 # A regex over key *names*, not a credential of any kind.
 SECRET_KEY_PATTERN_SOURCE: Final[str] = r"api_key|apikey|token|secret|password|authorization|credential"  # noqa: S105
 
+# --- Validation ------------------------------------------------------------------------------
+#: Email shape for pydantic `pattern=` fields (spec 0005: single source for the auth
+#: schema and every other model validating emails).
+EMAIL_PATTERN: Final[str] = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
 # --- Pagination -----------------------------------------------------------------------------
 MIN_PAGE: Final[int] = 1
 DEFAULT_PAGE: Final[int] = 1

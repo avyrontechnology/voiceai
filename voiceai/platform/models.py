@@ -13,13 +13,22 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid4().hex[:12]}"
+# spec-0005 C2: the auth schema lives VERBATIM in voiceai.modules.auth.models. These
+# same-named bindings keep THIS module the lookup/import site BY IDENTITY — every
+# direct importer, star surface and monkeypatch target keeps resolving. The `as`
+# spelling makes each binding an EXPLICIT re-export (no_implicit_reexport).
+from voiceai.common.constants import EMAIL_PATTERN as EMAIL_PATTERN
+from voiceai.common.datetime_utils import utc_now as utcnow
+from voiceai.common.ids import new_id as new_id
+from voiceai.modules.auth.models.apikey import ApiKey as ApiKey
+from voiceai.modules.auth.models.audit import AuthEvent as AuthEvent
+from voiceai.modules.auth.models.invite import Invite as Invite
+from voiceai.modules.auth.models.session import SessionRecord as SessionRecord
+from voiceai.modules.auth.models.user import ALL_SCOPES as ALL_SCOPES
+from voiceai.modules.auth.models.user import ROLE_RANK as ROLE_RANK
+from voiceai.modules.auth.models.user import ROLE_SCOPES as ROLE_SCOPES
+from voiceai.modules.auth.models.user import User as User
+from voiceai.modules.auth.models.user import UserRole as UserRole
 
 
 class ExecutionStatus(str, Enum):
@@ -299,9 +308,6 @@ class DeletedResponse(BaseModel):
     state: str = "deleted"
 
 
-EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-
-
 class NotificationPrefs(BaseModel):
     low_balance_enabled: bool = True
     low_balance_threshold: float = 50
@@ -331,19 +337,6 @@ class UpdateOrganizationRequest(BaseModel):
     notifications: Optional[NotificationPrefs] = None
 
 
-class ApiKey(BaseModel):
-    key_id: str
-    name: str
-    prefix: str
-    # bcrypt hash of the full secret (secret itself is never stored).
-    key_hash: Optional[str] = None
-    scopes: List[str] = Field(default_factory=list)
-    expires_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
-    last_used_at: Optional[datetime] = None
-
-
 class ApiKeyListResponse(BaseModel):
     api_keys: List[ApiKey]
 
@@ -357,72 +350,10 @@ class CreateApiKeyRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Auth: users, sessions, invites, audit. Passwords are bcrypt hashes;
-# session tokens and invite tokens are stored hashed (sha256), never raw.
-# ---------------------------------------------------------------------------
-
-UserRole = Literal["owner", "admin", "member", "viewer"]
 
 #: Scope strings for API keys. "*" grants everything (owner-level).
-ALL_SCOPES = [
-    "agents:read",
-    "agents:write",
-    "calls:read",
-    "calls:write",
-    "batches:read",
-    "batches:write",
-    "platform:read",
-    "platform:write",
-    "users:read",
-    "users:write",
-    "keys:read",
-    "keys:write",
-    "admin",
-]
 
 #: What each session role is allowed to do (API keys use explicit scopes).
-ROLE_SCOPES: Dict[str, List[str]] = {
-    "viewer": ["agents:read", "calls:read", "batches:read", "platform:read"],
-    "member": [
-        "agents:read",
-        "agents:write",
-        "calls:read",
-        "calls:write",
-        "batches:read",
-        "batches:write",
-        "platform:read",
-        "platform:write",
-    ],
-    "admin": [
-        "agents:read",
-        "agents:write",
-        "calls:read",
-        "calls:write",
-        "batches:read",
-        "batches:write",
-        "platform:read",
-        "platform:write",
-        "users:read",
-        "keys:read",
-        "keys:write",
-        "admin",
-    ],
-    "owner": ["*"],
-}
-
-ROLE_RANK: Dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
-
-
-class User(BaseModel):
-    user_id: str
-    email: str = Field(..., pattern=EMAIL_PATTERN)
-    name: Optional[str] = None
-    password_hash: str
-    role: UserRole = "member"
-    org_id: str = "default"
-    disabled: bool = False
-    created_at: datetime = Field(default_factory=utcnow)
-    last_login_at: Optional[datetime] = None
 
 
 class UserResponse(BaseModel):
@@ -458,18 +389,6 @@ class InviteRequest(BaseModel):
     role: UserRole = "member"
 
 
-class Invite(BaseModel):
-    invite_id: str
-    email: str
-    name: Optional[str] = None
-    role: UserRole = "member"
-    token_hash: str
-    expires_at: datetime
-    accepted: bool = False
-    created_by: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
-
-
 class InviteListResponse(BaseModel):
     invites: List[Invite]
 
@@ -497,15 +416,6 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-class SessionRecord(BaseModel):
-    token_hash: str
-    user_id: str
-    org_id: str = "default"
-    kind: Literal["session", "ws-ticket"] = "session"
-    created_at: datetime = Field(default_factory=utcnow)
-    expires_at: datetime
-
-
 class AuthMeResponse(BaseModel):
     user: UserResponse
     scopes: List[str] = Field(default_factory=list)
@@ -514,15 +424,6 @@ class AuthMeResponse(BaseModel):
 class WsTicketResponse(BaseModel):
     ticket: str = Field(..., description="Single-use websocket ticket, valid 60s.")
     expires_in: int = 60
-
-
-class AuthEvent(BaseModel):
-    event_id: str
-    type: str
-    user_id: Optional[str] = None
-    email: Optional[str] = None
-    detail: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
 
 
 class AuthEventListResponse(BaseModel):
@@ -540,9 +441,6 @@ class CreateApiKeyResponse(BaseModel):
 class ResetResponse(BaseModel):
     state: str = "reset"
     cleared: Dict[str, int] = Field(default_factory=dict)
-
-
-EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 class Member(BaseModel):

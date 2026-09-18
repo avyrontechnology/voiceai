@@ -66,31 +66,10 @@ from voiceai.modules.auth.static_methods import verify_password as verify_passwo
 
 
 # -- principal ---------------------------------------------------------------------
-
-@dataclass
-class Principal:
-    user_id: Optional[str]
-    email: Optional[str]
-    org_id: str = "default"
-    role: str = "viewer"
-    auth_type: str = "session"  # "session" | "key"
-    scopes: List[str] = field(default_factory=list)
-    key_id: Optional[str] = None
-    key_name: Optional[str] = None
-
-    def effective_scopes(self) -> List[str]:
-        if self.auth_type == "key":
-            return self.scopes
-        return ROLE_SCOPES.get(self.role, [])
-
-    def has_scope(self, scope: str) -> bool:
-        scopes = self.effective_scopes()
-        return "*" in scopes or scope in scopes
-
-    def has_role(self, minimum: str) -> bool:
-        if self.auth_type == "key":
-            return "*" in self.scopes
-        return ROLE_RANK.get(self.role, -1) >= ROLE_RANK.get(minimum, 99)
+# spec-0005 C2: Principal lives VERBATIM in voiceai.modules.auth.models.principal.
+# Same-named binding keeps THIS module the lookup/patch site; the `as` spelling makes
+# it an EXPLICIT re-export.
+from voiceai.modules.auth.models.principal import Principal as Principal
 
 
 def _unauthorized(detail: str = "Authentication required") -> HTTPException:
