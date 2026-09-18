@@ -184,13 +184,16 @@ class Container:
     async def aclose(self) -> None:
         """Release the clients this container built. Idempotent.
 
-        Only an already-built redis singleton is closed — closing must never *create* a
-        connection. Called from the app's lifespan shutdown.
+        Only already-built singletons are closed — closing must never *create* a
+        connection. Called from the app's lifespan shutdown. Each client closes
+        independently: redis being unconfigured must not skip the database close.
         """
-        client = self._instances.pop(CONTAINER_KEY_REDIS, None)
-        if client is None:
-            return
-        await _close_client(client)
+        redis_client = self._instances.pop(CONTAINER_KEY_REDIS, None)
+        if redis_client is not None:
+            await _close_client(redis_client)
+        database_client = self._instances.pop(CONTAINER_KEY_DB, None)
+        if database_client is not None:
+            await _close_client(database_client)
 
 
 def resolve_modules(modules: Sequence[ModuleDef] | None) -> Sequence[ModuleDef]:

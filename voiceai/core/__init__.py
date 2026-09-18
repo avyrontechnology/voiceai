@@ -2,7 +2,7 @@
 
 from voiceai.core.app_factory import RequestIdMiddleware, create_app
 from voiceai.core.container import Container, build_container, get_container
-from voiceai.core.db import DatabaseClient, InMemoryDatabase, create_db
+from voiceai.core.db import DatabaseClient, InMemoryDatabase, MotorDatabase, create_db
 from voiceai.core.environment import (
     Environment,
     get_environment,
@@ -16,6 +16,7 @@ __all__ = [
     "DatabaseClient",
     "Environment",
     "InMemoryDatabase",
+    "MotorDatabase",
     "RequestIdMiddleware",
     "build_container",
     "create_app",

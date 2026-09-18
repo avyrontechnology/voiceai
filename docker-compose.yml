@@ -76,6 +76,22 @@ services:
     networks:
       - voiceai
 
+  # Local MongoDB for spec-0003 development (DB_BACKEND=mongo + DB_URL below).
+  # Off by default: nothing depends on it, so plain `docker compose up` skips it;
+  # start explicitly with `docker compose --profile mongo up`.
+  mongo:
+    container_name: voiceai-mongo
+    image: mongo:latest
+    restart: on-failure
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    networks:
+      - voiceai
+    profiles:
+      - mongo
+
   ngrok:
     container_name: voiceai-ngrok
     image: ngrok/ngrok:latest
@@ -94,6 +110,7 @@ services:
 
 volumes:
   redisdata:
+  mongodata:
 
 networks:
   voiceai:

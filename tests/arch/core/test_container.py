@@ -246,3 +246,50 @@ def test_container_override_fixture_swaps_a_built_dependency(
     assert container.resolve("redis") is None
     container_override(container, "redis", fake_redis)
     assert container.resolve("redis") is fake_redis
+
+
+class _FakeMotorDatabase:
+    """MotorDatabase double recording close calls (no driver, no connection)."""
+
+    name = "mongo"
+
+    def __init__(self) -> None:
+        """Start unclosed."""
+        self.closed = False
+
+    def close(self) -> None:
+        """Record the close."""
+        self.closed = True
+
+
+class TestAcloseDatabase:
+    """Shutdown releases a built database client without building one to do it."""
+
+    async def test_closes_a_resolved_database_client(self) -> None:
+        from voiceai.common.constants import CONTAINER_KEY_DB
+
+        database = _FakeMotorDatabase()
+        container = Container()
+        container.register(CONTAINER_KEY_DB, database)
+        container.resolve(CONTAINER_KEY_DB)
+        await container.aclose()
+        assert database.closed is True
+
+    async def test_closes_database_without_redis(self) -> None:
+        from voiceai.common.constants import CONTAINER_KEY_DB
+
+        database = _FakeMotorDatabase()
+        container = Container()
+        container.register(CONTAINER_KEY_DB, database)
+        container.resolve(CONTAINER_KEY_DB)
+        await container.aclose()
+        assert database.closed is True
+
+    async def test_never_builds_a_database_just_to_close_it(self) -> None:
+        from voiceai.common.constants import CONTAINER_KEY_DB
+
+        calls: list[int] = []
+        container = Container()
+        container.register(CONTAINER_KEY_DB, lambda _current: calls.append(1))
+        await container.aclose()
+        assert calls == []

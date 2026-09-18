@@ -1,4 +1,4 @@
-"""The repository contract plus the in-memory implementation used until a driver lands."""
+"""The repository contract plus the in-memory and motor implementations."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
+from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import NotFoundError
 from voiceai.common.pagination import Page, PaginationParams, paginate
 from voiceai.database.base import BaseFields
@@ -191,3 +192,145 @@ class InMemoryRepository(Generic[TModel]):
         """
         models = (self._model_type.model_validate(document) for document in self._documents().values())
         return [model for model in models if model.is_active]
+
+
+class MotorRepository(Generic[TModel]):
+    """:class:`BaseRepository` over a motor database handle (spec 0003).
+
+    The model's ``id`` is stored as Mongo's ``_id`` **as a string** (never ``ObjectId``):
+    the stored document is ``model_dump(exclude={"id"}) + {"_id": id}`` and reads map
+    ``_id`` back to ``id`` before validation. Single-op writes keep the observable
+    contract atomic where the in-memory shape reads-then-writes (insert-upsert,
+    guarded replace, guarded `$set`); the one deliberate, documented divergence is
+    listing order — uuid-hex ids carry no time order, so listing sorts by
+    ``created_at`` ascending with ``_id`` tiebreak instead of insertion order.
+
+    Args:
+        db: The motor database handle (``client[db_name]``); ``db[collection.value]``
+            selects the collection, so one handle serves every repository.
+        collection: Which collection this instance owns, from the single name registry.
+        model_type: The model documents are validated back into, so callers never see
+            a raw driver document.
+    """
+
+    def __init__(  # why: the driver type must not leak into the signature
+        self, db: Any, collection: Collections, model_type: type[TModel]
+    ) -> None:
+        self._collection = db[collection.value]
+        self._collection_name = collection
+        self._model_type = model_type
+
+    def _to_document(self, model: TModel, item_id: str) -> dict[str, Any]:
+        """Render a model as a driver document keyed by string ``_id``."""
+        # why: stored docs are driver-shaped; only this class reads and writes them.
+        document = model.model_dump(exclude={"id"})
+        document["_id"] = item_id
+        return document
+
+    def _to_model(self, document: dict[str, Any]) -> TModel:
+        """Validate a driver document back into the module model."""
+        # why: stored docs are driver-shaped; only this class reads them.
+        payload = dict(document)
+        payload["id"] = payload.pop("_id")
+        return self._model_type.model_validate(payload)
+
+    def _not_found(self, item_id: str | None) -> NotFoundError:
+        """Build the envelope-safe missing-document error."""
+        return NotFoundError(
+            DOCUMENT_NOT_FOUND_MESSAGE,
+            details={DETAIL_COLLECTION: self._collection_name.value, DETAIL_ITEM_ID: item_id},
+        )
+
+    async def insert(self, model: TModel) -> TModel:
+        """Store a document and return the stored copy.
+
+        The caller's instance is never mutated: the returned copy carries the assigned
+        id. A model that already carries an id replaces the document at that id — even
+        a soft-deleted one — which makes repeated writes of a known key idempotent and
+        makes this the only resurrection path (upsert in a single op).
+
+        Args:
+            model: The document to persist.
+
+        Returns:
+            The persisted copy, with ``id`` guaranteed to be set.
+        """
+        stored = model.model_copy(deep=True)
+        if not stored.id:
+            stored.id = uuid4().hex
+        item_id = stored.id
+        await self._collection.replace_one({"_id": item_id}, self._to_document(stored, item_id), upsert=True)
+        return stored
+
+    async def get(self, item_id: str) -> TModel | None:
+        """Read one document by id.
+
+        Args:
+            item_id: Identifier assigned at insert time.
+
+        Returns:
+            The document, or ``None`` when it is unknown or soft-deleted.
+        """
+        document = await self._collection.find_one({"_id": item_id})
+        if document is None:
+            return None
+        model = self._to_model(document)
+        return model if model.is_active else None
+
+    async def list(self, params: PaginationParams) -> Page[TModel]:
+        """Read one page of active documents, oldest first.
+
+        Args:
+            params: Page number and bounded page size (see ``common.pagination``).
+
+        Returns:
+            The requested window plus the total number of active documents.
+        """
+        selector = {"is_active": True}
+        total = await self._collection.count_documents(selector)
+        cursor = self._collection.find(selector).sort([("created_at", 1), ("_id", 1)])
+        window = await cursor.skip(params.skip).limit(params.limit).to_list(length=params.limit)
+        return paginate([self._to_model(document) for document in window], total, params)
+
+    async def update(self, model: TModel) -> TModel:
+        """Replace a stored active document with the given state and stamp it as modified.
+
+        Args:
+            model: The document to write back; its ``id`` selects the target.
+
+        Returns:
+            The stored copy, with ``updated_at`` bumped.
+
+        Raises:
+            NotFoundError: When no document exists for ``model.id``, or the stored one is
+                soft-deleted — a stale write-back can never resurrect it (``insert`` with
+                the same id is the one deliberate resurrection path).
+        """
+        item_id = model.id
+        if not item_id:
+            raise self._not_found(item_id)
+        stored = model.model_copy(deep=True)
+        stored.touch()
+        outcome = await self._collection.replace_one(
+            {"_id": item_id, "is_active": True}, self._to_document(stored, item_id)
+        )
+        if outcome.matched_count == 0:
+            raise self._not_found(item_id)
+        return stored
+
+    async def soft_delete(self, item_id: str, *, user_id: str | None = None) -> bool:
+        """Deactivate a document instead of destroying it (AGENTS.md rule 5).
+
+        Args:
+            item_id: Identifier of the document to deactivate.
+            user_id: Actor performing the delete, recorded in ``updated_by``.
+
+        Returns:
+            ``True`` when this call deactivated the document; ``False`` when it was unknown or
+            already inactive, so callers can stay idempotent without a second read.
+        """
+        mutation: dict[str, Any] = {"is_active": False, "updated_at": utc_now()}  # why: driver-shaped $set payload
+        if user_id is not None:
+            mutation["updated_by"] = user_id
+        outcome = await self._collection.update_one({"_id": item_id, "is_active": True}, {"$set": mutation})
+        return outcome.matched_count == 1

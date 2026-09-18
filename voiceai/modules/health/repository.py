@@ -6,10 +6,10 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 from voiceai.common.logger import get_logger
-from voiceai.core.db import InMemoryDatabase
+from voiceai.core.db import InMemoryDatabase, MotorDatabase
 from voiceai.core.redis import ping_redis
 from voiceai.database.constants import Collections
-from voiceai.database.repository import InMemoryRepository
+from voiceai.database.repository import InMemoryRepository, MotorRepository
 from voiceai.modules.health.constants import (
     BACKEND_DETAIL_TEMPLATE,
     COMPONENT_DATABASE,
@@ -88,15 +88,20 @@ class HealthRepository:
             round trip fails, or ``SKIPPED`` naming the backend that has no probe yet.
         """
         started = perf_counter()
-        if not isinstance(self._db, InMemoryDatabase):
-            # TODO(spec-0003): probe the real driver once a database backend is wired.
+        if isinstance(self._db, MotorDatabase):
+            repository: InMemoryRepository[HealthCheckRecord] | MotorRepository[HealthCheckRecord] = MotorRepository(
+                self._db, Collections.HEALTH_CHECKS, HealthCheckRecord
+            )
+        elif isinstance(self._db, InMemoryDatabase):
+            repository = InMemoryRepository(self._db, Collections.HEALTH_CHECKS, HealthCheckRecord)
+        else:
             return ComponentHealth(
                 name=COMPONENT_DATABASE,
                 state=HealthState.SKIPPED,
                 detail=BACKEND_DETAIL_TEMPLATE.format(name=self._db.name),
             )
         try:
-            stored = await self._round_trip(self._db)
+            stored = await self._round_trip(repository)
         except Exception:  # a broken store is data for the report; CancelledError still propagates
             _LOGGER.warning(DATABASE_PROBE_FAILED_LOG, exc_info=True)
             return ComponentHealth(
@@ -115,10 +120,9 @@ class HealthRepository:
         return ComponentHealth(name=COMPONENT_DATABASE, state=HealthState.UP, latency_ms=elapsed_ms(started))
 
     @staticmethod
-    async def _round_trip(db: InMemoryDatabase) -> HealthCheckRecord | None:
+    async def _round_trip(
+        repository: InMemoryRepository[HealthCheckRecord] | MotorRepository[HealthCheckRecord],
+    ) -> HealthCheckRecord | None:
         """Write the heartbeat record and read it back through the module repository."""
-        repository: InMemoryRepository[HealthCheckRecord] = InMemoryRepository(
-            db, Collections.HEALTH_CHECKS, HealthCheckRecord
-        )
         record = await repository.insert(HealthCheckRecord(id=HEALTH_PROBE_RECORD_ID))
         return await repository.get(record.id or HEALTH_PROBE_RECORD_ID)

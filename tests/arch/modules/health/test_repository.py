@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
-from voiceai.core.db import InMemoryDatabase
+from voiceai.core.db import InMemoryDatabase, MotorDatabase
 from voiceai.database.constants import Collections
 from voiceai.modules.health import repository as health_repository
 from voiceai.modules.health.constants import (
@@ -160,3 +161,55 @@ async def test_database_probe_degrades_when_the_write_cannot_be_read_back(
 
     assert component.state is HealthState.DOWN
     assert component.detail == DATABASE_MISSING_RECORD_DETAIL
+
+
+def _mongo_database() -> MotorDatabase:
+    """Build a real MotorDatabase over a fake client (no driver, no connection)."""
+    client = MagicMock()
+    client.__getitem__.return_value = MagicMock()
+    return MotorDatabase("mongodb://db:27017", "otoba_test", client_factory=lambda *a, **k: client)
+
+
+async def test_database_probe_round_trips_a_heartbeat_on_mongo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mongo backend gets the same write-proof probe through MotorRepository."""
+    writes: list[str] = []
+
+    class RecordingRepository:
+        """MotorRepository double recording the heartbeat id."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """Accept the real constructor's arguments and ignore them."""
+
+        async def insert(self, model: Any) -> Any:
+            """Record the write and echo the model back with its id."""
+            writes.append(model.id)
+            return model
+
+        async def get(self, item_id: str) -> Any:
+            """Read the heartbeat back when the id matches a recorded write."""
+            if item_id in writes:
+                record = HealthCheckRecord(id=item_id)
+                return record
+            return None
+
+    monkeypatch.setattr(health_repository, "MotorRepository", RecordingRepository)
+    component = await HealthRepository(None, _mongo_database()).probe_database()
+
+    assert component.name == COMPONENT_DATABASE
+    assert component.state is HealthState.UP
+    assert component.latency_ms is not None
+    assert writes == [HEALTH_PROBE_RECORD_ID]
+
+
+async def test_database_probe_degrades_when_the_mongo_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mongo driver failure degrades without leaking driver text (AGENTS.md §4)."""
+    monkeypatch.setattr(health_repository, "MotorRepository", ExplodingRepository)
+    component = await HealthRepository(None, _mongo_database()).probe_database()
+
+    assert component.state is HealthState.DOWN
+    assert component.detail == DATABASE_PROBE_FAILED_DETAIL
+    assert DRIVER_SECRET not in str(component.detail)

@@ -24,3 +24,11 @@ class Collections(str, Enum):
 DOCUMENT_NOT_FOUND_MESSAGE: Final[str] = "Document not found"
 DETAIL_COLLECTION: Final[str] = "collection"
 DETAIL_ITEM_ID: Final[str] = "item_id"
+
+# Mongo driver timeouts (spec 0003): every operation is bounded (AGENTS.md §4 — a hung
+# database must degrade, never wedge a loop). Wired at client construction so they cover
+# all operations without per-call kwargs the driver may not accept.
+MONGO_TIMEOUT_MS: Final[int] = 5000
+MONGO_SERVER_SELECTION_TIMEOUT_MS: Final[int] = 5000
+MONGO_CONNECT_TIMEOUT_MS: Final[int] = 5000
+MONGO_SOCKET_TIMEOUT_MS: Final[int] = 20000
