@@ -55,31 +55,14 @@ def get_store(request: Request) -> MemoryStore:
 
 # -- password + token hashing ----------------------------------------------------
 
-def hash_password(password: str) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERATIONS)
-    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
-
-
-def verify_password(password: str, reference: str) -> bool:
-    try:
-        algo, iterations, salt_hex, digest_hex = reference.split("$")
-        if algo != "pbkdf2_sha256":
-            return False
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), bytes.fromhex(salt_hex), int(iterations)
-        )
-        return hmac.compare_digest(digest.hex(), digest_hex)
-    except Exception:
-        return False
-
-
-def new_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+# spec-0005 C1: the pure credential primitives live VERBATIM in
+# voiceai.modules.auth.static_methods. These same-named bindings keep THIS module the
+# lookup/patch site (`voiceai.platform.auth.<name>` keeps resolving for imports AND for
+# monkeypatch string paths). The `as` spelling makes each binding an EXPLICIT re-export.
+from voiceai.modules.auth.static_methods import hash_password as hash_password
+from voiceai.modules.auth.static_methods import new_token as new_token
+from voiceai.modules.auth.static_methods import token_hash as token_hash
+from voiceai.modules.auth.static_methods import verify_password as verify_password
 
 
 # -- principal ---------------------------------------------------------------------
