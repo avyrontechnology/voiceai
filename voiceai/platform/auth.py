@@ -1,48 +1,34 @@
 """Authentication + authorization core for the platform layer.
 
-Self-hosted email/password with bcrypt-grade hashing (PBKDF2-SHA256 from the
-standard library — no new dependencies), opaque server-side sessions in Redis
-(with TTL), and scoped Bearer API keys. Roles reuse the existing
-owner/admin/member/viewer ladder.
+Principal resolution from server-side sessions in Redis (with TTL) and scoped
+Bearer API keys. Roles reuse the existing owner/admin/member/viewer ladder.
+
+Spec 0006 E4: session-minting and login-throttle delegators retired to
+``voiceai.modules.auth`` (service, utils, helpers, constants). What remains is
+the principal-resolution chain the frozen platform routers (``platform/router.py``)
+still depend on — ``get_store`` / ``get_principal`` / ``require_*`` / ``audit`` —
+plus the credential-primitive re-exports other importers patch against.
 
 Notes for operators:
 - Passwords, session tokens, invite tokens and API secrets are stored only
   as hashes (PBKDF2 / SHA-256). Nothing credential-equivalent hits disk.
-- Login attempts are throttled per IP in-process (5/min). Behind multiple
-  workers use a shared limiter — this local one is per-process.
 - Sessions live server-side, so logout and role/disable changes take effect
   immediately; there is nothing client-side to revoke.
 """
 
-import hashlib
 import hmac
-import os
-import secrets
-import time
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, List, Optional
+from datetime import timezone
+from typing import Optional
 
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request
 
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.platform.models import ROLE_RANK, ROLE_SCOPES, SessionRecord, User, new_id, utcnow
+from voiceai.platform.models import new_id, utcnow
 from voiceai.platform.store import MemoryStore
 
 logger = configure_logger(__name__)
 
 SESSION_COOKIE = "otoba_session"
-SESSION_TTL_S = 7 * 24 * 3600
-REMEMBER_TTL_S = 30 * 24 * 3600
-WS_TICKET_TTL_S = 60
-INVITE_TTL_S = 7 * 24 * 3600
-LOGIN_WINDOW_S = 60
-LOGIN_MAX_ATTEMPTS = 5
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
-COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax")
-
-_PBKDF2_ITERATIONS = 600_000
 
 
 def get_store(request: Request) -> MemoryStore:
@@ -80,9 +66,7 @@ def _forbidden(detail: str = "Insufficient permissions") -> HTTPException:
     return HTTPException(status_code=403, detail=detail)
 
 
-async def _principal_from_session(
-    store: MemoryStore, token: str
-) -> Optional[Principal]:
+async def _principal_from_session(store: MemoryStore, token: str) -> Optional[Principal]:
     session = await store.get_session(token_hash(token))
     if not session or session.kind != "session":
         return None
@@ -163,97 +147,8 @@ def require_scope(scope: str):
     return dep
 
 
-# -- sessions / cookies --------------------------------------------------------------
-
-async def mint_session(
-    store: MemoryStore, user: User, response: Response, ttl_s: int = SESSION_TTL_S
-) -> str:
-    token = new_token()
-    await store.save_session(
-        SessionRecord(
-            token_hash=token_hash(token),
-            user_id=user.user_id,
-            org_id=user.org_id,
-            kind="session",
-            expires_at=utcnow() + timedelta(seconds=ttl_s),
-        )
-    )
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=ttl_s,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite=COOKIE_SAMESITE,  # type: ignore[arg-type]
-        path="/",
-    )
-    return token
-
-
-async def revoke_session(store: MemoryStore, request: Request, response: Response) -> None:
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        await store.delete_session(token_hash(token))
-    response.delete_cookie(SESSION_COOKIE, path="/")
-
-
-async def mint_ws_ticket(store: MemoryStore, principal: Principal) -> str:
-    """Single-use 60s ticket for the voice websocket (browsers can't set WS headers)."""
-    ticket = new_token()
-    await store.save_session(
-        SessionRecord(
-            token_hash=token_hash(ticket),
-            user_id=principal.user_id or "",
-            org_id=principal.org_id,
-            kind="ws-ticket",
-            expires_at=utcnow() + timedelta(seconds=WS_TICKET_TTL_S),
-        )
-    )
-    return ticket
-
-
-async def redeem_ws_ticket(store: MemoryStore, ticket: str) -> Optional[Principal]:
-    session = await store.get_session(token_hash(ticket))
-    if not session or session.kind != "ws-ticket":
-        return None
-    await store.delete_session(session.token_hash)
-    if not session.user_id:
-        return None
-    user = await store.get_user(session.user_id)
-    if not user or user.disabled:
-        return None
-    return Principal(
-        user_id=user.user_id,
-        email=user.email,
-        org_id=user.org_id,
-        role=user.role,
-        auth_type="session",
-    )
-
-
-# -- login throttling ------------------------------------------------------------------
-
-_attempts: Dict[str, Deque[float]] = defaultdict(deque)
-
-
-def check_login_allowed(ip: str) -> None:
-    now = time.time()
-    window = _attempts[ip]
-    while window and now - window[0] > LOGIN_WINDOW_S:
-        window.popleft()
-    if len(window) >= LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many login attempts, try again shortly")
-    window.append(now)
-
-
-def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 # -- audit -------------------------------------------------------------------------------
+
 
 async def audit(
     store: MemoryStore,
@@ -270,16 +165,3 @@ async def audit(
         )
     except Exception:
         logger.warning(f"Auth audit write failed for {event_type}")
-
-
-def public_user(user: User) -> dict:
-    return {
-        "user_id": user.user_id,
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "org_id": user.org_id,
-        "disabled": user.disabled,
-        "created_at": user.created_at,
-        "last_login_at": user.last_login_at,
-    }

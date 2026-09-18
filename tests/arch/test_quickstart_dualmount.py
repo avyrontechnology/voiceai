@@ -1,11 +1,11 @@
-"""Spec 0006 E2: quickstart dual-mount — bare `/auth` beside enveloped `/api/v1/auth`.
+"""Spec 0006 E4: quickstart cut over — legacy `/auth` dark, `/api/v1/auth` serving.
 
-The module-level quickstart app is rewired per test to a fresh `MemoryStore` shared by
-both mounts (container binding plus the legacy `platform_store` seam), so one signup
-cookie serves both shapes. The quickstart module is imported inside the helpers — never
-at collection time — because it builds the engine container and redis pools at import
-(conftest collection rule). The agent service is stubbed where the CRUD payload is not
-under test: the scope gate is the subject, not the CRUD.
+The module-level quickstart app is rewired per test to a fresh `MemoryStore`
+(container binding plus the legacy `platform_store` seam). The quickstart module
+is imported inside the helpers — never at collection time — because it builds the
+engine container and redis pools at import (conftest collection rule). The agent
+service is stubbed where the CRUD payload is not under test: the scope gate is
+the subject, not the CRUD.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from voiceai.core.environment import Environment
 
 LEGACY_SIGNUP_PATH = "/auth/signup"
 LEGACY_ME_PATH = "/auth/me"
+NEW_SIGNUP_PATH = "/api/v1/auth/signup"
 NEW_ME_PATH = "/api/v1/auth/me"
 AGENT_LIST_PATH = "/all"
 OWNER_EMAIL = "owner@x.test"
@@ -49,7 +50,7 @@ def _container_for(env: Environment, store: Any) -> Container:
 
     Args:
         env: The offline test environment (no redis, in-memory db).
-        store: The `MemoryStore` the dual-mounted controller resolves.
+        store: The `MemoryStore` the cut-over controller resolves.
 
     Returns:
         A container whose auth store binding serves `store`.
@@ -65,9 +66,8 @@ def _container_for(env: Environment, store: Any) -> Container:
 def wired_quickstart(arch_environment: Environment) -> Iterator[tuple[ModuleType, FastAPI]]:
     """Wire the shared quickstart app to a fresh store; restore state afterwards.
 
-    Both mounts serve the same `MemoryStore` (container binding plus the legacy seam),
-    so one cookie authenticates on both. State is restored on teardown so the legacy
-    suites sharing this module object observe the import-time wiring.
+    State is restored on teardown so the legacy suites sharing this module object
+    observe the import-time wiring.
 
     Args:
         arch_environment: The offline test environment.
@@ -105,77 +105,55 @@ class _StubAgentService:
 
 
 async def _signup_owner(client: AsyncClient) -> dict[str, Any]:
-    """Create the first user through legacy bare-shape signup (201 plus cookie).
+    """Create the first user through the cut-over signup (201 envelope + cookie).
 
     Args:
         client: The ASGI client bound to the rewired quickstart app.
 
     Returns:
-        The bare legacy user payload.
+        The enveloped user payload (`data`).
     """
     response = await client.post(
-        LEGACY_SIGNUP_PATH, json={"email": OWNER_EMAIL, "name": "Owner", "password": "owner-pass-1"}
+        NEW_SIGNUP_PATH, json={"email": OWNER_EMAIL, "name": "Owner", "password": "owner-pass-1"}
     )
     assert response.status_code == 201, response.text
     assert response.cookies
-    body: dict[str, Any] = response.json()
-    return body
+    data: dict[str, Any] = response.json()["data"]
+    return data
 
 
-async def test_legacy_signup_keeps_bare_shape(
+async def test_legacy_auth_is_dark(
     wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
 ) -> None:
-    """Legacy `POST /auth/signup` still answers the bare user shape (no envelope)."""
+    """Retired `/auth/*` 404s (quickstart never had envelope 404s — re-mount is E4's revert)."""
     _, app = wired_quickstart
     async with client_factory(app) as client:
-        body = await _signup_owner(client)
+        signup = await client.post(
+            LEGACY_SIGNUP_PATH,
+            json={"email": OWNER_EMAIL, "name": "Owner", "password": "owner-pass-1"},
+        )
+        me = await client.get(LEGACY_ME_PATH)
 
-    assert set(body) == {
-        "user_id",
-        "email",
-        "name",
-        "role",
-        "org_id",
-        "disabled",
-        "created_at",
-        "last_login_at",
-    }
-    assert "ok" not in body
-    assert body["email"] == OWNER_EMAIL
-    assert body["role"] == "owner"
+    assert signup.status_code == 404
+    assert me.status_code == 404
 
 
 async def test_new_me_envelope_serves_same_user_with_same_cookie(
     wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
 ) -> None:
-    """`GET /api/v1/auth/me` envelopes the same user the legacy cookie names."""
+    """`GET /api/v1/auth/me` envelopes the user the signup cookie names."""
     _, app = wired_quickstart
     async with client_factory(app) as client:
-        legacy = await _signup_owner(client)
+        created = await _signup_owner(client)
         response = await client.get(NEW_ME_PATH)
 
     assert response.status_code == 200, response.text
     envelope: dict[str, Any] = response.json()
     assert envelope["ok"] is True
-    assert envelope["data"]["user"]["user_id"] == legacy["user_id"]
+    assert envelope["data"]["user"]["user_id"] == created["user_id"]
     assert envelope["data"]["user"]["email"] == OWNER_EMAIL
-
-
-async def test_legacy_me_carries_sunset_headers(
-    wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
-) -> None:
-    """Legacy `/auth/me` is sunset-stamped; the enveloped mount is not."""
-    qs, app = wired_quickstart
-    async with client_factory(app) as client:
-        await _signup_owner(client)
-        legacy = await client.get(LEGACY_ME_PATH)
-        new = await client.get(NEW_ME_PATH)
-
-    assert legacy.status_code == 200, legacy.text
-    assert legacy.headers["deprecation"] == "true"
-    assert legacy.headers["sunset"] == qs.LEGACY_AUTH_SUNSET
-    assert "deprecation" not in new.headers
-    assert "sunset" not in new.headers
+    assert "deprecation" not in response.headers
+    assert "sunset" not in response.headers
 
 
 async def test_agent_crud_scope_gate(
@@ -190,7 +168,6 @@ async def test_agent_crud_scope_gate(
         anonymous = await client.get(AGENT_LIST_PATH)
         assert anonymous.status_code == 401
         assert anonymous.json() == {"detail": "Authentication required"}
-        assert "sunset" not in anonymous.headers
         await _signup_owner(client)
         authed = await client.get(AGENT_LIST_PATH)
 

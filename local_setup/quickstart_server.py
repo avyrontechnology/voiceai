@@ -1,10 +1,8 @@
 """Local quickstart entry: legacy agent CRUD plus the platform routers.
 
-Spec 0006 (E2) dual-mount: the module auth controller rides alongside the legacy
-``/auth`` router — bare shapes stay at ``/auth``, envelopes serve at
-``/api/v1/auth`` — until E4 unmounts the legacy surface. The agent-CRUD gates below
-resolve through the container ``AuthService``, and legacy ``/auth`` responses carry
-sunset headers so external clients can migrate in time.
+Spec 0006 (E4) cutover: the legacy bare-shape ``/auth`` router is unmounted —
+authentication serves only the enveloped module controller at ``/api/v1/auth``.
+The agent-CRUD gates below resolve through the container ``AuthService``.
 """
 
 import copy
@@ -15,7 +13,7 @@ from typing import Final
 
 import redis.asyncio as redis
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -37,15 +35,10 @@ redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_respon
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
 
-#: Sunset of the legacy bare-shape `/auth` surface (spec 0006, E2): 30 days after the
-#: dual-mount lands, RFC 1123. Served on every legacy `/auth*` response next to
-#: `Deprecation: true` so external clients migrate to `/api/v1/auth` in time.
-LEGACY_AUTH_SUNSET: Final[str] = "Sun, 18 Oct 2026 00:00:00 GMT"
-
-_LEGACY_AUTH_PATH: Final[str] = "/auth"
-_DEPRECATION_HEADER: Final[str] = "Deprecation"
-_SUNSET_HEADER: Final[str] = "Sunset"
-_DEPRECATION_VALUE: Final[str] = "true"
+#: Prefix of the retired legacy bare-shape auth surface (spec 0006, E4): the router
+#: object stays in frozen `platform.router.build_routers()` but is filtered out of
+#: the mount loop below. Re-mount by dropping the filter (one commit).
+_RETIRED_AUTH_PREFIX: Final[str] = "/auth"
 # Mirrors the frozen `platform.auth.SESSION_COOKIE` value without importing it: the E2
 # contract allows no new `platform.*` imports, and the cookie name is wire-stable.
 _SESSION_COOKIE: Final[str] = "otoba_session"
@@ -196,28 +189,6 @@ async def _auth_gate_denial(request: Request, exc: AppError) -> JSONResponse:
         The legacy-shaped denial response.
     """
     return JSONResponse(status_code=exc.http_status, content={"detail": exc.public_message})
-
-
-@app.middleware("http")
-async def _legacy_auth_sunset(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Stamp sunset headers on legacy `/auth*` responses only (spec 0006, E2).
-
-    The enveloped `/api/v1/auth*` mount and every other route pass through untouched;
-    the legacy router file itself stays frozen — the wrap lives at this mount site.
-
-    Args:
-        request: The incoming request.
-        call_next: The rest of the application stack.
-
-    Returns:
-        The downstream response, sunset-stamped on the legacy auth paths.
-    """
-    response = await call_next(request)
-    path = request.url.path
-    if path == _LEGACY_AUTH_PATH or path.startswith(_LEGACY_AUTH_PATH + "/"):
-        response.headers[_DEPRECATION_HEADER] = _DEPRECATION_VALUE
-        response.headers[_SUNSET_HEADER] = LEGACY_AUTH_SUNSET
-    return response
 
 
 class CreateAgentPayload(BaseModel):
@@ -412,15 +383,19 @@ try:
     from voiceai.platform.store import RedisStore
 
     for _router in build_routers():
+        # Spec 0006 (E4): the legacy bare-shape `/auth` router is filtered out of the
+        # served set (revert is re-mount: drop this filter). Everything else mounts.
+        if _router.prefix == _RETIRED_AUTH_PREFIX:
+            continue
         app.include_router(_router)
     app.state.platform_store = RedisStore(redis_client)
     logger.info("Platform routers mounted")
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
     logger.warning(f"Platform routers not mounted: {exc}")
 
-# Spec 0006 (E2): dual-mount — the module controller serves envelopes at `/api/v1/auth`
-# next to the legacy bare shapes at `/auth` (prefixes already differ, so nothing
-# collides). The legacy router unmounts in E4 after external clients migrate.
+# Spec 0006 (E4): cutover — the module controller serves envelopes at `/api/v1/auth`;
+# the legacy bare shapes at `/auth` are filtered out of the mount loop above now
+# that external clients have migrated.
 app.include_router(auth_module.MODULE.router, prefix=API_PREFIX)
 
 

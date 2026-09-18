@@ -2,7 +2,7 @@
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from tests.auth_helpers import signup_owner
+from tests.auth_helpers import mount_new_auth, signup_owner
 
 from voiceai.platform import create_platform_app
 from voiceai.platform.store import MemoryStore
@@ -10,7 +10,7 @@ from voiceai.platform.store import MemoryStore
 
 @pytest_asyncio.fixture
 async def client():
-    app = create_platform_app(MemoryStore())
+    app = mount_new_auth(create_platform_app(MemoryStore()))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         await signup_owner(ac)
