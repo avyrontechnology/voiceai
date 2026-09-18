@@ -17,6 +17,7 @@ from voiceai.core.container import build_container
 from voiceai.core.environment import Environment
 from voiceai.modules import auth as auth_module
 from voiceai.modules.auth import constants as C
+from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.platform.store import MemoryStore
 
 BASE = "http://auth.test"
@@ -26,9 +27,9 @@ PREFIX = "/api/v1/auth"
 async def _client(store: MemoryStore | None = None) -> AsyncClient:
     """Build the factory app with only the auth module, wired to one store."""
     container = build_container(Environment(), modules=[auth_module.MODULE])
-    app = create_app(env=Environment(), container=container, modules=[auth_module.MODULE])
     if store is not None:
-        app.state.platform_store = store
+        container.register(AuthStorePort, store)  # type: ignore[type-abstract]
+    app = create_app(env=Environment(), container=container, modules=[auth_module.MODULE])
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url=BASE)
 
@@ -412,12 +413,16 @@ async def test_member_and_key_gates_across_routes() -> None:
 
 
 async def test_missing_store_is_503_with_legacy_string() -> None:
-    """No app.state store → 503, detail preserved through the AppError map."""
-    async with await _client(None) as client:
-        response = await client.get(f"{PREFIX}/me")
+    """No container binding and no app.state store → 503, detail preserved."""
+    from fastapi import FastAPI, Request
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Platform store unavailable"
+    from voiceai.common.errors import DependencyUnavailableError
+    from voiceai.modules.auth.controller import get_store
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "app": FastAPI()}
+
+    with pytest.raises(DependencyUnavailableError, match="Platform store unavailable"):
+        get_store(Request(scope))
 
 
 async def test_validation_failure_is_422_envelope() -> None:

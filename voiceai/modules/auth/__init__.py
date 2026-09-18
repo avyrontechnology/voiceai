@@ -35,16 +35,23 @@ if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives a
 
 
 def register(container: Container) -> None:
-    """Bind this module's providers into a container (AGENTS.md rule 9).
+    """Bind this module's store port into the container (AGENTS.md rule 9; spec 0006 E1).
 
-    No-op by design: the store still arrives per request through the legacy app.state
-    seam, and the endgame cutover spec binds it into the container (then the service
-    resolves here instead of per request in the controller).
+    The provider is core's strangler factory: the environment picks `MemoryStore` (no
+    redis — tests, single-proc dev) or `RedisStore` over the container client
+    (deployed). The legacy import lives inside that factory, deferred to first resolve,
+    so this file keeps zero legacy imports and the layer-contract test stays green;
+    spec 0006 E4 retires the bridge. Re-affirms the binding `build_container` already
+    installed, so composing this module standalone resolves identically.
 
     Args:
         container: The container being composed, already carrying the core
-            infrastructure. Currently unused — kept for the ModuleDef contract.
+            infrastructure.
     """
+    from voiceai.core.container import create_auth_store  # deferred: core owns the strangler bridge until E4
+
+    # The port class object is the key: abstract for mypy, hashable at runtime.
+    container.register(AuthStorePort, create_auth_store)  # type: ignore[type-abstract]
 
 
 MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router, register=register)

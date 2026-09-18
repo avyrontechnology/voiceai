@@ -27,8 +27,9 @@ from voiceai.core.redis import create_redis
 
 if TYPE_CHECKING:  # import-direction rule: modules → core is the only static direction
     from voiceai.modules import ModuleDef
+    from voiceai.modules.auth.ports import AuthStorePort
 
-__all__ = ["Container", "build_container", "get_container", "resolve_modules"]
+__all__ = ["Container", "build_container", "create_auth_store", "get_container", "resolve_modules"]
 
 T = TypeVar("T")
 
@@ -196,6 +197,56 @@ class Container:
             await _close_client(database_client)
 
 
+def create_auth_store(container: Container) -> AuthStorePort:
+    """Build the auth store selected by the environment (spec 0006 E1).
+
+    The legacy import is deferred to call time on purpose: `core` must never import a
+    module's internals or a legacy package at module scope (AGENTS.md §3), and this
+    bridge retires at the E4 shim deletion — when the store gains a module-native home,
+    this factory repoints without touching the registration sites. `MemoryStore` and
+    `RedisStore` satisfy `AuthStorePort` structurally (the C0 seam test pins that at
+    runtime), so no module import is needed here either.
+
+    Selection reuses the existing redis knob (spec 0003 precedent: the environment, not
+    code, picks the backend — no new variable was added): no redis URL (tests,
+    single-proc dev) resolves to the in-process `MemoryStore`; a configured redis
+    resolves to `RedisStore` over the container client, the same connection the rest of
+    the process shares.
+
+    Args:
+        container: The container being composed, already carrying the redis client under
+            `CONTAINER_KEY_REDIS` (possibly `None` when redis is unconfigured).
+
+    Returns:
+        The env-selected store behind the auth port.
+    """
+    from voiceai.platform.store import MemoryStore, RedisStore  # strangler bridge (spec 0006 E1)
+
+    redis_client = container.resolve(CONTAINER_KEY_REDIS)
+    if redis_client is None:
+        return MemoryStore()  # why: structural AuthStorePort, pinned by the C0 seam test
+    return RedisStore(redis_client)  # why: same structural conformance, over the shared client
+
+
+def _register_auth_store(container: Container) -> None:
+    """Bind the auth store port to the environment-selected legacy store (spec 0006 E1).
+
+    Split out of `build_container` so the intent reads at the composition site; the
+    module's own `register` re-affirms the same binding through the same factory
+    (AGENTS.md rule 9 — a module owns its providers), so both paths resolve identically.
+
+    The `AuthStorePort` class object is the key: a `Protocol` is abstract for mypy
+    (hence the ignore below) but a plain, hashable class object at runtime — exactly
+    what the heterogeneous registry is built for.
+
+    Args:
+        container: The container being composed.
+    """
+    from voiceai.modules.auth.ports import AuthStorePort  # deferred: modules → core is the only static direction
+
+    container.register(AuthStorePort, create_auth_store)  # type: ignore[type-abstract]
+
+
 def resolve_modules(modules: Sequence[ModuleDef] | None) -> Sequence[ModuleDef]:
     """Return the module definitions to compose, importing the registry only when needed.
 
@@ -225,8 +276,9 @@ def build_container(env: Environment | None = None, *, modules: Sequence[ModuleD
         modules: Explicit module definitions; `None` uses the project registry.
 
     Returns:
-        A container with `Environment`, `"redis"` (possibly `None`) and `"db"` registered, plus
-        whatever each module's `register` added.
+        A container with `Environment`, `"redis"` (possibly `None`), `"db"`, and the
+        `AuthStorePort` (env-selected legacy store) registered, plus whatever each
+        module's `register` added.
     """
     environment = env if env is not None else get_environment()
     configure_logging(environment.log_level)
@@ -234,6 +286,7 @@ def build_container(env: Environment | None = None, *, modules: Sequence[ModuleD
     container.register(Environment, environment)
     container.register(CONTAINER_KEY_REDIS, lambda current: create_redis(current.resolve(Environment)))
     container.register(CONTAINER_KEY_DB, lambda current: create_db(current.resolve(Environment)))
+    _register_auth_store(container)
     summary = environment.model_dump(exclude=_SENSITIVE_ENV_FIELDS)
     get_logger(_LOGGER_MODULE).info(_LOG_CONTAINER_BUILT, redact_secrets(summary))
     for module in resolve_modules(modules):

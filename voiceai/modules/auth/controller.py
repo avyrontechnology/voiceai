@@ -25,9 +25,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from voiceai.common.constants import EMAIL_PATTERN
-from voiceai.common.errors import AppError, DependencyUnavailableError
+from voiceai.common.errors import AppError, ConfigurationError, DependencyUnavailableError
 from voiceai.common.logger import get_logger
 from voiceai.common.responses import error_response, success_response
+from voiceai.core.container import Container, get_container
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.adapters.cookies import COOKIE_SAMESITE, COOKIE_SECURE
 from voiceai.modules.auth.errors import InvalidCredentialsError
@@ -151,7 +152,11 @@ class AuthEventListResponse(BaseModel):
 
 
 def get_store(request: Request) -> AuthStorePort:
-    """Read the platform store off app.state (moved 6-line seam; legacy copy stays).
+    """Read the platform store off app.state (spec 0006 E1 demotes this to the fallback).
+
+    Reached only when the container has no `AuthStorePort` binding (partial
+    compositions, legacy tests); spec 0006 E3 deletes this seam once the container owns
+    every serving path.
 
     Args:
         request: The incoming request, carrying the app state.
@@ -168,9 +173,25 @@ def get_store(request: Request) -> AuthStorePort:
     return store  # why: MemoryStore/RedisStore satisfy the port structurally
 
 
-def get_service(store: Annotated[AuthStorePort, Depends(get_store)]) -> AuthService:
-    """Build the per-request service over the seam store (endgame binds the container)."""
-    return AuthService(store)
+def get_service(request: Request, container: Annotated[Container, Depends(get_container)]) -> AuthService:
+    """Resolve the service over the container store (AGENTS.md rule 9; spec 0006 E1).
+
+    The container binding wins; a container without one falls back to the app.state
+    seam, and requests still read 503 when neither exists. Route shapes, statuses and
+    the `AppError` funnel are unchanged.
+
+    Args:
+        request: The incoming request, carrying the app.state fallback seam.
+        container: The application container, injected by the core dependency.
+
+    Returns:
+        The auth service over the resolved store.
+    """
+    try:
+        # The port class object is the key: abstract for mypy, hashable at runtime.
+        return AuthService(container.resolve(AuthStorePort))  # type: ignore[type-abstract]
+    except ConfigurationError:
+        return AuthService(get_store(request))
 
 
 def client_ip(request: Request) -> str:
