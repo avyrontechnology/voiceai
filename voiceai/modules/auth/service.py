@@ -180,9 +180,9 @@ class AuthService:
             InvalidCredentialsError: When the email/password/disabled gate fails.
         """
         check_login_allowed(client_ip)
-        user = await self._store.get_user_by_email(email.strip().lower())
+        user = await self._store.get_user_by_email(email)
         if not user or user.disabled or not verify_password(password, user.password_hash):
-            await self.audit("login_failed", email=email.strip())
+            await self.audit("login_failed", email=email.strip().lower())
             raise InvalidCredentialsError("Invalid email or password")
         token = await self._new_session(
             user.user_id, user.org_id, ttl_s=C.REMEMBER_TTL_S if remember else C.SESSION_TTL_S
@@ -203,7 +203,9 @@ class AuthService:
         """Resolve session-cookie-then-bearer credentials to a principal.
 
         Raises:
-            InvalidCredentialsError: When neither credential resolves.
+            InvalidCredentialsError: When neither credential resolves (the legacy
+                "Authentication required" — "Invalid email or password" is the
+                login-wrong-credential string only).
         """
         principal = await self._principal_from_session(session_token)
         if principal is None and authorization:
@@ -211,8 +213,23 @@ class AuthService:
             if scheme.lower() == "bearer" and secret:
                 principal = await self._principal_from_api_key(secret.strip())
         if principal is None:
-            raise InvalidCredentialsError("Invalid email or password")
+            raise InvalidCredentialsError("Authentication required")
         return principal
+
+    async def me(self, principal: Principal) -> tuple[User, list[str]]:
+        """Return the session caller's record plus effective scopes for /me.
+
+        Raises:
+            InvalidCredentialsError: When the caller is a key, anonymous, or its
+                record vanished or was disabled (legacy "Session required").
+        """
+        ensure_authenticated(principal)
+        if principal.auth_type != "session" or not principal.user_id:
+            raise InvalidCredentialsError("Session required")
+        user = await self._store.get_user(principal.user_id)
+        if not user or user.disabled:
+            raise InvalidCredentialsError("Session required")
+        return user, principal.effective_scopes()
 
     async def redeem_ticket(self, ticket: str | None) -> Principal | None:
         """Swap a single-use ws ticket for its principal (or `None`)."""

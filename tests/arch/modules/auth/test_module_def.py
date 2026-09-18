@@ -22,9 +22,26 @@ def test_module_is_a_frozen_module_def_named_auth() -> None:
     assert MODULE.name == "auth"
 
 
-def test_router_is_empty_until_the_controller_lands_at_c5() -> None:
-    """An empty router changes nothing observable (the voice-B0 precedent)."""
-    assert MODULE.router.routes == []
+def test_router_mounts_the_auth_surface_at_c5() -> None:
+    """The controller landed: all thirteen routes ride the module router (C5)."""
+    assert sorted({route.path for route in MODULE.router.routes}) == sorted(
+        [
+            "/auth/signup",
+            "/auth/login",
+            "/auth/logout",
+            "/auth/me",
+            "/auth/invite",
+            "/auth/invites",
+            "/auth/invites/{invite_id}",
+            "/auth/accept",
+            "/auth/users",
+            "/auth/users/{user_id}",
+            "/auth/users/{user_id}/role",
+            "/auth/password",
+            "/auth/ws-ticket",
+            "/auth/events",
+        ]
+    )
 
 
 def test_constants_pin_the_legacy_contract() -> None:

@@ -9,7 +9,6 @@ from voiceai.modules.auth.errors import (
     ForbiddenError,
     InvalidCredentialsError,
     InviteInvalidError,
-    TooManyAttemptsError,
 )
 
 __all__ = [
@@ -17,7 +16,6 @@ __all__ = [
     "ensure_found",
     "ensure_invite_valid",
     "ensure_permitted",
-    "ensure_within_attempt_limit",
 ]
 
 
@@ -85,16 +83,3 @@ def ensure_permitted(allowed: bool, message: str) -> None:
     """
     if not allowed:
         raise ForbiddenError(message)
-
-
-def ensure_within_attempt_limit(allowed: bool) -> None:
-    """Raise 429 when the login throttle trips.
-
-    Args:
-        allowed: ``False`` when the IP exhausted its window.
-
-    Raises:
-        TooManyAttemptsError: When the throttle trips.
-    """
-    if not allowed:
-        raise TooManyAttemptsError("Too many login attempts, try again shortly")

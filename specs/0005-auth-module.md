@@ -131,14 +131,36 @@ quirk with TODO, owned by the platform strangler, never re-fixed here).
 - **C2 — Models split.** `models/*` moved (delegators stay); `platform/models.py`
   superset shim; `dir()` snapshot + engine-free canary (the A2 precedent: models
   import zero engine code).
-- **C3 — Service + ports.** `AuthService` over `AuthStorePort` (+2 additive store
-  methods); service suite with DI fakes; `helpers.public_user`.
-- **C4 — Throttle + audit + password path.** The stateful leftovers (in-process
-  limiter behind the service seam, audit swallow, password-change session sweep via
-  `list_user_sessions`); same-commit behavior tests.
-- **C5 — Controller + cutover-ready.** `controller.py` WS…HTTP routes on the new app
-  factory (httpx ASGI transport suite, byte-identical shapes incl. every 4xx above);
-  legacy `auth_router.py` untouched (still mounted by quickstart).
+- **C3 — Service + ports (DONE, commit `feat(auth)` [spec-0005]).** `AuthService`
+  over `AuthStorePort` (+`list_user_sessions` on both stores); `utils` limiter,
+  `helpers.public_user`, `adapters/cookies.py` bridge; 34-test service suite with DI
+  fakes (98% pkg cov). Absorbed C4 whole (line-by-line moves are inseparable —
+  limiter/audit/swallow/sweep all ride the service bodies).
+  - DEVIATION 1 (security fix, test-pinned): the API-key resolver gains the
+    `disabled` gate the session resolver always had — verbatim legacy lets a
+    disabled user's keys keep working. Legacy keeps the hole till cutover.
+  - DEVIATION 2 (C2 IOU, mechanical): port payloads re-pointed to the moved
+    models (`Any` → `User`/`SessionRecord`/`Invite`/`ApiKey`/`AuthEvent`).
+  - Notes: signup-dup 409 unreachable (closed-gate first, verbatim order, pinned);
+    set_role/delete last-owner guards unreachable via API (self-check first,
+    pinned directly); R3 retired by the port method; R5 done (caveat in `utils`).
+- **C4 — FOLDED INTO C3 (no-op).** Its planned scope (limiter, audit, sweep) moved
+  with the service bodies; nothing remains for a separate commit.
+- **C5 — Controller + cutover-ready (DONE, commit `feat(auth)` [spec-0005]).**
+  `controller.py` thirteen routes on the factory at `/api/v1/auth` (ASGI suite,
+  16 tests, 99% pkg cov); envelopes live in the controller; mounted via
+  `ALL_MODULES` (+registry-test 1↔1); legacy `auth_router.py` untouched.
+  - Byte identity holds at the PAYLOAD level (rule 2 overrules the spec's literal
+    "byte-identical": identical statuses, identical `detail` strings, identical
+    `data` payloads inside the standard envelopes; endgame cutover owns clients).
+  - `get_store` maps the 503 seam onto `DependencyUnavailableError` (same string);
+    `authenticate` raises "Authentication required" (login keeps "Invalid email or
+    password"); `service.me()` added for /me (controller holds no store access).
+  - Cookie fix vs legacy shape: set/clear on the RETURNED response (the injected
+    one is discarded when a handler returns JSONResponse).
+  - Normalization note: the STORES lowercase inside `get_user_by_email`, so login
+    is case-insensitive in both worlds; invite keeps the saner normalized dup
+    check (legacy raw lookup could double-register `User@X` over `user@x`).
 - **C6 — Closeout + shim audit.** Burn-down reconciled; an arch test asserts the
   controller's error→status map covers every service error; line-count proof; final
   `make check` + `test-all` + `sec` + `cov`.

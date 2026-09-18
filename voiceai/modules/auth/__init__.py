@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter
-
 from voiceai.modules import ModuleDef
 from voiceai.modules.auth.constants import MODULE_NAME
+from voiceai.modules.auth.controller import router
 from voiceai.modules.auth.errors import (
     AuthError,
     AuthNotFoundError,
@@ -27,24 +26,20 @@ from voiceai.modules.auth.exceptions import (
     ensure_found,
     ensure_invite_valid,
     ensure_permitted,
-    ensure_within_attempt_limit,
 )
 from voiceai.modules.auth.ports import AuthStorePort
+from voiceai.modules.auth.service import AuthService
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives at call time
     from voiceai.core.container import Container
-
-#: Mounted by the app factory under the API prefix. Empty on purpose: the routes land
-#: with the controller at step C5, and mounting a router with no routes changes nothing
-#: observable meanwhile (the voice-B0 precedent).
-router: APIRouter = APIRouter()
 
 
 def register(container: Container) -> None:
     """Bind this module's providers into a container (AGENTS.md rule 9).
 
-    No-op until the service lands at step C3: the store arrives per request through the
-    legacy app.state seam, so there is nothing composition-time to bind yet.
+    No-op by design: the store still arrives per request through the legacy app.state
+    seam, and the endgame cutover spec binds it into the container (then the service
+    resolves here instead of per request in the controller).
 
     Args:
         container: The container being composed, already carrying the core
@@ -58,6 +53,7 @@ __all__ = [
     "MODULE",
     "AuthError",
     "AuthNotFoundError",
+    "AuthService",
     "AuthStorePort",
     "ForbiddenError",
     "InviteInvalidError",
@@ -67,6 +63,5 @@ __all__ = [
     "ensure_found",
     "ensure_invite_valid",
     "ensure_permitted",
-    "ensure_within_attempt_limit",
     "register",
 ]

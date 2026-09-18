@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 #: Module name for the logger, router tags and registry entry.
 MODULE_NAME: Final[str] = "auth"
 
 #: Session cookie carrying the opaque session token.
 SESSION_COOKIE: Final[str] = "otoba_session"
+
+#: Session-record kinds on the shared session ledger.
+SESSION_KIND: Final[Literal["session"]] = "session"
+WS_TICKET_KIND: Final[Literal["ws-ticket"]] = "ws-ticket"
 
 #: Default session lifetime (7 days, seconds).
 SESSION_TTL_S: Final[int] = 7 * 24 * 3600
@@ -30,3 +34,6 @@ LOGIN_MAX_ATTEMPTS: Final[int] = 5
 
 #: PBKDF2 iterations for password hashing (frozen by spec 0005 non-goals).
 PBKDF2_ITERATIONS: Final[int] = 600_000
+
+#: Mutation-ack body the legacy routes return (copied per response, never shared).
+OK_BODY: Final[dict[str, bool]] = {"ok": True}

@@ -395,14 +395,14 @@ class MemoryStore:
         return self._delete("sessions", token_hash)
 
     async def delete_user_sessions(self, user_id: str) -> int:
-        doomed = [
-            token_hash
-            for token_hash, raw in self._data["sessions"].items()
-            if raw.get("user_id") == user_id
-        ]
+        doomed = [token_hash for token_hash, raw in self._data["sessions"].items() if raw.get("user_id") == user_id]
         for token_hash in doomed:
             self._delete("sessions", token_hash)
         return len(doomed)
+
+    async def list_user_sessions(self, user_id: str) -> List[SessionRecord]:
+        """Return every session record of a user (spec 0005 password-change sweep)."""
+        return [SessionRecord(**raw) for raw in self._data["sessions"].values() if raw.get("user_id") == user_id]
 
     # -- invites ---------------------------------------------------------------------
 
@@ -822,6 +822,12 @@ class RedisStore(MemoryStore):
                 await self._redis.delete(self._key("sessions", raw["token_hash"]))
                 count += 1
         return count
+
+    async def list_user_sessions(self, user_id: str) -> List[SessionRecord]:
+        """Return every session record of a user (spec 0005 password-change sweep)."""
+        return [
+            SessionRecord(**raw) for raw in await self._list_collection("sessions") if raw.get("user_id") == user_id
+        ]
 
     async def save_invite(self, invite: Invite) -> None:
         await self._write("invites", invite.invite_id, invite.model_dump(mode="json"))
