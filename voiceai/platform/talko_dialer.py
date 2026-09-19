@@ -19,10 +19,12 @@ Env:
 """
 
 import os
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
+from voiceai.errors import ConfigurationError
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import Execution, ExecutionStatus, new_id, utcnow
 from voiceai.platform.store import MemoryStore
@@ -44,6 +46,63 @@ def _trunk_headers() -> Dict[str, str]:
     return {"X-API-Key": keys[0]} if keys else {}
 
 
+async def resolve_talko_partner_credentials(
+    store: MemoryStore,
+    *,
+    partner_id: Optional[str],
+    explicit_key: Optional[str] = None,
+    explicit_did: Optional[str] = None,
+    explicit_base: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve Talko credentials per partner from DB (not env).
+
+    Precedence per field: explicit per-request value > partner DB record >
+    None (caller falls back to trunk env defaults). A partner_id with no
+    matching record is a 400 (fail closed — never dial on another partner's
+    credentials). DIDs are normalized to digits-only (talko-service requires
+    10-15 digits; callers paste E.164 with '+').
+    """
+    key, did, base = explicit_key, explicit_did, explicit_base
+    if partner_id and (not key or not did or base is None):
+        record = await store.get_talko_partner(partner_id)
+        if record is None:
+            raise ConfigurationError(
+                "Unknown Talko partner '{}'. Create it via POST /talko/partners first.".format(partner_id),
+                path="partner_id",
+            )
+        if not key:
+            key = record.talko_api_key or None
+        if not did:
+            did = record.default_did
+        if base is None:
+            base = record.talko_api_base_url
+    if did:
+        did = re.sub(r"\D", "", did) or None
+    return key, did, base
+
+
+def validate_recipient_number(to_number: str) -> str:
+    """Digits-only destination check (Tata rejects malformed numbers with an
+    opaque BAD_REQUEST, so fail fast here with a clear 400).
+
+    Generic bounds are 10-15 digits; Indian numbers (country code 91, which
+    is all Tata Tele dials) must be 91 + 10 digits — an 11-digit 91… number
+    is almost always a dropped-digit typo.
+    """
+    digits = re.sub(r"\D", "", to_number or "")
+    if not 10 <= len(digits) <= 15:
+        raise ConfigurationError(
+            "to_number '{}' is not dialable: need 10-15 digits, got {}.".format(to_number, len(digits)),
+            path="to_number",
+        )
+    if digits.startswith("91") and len(digits) != 12:
+        raise ConfigurationError(
+            "to_number '{}' looks like a truncated Indian mobile: need 91 + 10 digits.".format(to_number),
+            path="to_number",
+        )
+    return digits
+
+
 async def dial_via_talko(
     store: MemoryStore,
     *,
@@ -54,24 +113,37 @@ async def dial_via_talko(
     variables: Optional[Dict[str, Any]] = None,
     batch_id: Optional[str] = None,
     trunk_url: Optional[str] = None,
+    partner_id: Optional[str] = None,
+    talko_api_base_url: Optional[str] = None,
 ) -> Execution:
     """Dial one real call through the Talko trunk. Never raises for trunk errors."""
+    api_key, caller_did, api_base = await resolve_talko_partner_credentials(
+        store, partner_id=partner_id, explicit_key=talko_api_key,
+        explicit_did=from_number, explicit_base=talko_api_base_url,
+    )
+    validate_recipient_number(to_number)
     execution = Execution(
         execution_id=new_id("exec"),
         agent_id=agent_id,
         batch_id=batch_id,
         direction="outbound",
         to_number=to_number,
-        from_number=from_number,
+        from_number=caller_did,
         variables=variables or {},
     )
     await store.save_execution(execution)
 
     body: Dict[str, Any] = {"agent_id": agent_id, "recipient_phone_number": to_number}
-    if from_number:
-        body["caller_did"] = from_number
-    if talko_api_key:
-        body["talko_api_key"] = talko_api_key
+    if caller_did:
+        body["caller_did"] = caller_did
+    if api_key:
+        body["talko_api_key"] = api_key
+    if partner_id:
+        body["partner_id"] = partner_id
+    if api_base:
+        body["talko_api_base_url"] = api_base
+    if variables:
+        body["variables"] = dict(variables)
     url = "{}/talko/call".format((trunk_url or TRUNK_URL).rstrip("/"))
     try:
         # Only pass headers when a key is configured: keeps the call shape stable for callers

@@ -21,10 +21,14 @@ SERVER_PATH = Path(__file__).resolve().parents[1] / "local_setup" / "telephony_s
 class FakeResponse:
     def __init__(self, status_code=200, payload=None, text=""):
         self.status_code = status_code
+        self._has_payload = payload is not None
         self._payload = payload if payload is not None else {}
         self.text = text or json.dumps(self._payload)
 
     def json(self):
+        # Mirror httpx: HTML/outage bodies are not JSON-decodable.
+        if not self._has_payload:
+            raise ValueError("No JSON object could be decoded")
         return self._payload
 
 
@@ -66,6 +70,13 @@ def load_server(monkeypatch, env):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     spec.loader.exec_module(module)
+    # Pin module globals: load_dotenv() at import reads the developer's real
+    # .env, which would leak values (e.g. TALKO_AI_DID) into cases that expect
+    # them absent. Tests must be hermetic.
+    module.talko_api_base_url = env.get("TALKO_API_BASE_URL", "")
+    module.talko_api_key = env.get("TALKO_API_KEY", "")
+    module.talko_ai_did = env.get("TALKO_AI_DID", "")
+    module.talko_partner_id = env.get("TALKO_PARTNER_ID", "")
     return module
 
 
@@ -117,7 +128,7 @@ async def test_call_uses_per_request_key_over_env(monkeypatch, std_env):
     api = await make_client(monkeypatch, std_env)
     resp = await api.post(
         "/talko/call",
-        json={"agent_id": "a", "recipient_phone_number": "91", "talko_api_key": "tkp_live_ui"},
+        json={"agent_id": "a", "recipient_phone_number": "919812345678", "talko_api_key": "tkp_live_ui"},
     )
     assert resp.status_code == 200, resp.text
     assert FakeAsyncClient.posted[-1]["headers"]["API-KEY"] == "tkp_live_ui"
@@ -126,30 +137,55 @@ async def test_call_uses_per_request_key_over_env(monkeypatch, std_env):
 
 async def test_call_missing_key_everywhere_rejected(monkeypatch):
     api = await make_client(monkeypatch, {})
-    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "91"})
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "919812345678"})
     assert resp.status_code == 400
     await api.aclose()
 
 
 async def test_call_missing_did_rejected(monkeypatch):
     api = await make_client(monkeypatch, {"TALKO_API_KEY": "k"})
-    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "91"})
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "919812345678"})
     assert resp.status_code == 400
+    await api.aclose()
+
+
+async def test_call_normalizes_plus_prefixed_did(monkeypatch, std_env):
+    api = await make_client(monkeypatch, std_env)
+    resp = await api.post(
+        "/talko/call",
+        json={"agent_id": "a", "recipient_phone_number": "919812345678", "caller_did": "+918045678901"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = FakeAsyncClient.posted[0]["json"]
+    assert body["dedicated_did"] == "918045678901"
+    assert body["context_data"]["from_number"] == "918045678901"
     await api.aclose()
 
 
 async def test_call_talko_error_maps_to_502(monkeypatch, std_env):
     FakeAsyncClient.next_post = FakeResponse(500, text="boom")
     api = await make_client(monkeypatch, std_env)
-    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "91"})
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "919812345678"})
     assert resp.status_code == 502
+    await api.aclose()
+
+
+async def test_call_html_outage_page_summarized(monkeypatch, std_env):
+    FakeAsyncClient.next_post = FakeResponse(
+        503, text="<!DOCTYPE html><html><head><title>Service Suspended</title></head><body>down</body></html>"
+    )
+    api = await make_client(monkeypatch, std_env)
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "919812345678"})
+    assert resp.status_code == 502
+    assert "Service Suspended" in resp.text
+    assert "<html" not in resp.text
     await api.aclose()
 
 
 async def test_call_unreachable_maps_to_502(monkeypatch, std_env):
     FakeAsyncClient.raise_on_post = httpx.ConnectError("down")
     api = await make_client(monkeypatch, std_env)
-    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "91"})
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "919812345678"})
     assert resp.status_code == 502
     await api.aclose()
 
@@ -177,4 +213,38 @@ async def test_health(monkeypatch, std_env):
     resp = await api.get("/talko/health")
     assert resp.status_code == 200
     assert resp.json()["talko_reachable"] is True
+    await api.aclose()
+
+
+async def test_health_html_outage_page_does_not_500(monkeypatch, std_env):
+    FakeAsyncClient.next_get = FakeResponse(
+        503, text="<!DOCTYPE html><html><head><title>Service Suspended</title></head></html>"
+    )
+    api = await make_client(monkeypatch, std_env)
+    resp = await api.get("/talko/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["talko_reachable"] is False
+    assert "Service Suspended" in str(body["talko_status"])
+    await api.aclose()
+
+
+async def test_call_rejects_undialable_recipient(monkeypatch, std_env):
+    api = await make_client(monkeypatch, std_env)
+    resp = await api.post("/talko/call", json={"agent_id": "a", "recipient_phone_number": "+91858596675"})
+    assert resp.status_code == 400
+    assert FakeAsyncClient.posted == []
+    await api.aclose()
+
+
+async def test_call_forwards_contact_variables(monkeypatch, std_env):
+    api = await make_client(monkeypatch, std_env)
+    resp = await api.post("/talko/call", json={
+        "agent_id": "a", "recipient_phone_number": "919812345678",
+        "variables": {"student_name": "Aarav Sharma", "outstanding": 28500},
+    })
+    assert resp.status_code == 200, resp.text
+    assert FakeAsyncClient.posted[0]["json"]["context_data"]["variables"] == {
+        "student_name": "Aarav Sharma", "outstanding": 28500,
+    }
     await api.aclose()

@@ -53,11 +53,12 @@ class _FakeManager:
     instances = []
     raise_with = None
 
-    def __init__(self, agent_config, websocket, agent_id, is_web_based_call=False):
+    def __init__(self, agent_config, websocket, agent_id, is_web_based_call=False, **kwargs):
         self.agent_config = agent_config
         self.websocket = websocket
         self.agent_id = agent_id
         self.is_web_based_call = is_web_based_call
+        self.kwargs = kwargs
         self.run_id = "run-1"
         _FakeManager.instances.append(self)
 
@@ -133,6 +134,9 @@ class _WsSession:
 def ws(monkeypatch):
     monkeypatch.setenv("VOICE_STREAM_SECRET", SECRET)
     monkeypatch.setattr(server, "redis_client", _FakeRedis({"agent-1": AGENT}))
+    # The agent-record cache is process-global: swapping the backing store
+    # must reset it, or an earlier test's valid record masks this test's data.
+    server._AGENT_RECORD_CACHE.clear()
     monkeypatch.setattr(server, "AssistantManager", _FakeManager)
     server.app.state.platform_store = MemoryStore()
     _FakeManager.instances.clear()

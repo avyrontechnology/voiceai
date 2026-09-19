@@ -104,6 +104,18 @@ class BaseS2SProvider(ABC):
     async def trigger_response(self, instructions: Optional[str] = None) -> None:
         """Ask the model to speak without new user audio, used for the welcome message."""
 
+    async def update_instructions(self, instructions: str) -> None:
+        """Replace the session instructions on the live connection, best-effort.
+
+        The default only refreshes the local copy (providers without a live
+        session-update API, e.g. Gemini's setup-only config, keep speaking
+        from it on reconnect); providers with one (OpenAI session.update)
+        override this to push the new instructions to the running session.
+        Never raises: callers treat a missed update as "greeting re-render
+        covers it" and continue the call.
+        """
+        self.system_prompt = instructions
+
     @abstractmethod
     async def disconnect(self) -> None:
         """Close the session."""

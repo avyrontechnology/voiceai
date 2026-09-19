@@ -2,12 +2,26 @@ region: us
 version: '2'
 authtoken: 3ImSgMJ059F9Lhj2jl893rsbQSU_5Yq679WGPAT3P9L4GiHdg
 tunnels:
-  twilio-app:
-    addr: twilio-app:8001
+  # STABLE endpoint (reserved domain on this account — never changes across
+  # restarts): forwards Tata's media to the local talko-service PSTN socket.
+  # Tata console callback: wss://antiques-sensitive-object.ngrok-free.dev/talko-service/v1/pstn/tata/stream
+  # Twilio is stopped; re-enable its block below if you revive twilio-app
+  # (free plans allow one concurrent tunnel — pick one).
+  talko-service:
+    addr: host.docker.internal:8003
     proto: http
+#  twilio-app:
+#    addr: twilio-app:8001
+#    proto: http
 #  plivo-app:
 #    addr: plivo-app:8002
 #    proto: http
-#  bolna-app:
-#    addr: bolna-app:5001
+# Talko relay -> engine media path: the relay (public cloud) can only open
+# /chat/v1/{agent} on THIS engine through a public URL. Uncomment to expose
+# voiceai-app, then set talko-service VOICEAI_WS_BASE_URL=wss://<public-host>
+# and VOICEAI_API_BASE_URL=https://<public-host>. Free ngrok plans allow a
+# single concurrent tunnel: stop twilio-app first if the second tunnel is
+# rejected, or give the engine its own authtoken/agent.
+#  voiceai-app:
+#    addr: voiceai-app:5001
 #    proto: http

@@ -634,6 +634,23 @@ def resample(audio_bytes, target_sample_rate, format="mp3", pcm_channels=1, orig
     return buffer.getvalue()
 
 
+async def aresample(
+    audio_bytes: bytes,
+    target_sample_rate: int,
+    format: str = "mp3",
+    pcm_channels: int = 1,
+    original_sample_rate: Optional[int] = None,
+) -> bytes:
+    """Async resample with semantics identical to :func:`resample`.
+
+    The scipy/pydub bodies are CPU-bound and block the event loop for ms per
+    chunk on realtime paths, so they run in a worker thread via
+    :func:`asyncio.to_thread`. All other callers keep using the sync version.
+    """
+    return await asyncio.to_thread(resample, audio_bytes, target_sample_rate, format, pcm_channels,
+                                   original_sample_rate)
+
+
 def get_synth_audio_format(audio_bytes):
     # input to this can be WAV or PCM
     try:

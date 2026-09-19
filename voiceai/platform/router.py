@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from voiceai.errors import ConfigurationError
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
     AssignNumberRequest,
@@ -27,6 +28,8 @@ from voiceai.platform.models import (
     CampaignStats,
     CreateBatchRequest,
     CreateCampaignRequest,
+    CreateTalkoPartnerRequest,
+    UpdateTalkoPartnerRequest,
     CreateApiKeyRequest,
     CreateApiKeyResponse,
     CreateGraphRequest,
@@ -69,8 +72,12 @@ from voiceai.platform.models import (
     PhoneNumberListResponse,
     ResetResponse,
     SimulateCallRequest,
+    PlaceCallRequest,
     SubAccount,
     SubAccountListResponse,
+    TalkoPartnerConfig,
+    TalkoPartnerListResponse,
+    TalkoPartnerView,
     TemplateListResponse,
     TemplateSummary,
     Tool,
@@ -108,6 +115,7 @@ from voiceai.platform.simulation import (
     run_batch,
     run_simulated_call,
 )
+from voiceai.platform.talko_dialer import dial_via_talko
 from voiceai.platform.graphs import (
     GraphDefinition,
     ValidationResult,
@@ -122,7 +130,7 @@ from voiceai.platform.workflows import (
     run_workflow,
     validate_workflow,
 )
-from voiceai.platform.store import MemoryStore
+from voiceai.platform.store import MemoryStore, normalize_phone_digits
 from voiceai.platform.templates_seed import TEMPLATES
 from voiceai.platform.templates_seed import get_template as lookup_template
 
@@ -172,6 +180,47 @@ async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depen
         to_number=payload.to_number,
         from_number=payload.from_number,
         variables=payload.variables,
+    )
+    await store.save_execution(execution)
+    _ANALYTICS_CACHE.clear()
+    asyncio.create_task(progress_simulated_call(store, execution.execution_id, payload.delay_scale))
+    return execution
+
+
+@calls_router.post("/place", response_model=Execution, status_code=202)
+async def place_call(payload: PlaceCallRequest, store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("calls:write")),
+) -> Execution:
+    """Place a single outbound call (real Talko trunk or simulated runner)."""
+    if payload.provider == "talko":
+        execution = await dial_via_talko(
+            store,
+            agent_id=payload.agent_id,
+            to_number=payload.to_number,
+            from_number=payload.from_number,
+            talko_api_key=payload.talko_api_key,
+            variables=dict(payload.variables),
+            partner_id=payload.partner_id,
+        )
+        _ANALYTICS_CACHE.clear()
+        return execution
+    if payload.delay_scale == 0:
+        result = await run_simulated_call(
+            store,
+            agent_id=payload.agent_id,
+            to_number=payload.to_number,
+            from_number=payload.from_number,
+            variables=dict(payload.variables),
+            delay_scale=0,
+        )
+        _ANALYTICS_CACHE.clear()
+        return result
+    execution = Execution(
+        execution_id=new_id("exec"),
+        agent_id=payload.agent_id,
+        to_number=payload.to_number,
+        from_number=payload.from_number,
+        variables=dict(payload.variables),
     )
     await store.save_execution(execution)
     _ANALYTICS_CACHE.clear()
@@ -366,6 +415,11 @@ batches_router = APIRouter(prefix="/batches", tags=["Batches"])
 async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("batches:write")),
 ) -> Batch:
+    if payload.partner_id and await store.get_talko_partner(payload.partner_id) is None:
+        raise ConfigurationError(
+            "Unknown Talko partner '{}'. Create it via POST /talko/partners first.".format(payload.partner_id),
+            path="partner_id",
+        )
     batch = Batch(
         batch_id=new_id("batch"),
         agent_id=payload.agent_id,
@@ -377,6 +431,7 @@ async def create_batch(payload: CreateBatchRequest, store: MemoryStore = Depends
         provider=payload.provider,
         from_number=payload.from_number,
         talko_api_key=payload.talko_api_key,
+        partner_id=payload.partner_id,
     )
     batch.stats.total = len(batch.entries)
     batch.stats.queued = len(batch.entries)
@@ -488,6 +543,94 @@ async def delete_batch(batch_id: str, store: MemoryStore = Depends(get_store),
         raise _not_found("Batch", batch_id)
     batch.status = BatchStatus.STOPPED
     await store.save_batch(batch)
+    return DeletedResponse()
+
+
+# --- talko partners (per-partner trunk credentials; DB, not env) ---------------------
+
+talko_partners_router = APIRouter(prefix="/talko/partners", tags=["Talko Partners"])
+
+
+def _partner_view(partner: TalkoPartnerConfig) -> TalkoPartnerView:
+    key = partner.talko_api_key or ""
+    return TalkoPartnerView(
+        partner_id=partner.partner_id,
+        display_name=partner.display_name,
+        talko_api_base_url=partner.talko_api_base_url,
+        default_did=partner.default_did,
+        vendor_config_id=partner.vendor_config_id,
+        key_configured=bool(key),
+        key_hint=key[-4:] if key else None,
+        created_at=partner.created_at,
+        updated_at=partner.updated_at,
+    )
+
+
+@talko_partners_router.post("", response_model=TalkoPartnerView, status_code=201)
+async def create_talko_partner(payload: CreateTalkoPartnerRequest, store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:write")),
+) -> TalkoPartnerView:
+    if await store.get_talko_partner(payload.partner_id) is not None:
+        raise HTTPException(status_code=409, detail=f"Talko partner {payload.partner_id} already exists")
+    partner = TalkoPartnerConfig(
+        partner_id=payload.partner_id,
+        display_name=payload.display_name,
+        talko_api_base_url=payload.talko_api_base_url,
+        talko_api_key=payload.talko_api_key,
+        default_did=normalize_phone_digits(payload.default_did) if payload.default_did else None,
+        vendor_config_id=payload.vendor_config_id,
+    )
+    await store.save_talko_partner(partner)
+    logger.info(f"Talko partner {partner.partner_id} created")
+    return _partner_view(partner)
+
+
+@talko_partners_router.get("", response_model=TalkoPartnerListResponse)
+async def list_talko_partners(store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:read")),
+) -> TalkoPartnerListResponse:
+    return TalkoPartnerListResponse(partners=[_partner_view(p) for p in await store.list_talko_partners()])
+
+
+@talko_partners_router.get("/{partner_id}", response_model=TalkoPartnerView)
+async def get_talko_partner(partner_id: str, store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:read")),
+) -> TalkoPartnerView:
+    partner = await store.get_talko_partner(partner_id)
+    if partner is None:
+        raise _not_found("Talko partner", partner_id)
+    return _partner_view(partner)
+
+
+@talko_partners_router.put("/{partner_id}", response_model=TalkoPartnerView)
+async def update_talko_partner(partner_id: str, payload: UpdateTalkoPartnerRequest,
+    store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:write")),
+) -> TalkoPartnerView:
+    partner = await store.get_talko_partner(partner_id)
+    if partner is None:
+        raise _not_found("Talko partner", partner_id)
+    if payload.display_name is not None:
+        partner.display_name = payload.display_name
+    if payload.talko_api_base_url is not None:
+        partner.talko_api_base_url = payload.talko_api_base_url
+    if payload.talko_api_key:
+        partner.talko_api_key = payload.talko_api_key
+    if payload.default_did is not None:
+        partner.default_did = normalize_phone_digits(payload.default_did) if payload.default_did else None
+    if payload.vendor_config_id is not None:
+        partner.vendor_config_id = payload.vendor_config_id
+    partner.updated_at = utcnow()
+    await store.save_talko_partner(partner)
+    return _partner_view(partner)
+
+
+@talko_partners_router.delete("/{partner_id}", response_model=DeletedResponse)
+async def delete_talko_partner(partner_id: str, store: MemoryStore = Depends(get_store),
+    _auth: Principal = Depends(require_scope("platform:write")),
+) -> DeletedResponse:
+    if not await store.delete_talko_partner(partner_id):
+        raise _not_found("Talko partner", partner_id)
     return DeletedResponse()
 
 
@@ -1477,6 +1620,7 @@ def build_routers() -> list[APIRouter]:
         calls_router,
         executions_router,
         batches_router,
+        talko_partners_router,
         numbers_router,
         kbs_router,
         tools_router,

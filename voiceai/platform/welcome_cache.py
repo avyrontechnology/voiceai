@@ -138,6 +138,67 @@ async def prerender_welcome(*, text: str, voice: str, model: str, lang: str, rat
         return None
 
 
+async def prerender_s2s_welcome(*, text: str, voice: str, rate: int = 24000) -> Optional[bytes]:
+    """Synthesize one S2S greeting via OpenAI TTS into PCM16 at ``rate``.
+
+    S2S voices (e.g. marin) never match a Sarvam speaker, so the Sarvam
+    pre-render path can never fill their cache slot and every greeting would
+    pay trigger_response TTFT. This renders the same voice name through the
+    OpenAI TTS endpoint instead. Never raises: None means "keep the
+    model-spoken greeting".
+    """
+    if not (text or "").strip() or not voice:
+        return None
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.info("s2s welcome pre-render skipped: OPENAI_API_KEY not set")
+        return None
+    try:
+        from voiceai.helpers.utils import convert_audio_to_wav, resample, wav_bytes_to_pcm
+
+        from voiceai.synthesizer.openai_synthesizer import OPENAISynthesizer
+
+        synth = OPENAISynthesizer(voice=voice, sampling_rate=int(rate), synthesizer_key=os.getenv("OPENAI_API_KEY"))
+        mp3 = await synth.synthesize(text)
+        if not mp3 or not isinstance(mp3, (bytes, bytearray)):
+            return None
+        wav = resample(convert_audio_to_wav(bytes(mp3), "mp3"), int(rate), format="wav")
+        pcm = wav_bytes_to_pcm(wav)
+        if not pcm:
+            return None
+        logger.info("s2s welcome pre-rendered | voice=%s bytes=%d rate=%d", voice, len(pcm), rate)
+        return pcm
+    except Exception as exc:
+        logger.warning("s2s welcome pre-render failed, model greeting remains: %s", summarize_exception(exc))
+        return None
+
+
+def _s2s_voice_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract {voice, rate} for an S2S greeting, else None.
+
+    Key parity with the call path: TaskManager._s2s_cached_welcome_pcm looks
+    up (agent, text, voice=<s2s voice>, model="", lang="") at the model's
+    output rate, so entries stored for S2S voices use exactly that key —
+    model="" keeps one entry per voice+text regardless of realtime model id.
+    """
+    try:
+        tasks = record.get("tasks") or []
+        if not tasks:
+            return None
+        tools = (tasks[0].get("tools_config") or {}) if isinstance(tasks[0], dict) else {}
+        s2s_cfg = tools.get("s2s") or {}
+        if not isinstance(s2s_cfg, dict):
+            return None
+        provider_config = s2s_cfg.get("provider_config") or {}
+        if not isinstance(provider_config, dict):
+            return None
+        voice = provider_config.get("voice") or ""
+        if not voice:
+            return None
+        return {"voice": str(voice), "rate": 24000}
+    except Exception:
+        return None
+
+
 def _sarvam_voice_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Extract {voice, model, lang, rate} for a Sarvam greeting, else None."""
     try:
@@ -183,15 +244,27 @@ async def refresh_agent_welcome(agent_id: str, record: Dict[str, Any]) -> int:
         if not text:
             return 0
         voice_info = _sarvam_voice_of(record)
-        if voice_info is None:
+        if voice_info is not None:
+            pcm = await prerender_welcome(text=text, **voice_info)
+            if not pcm:
+                return 0
+            store_cached_welcome(
+                welcome_cache_key(agent_id=agent_id, text=text, **voice_info),
+                pcm,
+                voice_info["rate"],
+            )
+            return 1
+        s2s_info = _s2s_voice_of(record)
+        if s2s_info is None:
             return 0
-        pcm = await prerender_welcome(text=text, **voice_info)
+        pcm = await prerender_s2s_welcome(text=text, **s2s_info)
         if not pcm:
             return 0
         store_cached_welcome(
-            welcome_cache_key(agent_id=agent_id, text=text, **voice_info),
+            welcome_cache_key(agent_id=agent_id, text=text, voice=s2s_info["voice"], model="", lang="",
+                              rate=s2s_info["rate"]),
             pcm,
-            voice_info["rate"],
+            s2s_info["rate"],
         )
         return 1
     except Exception as exc:

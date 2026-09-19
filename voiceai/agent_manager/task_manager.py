@@ -102,6 +102,7 @@ from voiceai.helpers.utils import (
     safe_log_text,
     get_prompt_responses,
     resample,
+    aresample,
     save_audio_file_to_s3,
     update_prompt_with_context,
     get_md5_hash,
@@ -162,6 +163,63 @@ def _s2s_ack_independent() -> bool:
 def _s2s_talko_encoding() -> str:
     """WB-3c: expected Talko leg encoding (default safe = ``mulaw-8k``)."""
     return (os.getenv("S2S_TALKO_ENCODING", "mulaw-8k") or "mulaw-8k").strip().lower()
+
+
+# Lazy S2S greeting fill: keys with a background pre-render in flight, plus a
+# cooldown map (key -> monotonic deadline) so a voice the TTS endpoint rejects
+# (or a missing key) is retried at most once per window instead of every call.
+_S2S_WELCOME_FILL_INFLIGHT: set = set()
+_S2S_WELCOME_FILL_COOLDOWN_UNTIL: dict = {}
+_S2S_WELCOME_FILL_COOLDOWN_S = 600.0
+
+
+async def _fill_s2s_welcome(*, key: str, agent_id: str, text: str, voice: str, rate: int) -> None:
+    """Background worker for one lazy S2S greeting pre-render. Never raises."""
+    try:
+        from voiceai.platform import welcome_cache as _welcome_cache
+
+        pcm = await _welcome_cache.prerender_s2s_welcome(text=text, voice=voice, rate=rate)
+        if pcm:
+            _welcome_cache.store_cached_welcome(key, pcm, rate)
+            logger.info("S2S cached greeting filled | bytes=%d rate=%s voice=%s", len(pcm), rate, voice)
+        else:
+            _S2S_WELCOME_FILL_COOLDOWN_UNTIL[key] = time.monotonic() + _S2S_WELCOME_FILL_COOLDOWN_S
+            logger.info("S2S cached greeting fill missed | voice=%s (model greeting remains)", voice)
+    except Exception as exc:
+        _S2S_WELCOME_FILL_COOLDOWN_UNTIL[key] = time.monotonic() + _S2S_WELCOME_FILL_COOLDOWN_S
+        logger.warning(f"S2S cached greeting fill failed, model greeting remains: {exc}")
+    finally:
+        _S2S_WELCOME_FILL_INFLIGHT.discard(key)
+
+
+def _schedule_s2s_welcome_fill(*, agent_id: str, text: str, voice: str, rate: int) -> None:
+    """Queue one background pre-render of the S2S greeting for the NEXT call.
+
+    Synchronous and non-blocking by design: the greeting path calls this on a
+    cache miss and immediately falls back to trigger_response. Once per
+    (agent, text, voice, rate); never raises.
+    """
+    try:
+        from voiceai.platform import welcome_cache as _welcome_cache
+
+        if not _welcome_cache.is_welcome_preload_enabled():
+            return
+        key = _welcome_cache.welcome_cache_key(agent_id=agent_id, text=text, voice=voice, model="", lang="",
+                                               rate=int(rate))
+        if key in _S2S_WELCOME_FILL_INFLIGHT:
+            return
+        if _S2S_WELCOME_FILL_COOLDOWN_UNTIL.get(key, 0.0) > time.monotonic():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        _S2S_WELCOME_FILL_INFLIGHT.add(key)
+        task = loop.create_task(
+            _fill_s2s_welcome(key=key, agent_id=agent_id, text=text, voice=voice, rate=int(rate)))
+        task.add_done_callback(lambda _t: _S2S_WELCOME_FILL_INFLIGHT.discard(key))
+    except Exception as exc:
+        logger.warning(f"S2S cached greeting fill scheduling skipped: {exc}")
 
 
 def _inject_end_call_tool(api_tools, *, scope, nodes, description=None):
@@ -1612,7 +1670,86 @@ class TaskManager(BaseManager):
         await self._report_stream_connect()
         self.stream_sid = self.tools["input"].get_stream_sid()
         await self.tools["output"].set_stream_sid(self.stream_sid)
+        await self._hydrate_contact_context()
         return True
+
+    async def _hydrate_contact_context(self) -> None:
+        """Merge per-contact variables into the live prompts. Best-effort, never raises.
+
+        Carrier legs open on a static socket URL, so context_data holds no
+        contact variables yet. The input handler captured caller/dialed
+        numbers from the start event; match the platform execution for this
+        call and re-render the welcome + system prompt so {placeholders}
+        (student_name, outstanding, …) speak per-contact data.
+
+        Numbers can lag a synthetic stream_sid (minted so the greeting is
+        never skipped), so poll briefly before giving up.
+        """
+        try:
+            from voiceai.platform.engine_hook import hydrate_contact_variables
+
+            store = (self.kwargs or {}).get("platform_store")
+            if store is None:
+                logger.info("Contact hydration skipped: no platform store on this call")
+                return
+            if not isinstance(self.context_data, dict):
+                # Relay legs open with context_data=None (static socket URL);
+                # without a dict there is nowhere to merge contact variables.
+                self.context_data = {}
+            tools_input = (self.tools or {}).get("input")
+            to_number = from_number = None
+            for _attempt in range(30):
+                live_recipient = (self.context_data or {}).get("recipient_data") or {}
+                to_number = (
+                    live_recipient.get("to_number")
+                    or getattr(tools_input, "dialed_number", None)
+                    or live_recipient.get("dialed_number")
+                )
+                from_number = (
+                    live_recipient.get("from_number")
+                    or getattr(tools_input, "caller_number", None)
+                    or live_recipient.get("caller_number")
+                )
+                if to_number:
+                    break
+                await asyncio.sleep(0.1)
+            if isinstance(self.context_data, dict):
+                recipient_data = self.context_data.setdefault("recipient_data", {})
+                if isinstance(recipient_data, dict):
+                    if to_number and not recipient_data.get("to_number"):
+                        recipient_data["to_number"] = to_number
+                    if from_number and not recipient_data.get("from_number"):
+                        recipient_data["from_number"] = from_number
+            assistant_id = (self.kwargs or {}).get("assistant_id") or getattr(self, "assistant_id", None)
+            if not to_number:
+                logger.info("Contact hydration skipped: no caller number known after start")
+                return
+            logger.info(f"Contact hydration looking up agent={assistant_id} to={to_number}")
+            matched = await hydrate_contact_variables(
+                store, agent_id=assistant_id, to_number=to_number, context_data=self.context_data
+            )
+            if matched is None:
+                logger.info(f"Contact hydration found no execution for agent={assistant_id} to={to_number}")
+                return
+            if isinstance((self.kwargs or {}).get("agent_welcome_message"), str):
+                self.kwargs["agent_welcome_message"] = update_prompt_with_context(
+                    self.kwargs["agent_welcome_message"], self.context_data
+                )
+            if isinstance(getattr(self, "prompts", None), dict) and isinstance(
+                self.prompts.get("system_prompt"), str
+            ):
+                self.prompts["system_prompt"] = update_prompt_with_context(
+                    self.prompts["system_prompt"], self.context_data
+                )
+            if isinstance(getattr(self, "system_prompt", None), dict) and isinstance(
+                self.system_prompt.get("content"), str
+            ):
+                self.system_prompt["content"] = update_prompt_with_context(
+                    self.system_prompt["content"], self.context_data
+                )
+            logger.info(f"Contact variables hydrated from {matched.execution_id}; prompts re-rendered")
+        except Exception as exc:
+            logger.warning(f"Contact hydration skipped: {exc}")
 
     async def _s2s_await_stream_sid(self):
         """Claim the stream id for an s2s call, which has no welcome audio to play.
@@ -8457,7 +8594,49 @@ class TaskManager(BaseManager):
             **options,
         )
 
+    async def _s2s_apply_post_connect_instructions(self, pre_connect_prompt: str) -> None:
+        """Push the hydrated system prompt to the live S2S session. Best-effort, never raises.
+
+        Parallel startup connects with unhydrated instructions; by now
+        _hydrate_contact_context has re-rendered self.system_prompt in place.
+        When it changed, forward it through the provider's session-update
+        mechanism (OpenAI session.update); providers without a live-update API
+        keep the local copy and the re-rendered greeting below carries the
+        variables into the first model turn instead.
+        """
+        try:
+            current = self.system_prompt
+            if isinstance(current, dict):
+                current = current.get("content", "")
+            if not isinstance(current, str) or not current.strip() or current == pre_connect_prompt:
+                return
+            s2s = (self.tools or {}).get("s2s")
+            if s2s is None:
+                return
+            update = getattr(s2s, "update_instructions", None)
+            if callable(update):
+                await update(current)
+                logger.info("S2S: post-connect instructions updated with hydrated contact variables")
+            else:
+                try:
+                    s2s.system_prompt = current
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning(f"S2S: post-connect instructions update skipped: {exc}")
+
     async def _run_s2s_conversation(self):
+        # Carrier legs only: snapshot the pre-connect instructions. The provider is
+        # built and connected IMMEDIATELY (no stream_ready wait): contact hydration
+        # runs concurrently in message_task_new/_s2s_await_stream_sid, and its
+        # re-rendered prompt is pushed post-connect via _s2s_apply_post_connect_instructions.
+        # Browser/turn-based legs never wait (their context arrives another way).
+        carrier_leg = not self.turn_based_conversation and not self.is_web_based_call
+        pre_connect_prompt = ""
+        if carrier_leg:
+            pre_connect_prompt = self.system_prompt
+            if isinstance(pre_connect_prompt, dict):
+                pre_connect_prompt = pre_connect_prompt.get("content", "")
         s2s = self._build_s2s_provider()
         self.tools["s2s"] = s2s
         self._s2s_input = self._s2s_input_format()
@@ -8501,6 +8680,17 @@ class TaskManager(BaseManager):
             f"model_in={s2s.input_sample_rate} model_out={s2s.output_sample_rate}"
         )
 
+        if carrier_leg:
+            # Hydration ran concurrently with connect above: wait for it here so the
+            # welcome read below already carries contact variables, then push the
+            # re-rendered instructions to the live session (session.update path;
+            # providers without one fall back to the greeting re-render below).
+            try:
+                await asyncio.wait_for(self._s2s_stream_ready.wait(), timeout=S2S_STREAM_SID_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning("S2S: stream not ready after connect; instructions may lack contact variables")
+            await self._s2s_apply_post_connect_instructions(pre_connect_prompt)
+
         welcome = (self.kwargs.get("agent_welcome_message") or "").strip()
         if welcome and not self.turn_based_conversation and not self.is_web_based_call:
             # The output handler drops every packet until it holds the stream id, so a
@@ -8526,7 +8716,7 @@ class TaskManager(BaseManager):
                 self.conversation_history.append_welcome_message(welcome)
                 await self.buffered_output_queue.put(
                     {
-                        "data": self._s2s_encode_output(cached_greeting),
+                        "data": await self._s2s_encode_output(cached_greeting),
                         "meta_info": self._s2s_meta(
                             message_category="agent_welcome_message",
                             is_first_chunk=True,
@@ -8670,7 +8860,7 @@ class TaskManager(BaseManager):
                 continue
 
             # WB-3c: Talko mulaw-8k decode + provider-rate resample, logged once.
-            pcm = self._s2s_encode_input(data)
+            pcm = await self._s2s_encode_input(data)
 
             try:
                 await s2s.send_audio(pcm)
@@ -8681,14 +8871,17 @@ class TaskManager(BaseManager):
             sent += 1
         logger.info(f"S2S ingest loop exited | sent={sent} discarded={discarded}")
 
-    def _s2s_encode_input(self, data: bytes) -> bytes:
+    async def _s2s_encode_input(self, data: bytes) -> bytes:
         """Caller-leg bytes → provider-rate PCM, verifying the Talko encode contract.
 
         The Talko mulaw-8k leg must decode via ulaw_to_pcm and then resample to
         the provider rate; anything else on a Talko leg is logged loudly but
         still forwarded (the tolerant-input rescue stays intact downstream).
-        Bytes/frame are logged once per call.
+        Bytes/frame are logged once per call. The scipy resample runs in a
+        worker thread so per-chunk encodes never stall the event loop; each
+        encode logs its ms at debug level.
         """
+        encode_started = time.perf_counter()
         encoding = self._s2s_input.encoding
         in_rate = self._s2s_input.sample_rate
         try:
@@ -8707,7 +8900,7 @@ class TaskManager(BaseManager):
         out = pcm
         model_rate = self.tools["s2s"].input_sample_rate
         if in_rate != model_rate:
-            out = resample(pcm, model_rate, format="pcm", original_sample_rate=in_rate)
+            out = await aresample(pcm, model_rate, format="pcm", original_sample_rate=in_rate)
         if not getattr(self, "_s2s_encode_logged", False):
             self._s2s_encode_logged = True
             logger.info(
@@ -8718,6 +8911,12 @@ class TaskManager(BaseManager):
                 len(out),
                 model_rate,
             )
+        logger.debug(
+            "S2S ingest encode done | ms=%.1f in_bytes=%d out_bytes=%d",
+            (time.perf_counter() - encode_started) * 1000,
+            len(data),
+            len(out),
+        )
         return out
 
     def _s2s_mark_progress(self) -> dict:
@@ -8777,7 +8976,7 @@ class TaskManager(BaseManager):
                     if callable(reopen):
                         reopen("new s2s turn")
                     self.interruption_manager.on_agent_speech_started(self._s2s_turn_seq)
-                chunk = self._s2s_encode_output(event.data)
+                chunk = await self._s2s_encode_output(event.data)
                 self._s2s_extend_playout(chunk)
                 await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
                 self.last_transmitted_timestamp = time.time()
@@ -8921,16 +9120,38 @@ class TaskManager(BaseManager):
                     )
                     return pcm
             logger.info("S2S cached greeting miss | falling back to model-spoken greeting")
+            if voice:
+                # Lazy once-per-agent pre-render for the NEXT call: a background
+                # task renders this greeting via TTS and caches it in-process.
+                # Never blocks this greeting (None is already the answer here).
+                _schedule_s2s_welcome_fill(
+                    agent_id=str(getattr(self, "assistant_id", "")),
+                    text=text,
+                    voice=voice,
+                    rate=int(rate),
+                )
             return None
         except Exception as e:
             logger.warning(f"S2S cached greeting lookup failed, using model greeting: {e}")
             return None
 
-    def _s2s_encode_output(self, pcm):
+    async def _s2s_encode_output(self, pcm: bytes) -> bytes:
+        """Model-rate PCM → leg bytes, with the resample off the event loop."""
+        encode_started = time.perf_counter()
         s2s = self.tools["s2s"]
+        in_bytes = len(pcm)
         if self._s2s_output.sample_rate != s2s.output_sample_rate:
-            pcm = resample(pcm, self._s2s_output.sample_rate, format="pcm", original_sample_rate=s2s.output_sample_rate)
-        return pcm_to_ulaw(pcm) if self._s2s_output.encoding is s2s_events.AudioEncoding.MULAW else pcm
+            pcm = await aresample(
+                pcm, self._s2s_output.sample_rate, format="pcm", original_sample_rate=s2s.output_sample_rate
+            )
+        out = pcm_to_ulaw(pcm) if self._s2s_output.encoding is s2s_events.AudioEncoding.MULAW else pcm
+        logger.debug(
+            "S2S output encode done | ms=%.1f in_bytes=%d out_bytes=%d",
+            (time.perf_counter() - encode_started) * 1000,
+            in_bytes,
+            len(out),
+        )
+        return out
 
     def _s2s_meta(self, **extra):
         meta = {

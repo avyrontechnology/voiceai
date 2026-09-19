@@ -30,6 +30,8 @@ Env:
 """
 
 import os
+import re
+from typing import Any, Dict, Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -64,16 +66,27 @@ class TalkoCallDetails(BaseModel):
     agent_id: str = Field(..., description="voiceai agent id that will handle the call.")
     recipient_phone_number: str = Field(..., description="Customer number to dial (e.g. 919812345678).")
     caller_did: str = Field(default="", description="Override for the dedicated DID (defaults to TALKO_AI_DID).")
-    partner_id: str = Field(default="", description="Override for TALKO_PARTNER_ID.")
+    partner_id: str = Field(default="", description="Talko partner account id (informational; engine resolves credentials per partner from DB).")
     talko_api_key: str = Field(
         default="",
         description="Talko partner API key for this call (defaults to TALKO_API_KEY env). Lets each UI user dial with their own key.",
+    )
+    talko_api_base_url: str = Field(
+        default="",
+        description="talk-service base override for this call (defaults to TALKO_API_BASE_URL env). Set per partner from DB.",
+    )
+    variables: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-contact dynamic data (student_name, outstanding, ...). Forwarded in context_data so the relay/engine can hydrate prompts.",
     )
 
 
 class TalkoHangupDetails(BaseModel):
     call_id: str = Field(..., description="Vendor call_id to hang up (from /talko/call response when present).")
     talko_api_key: str = Field(default="", description="Talko partner API key (defaults to TALKO_API_KEY env).")
+    talko_api_base_url: str = Field(
+        default="", description="talk-service base override (defaults to TALKO_API_BASE_URL env)."
+    )
 
 
 # Kept for API docs that referenced the old name; the body shape is the shared envelope.
@@ -96,9 +109,24 @@ def _trunk_error(action: str, exc: httpx.HTTPError) -> TelephonyError:
     return TelephonyError(f"talko-service unreachable during {action}: {exc}", provider="talko", cause=exc)
 
 
+def _page_title(body: str) -> Optional[str]:
+    title = re.search(r"<title>(.*?)</title>", body or "", re.IGNORECASE | re.DOTALL)
+    return title.group(1).strip() if title else None
+
+
 def _rejected(action: str, resp: httpx.Response) -> TelephonyError:
+    body = resp.text or ""
+    lowered = body.lstrip()[:15].lower()
+    if lowered.startswith("<!doctype") or lowered.startswith("<html"):
+        # Render/proxy outage pages (e.g. "Service Suspended"): name the
+        # page title instead of dumping HTML soup into the dial error.
+        detail = "talko-service rejected {}: HTTP {} ({})".format(
+            action, resp.status_code, _page_title(body) or "non-JSON error page"
+        )
+    else:
+        detail = f"talko-service rejected {action}: {body[:500]}"
     return TelephonyError(
-        f"talko-service rejected {action}: {resp.text[:500]}",
+        detail,
         provider="talko",
         details={"upstream_status": resp.status_code},
     )
@@ -122,8 +150,21 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
     api_key = _require_key(call_details.talko_api_key)
     if not call_details.agent_id or not call_details.recipient_phone_number:
         raise ConfigurationError("agent_id and recipient_phone_number are required.", path="agent_id")
+    # talko-service requires digits-only DIDs (10-15 digits); callers often
+    # paste E.164 with a leading '+' or spaces/dashes — normalize instead of
+    # failing the dial with invalid_dedicated_did_format.
+    did = re.sub(r"\D", "", did or "")
     if not did:
         raise ConfigurationError("No dedicated DID: set caller_did or TALKO_AI_DID.", path="TALKO_AI_DID")
+    recipient_digits = re.sub(r"\D", "", call_details.recipient_phone_number or "")
+    if not 10 <= len(recipient_digits) <= 15 or (
+        recipient_digits.startswith("91") and len(recipient_digits) != 12
+    ):
+        raise ConfigurationError(
+            "recipient_phone_number '{}' is not dialable: need 10-15 digits"
+            " (91 numbers need 91 + 10 digits).".format(call_details.recipient_phone_number),
+            path="recipient_phone_number",
+        )
 
     # context_data carries PSTN numbers for the engine's execution log (additive:
     # talko-service relay forwards unknown keys; engine reads recipient_data
@@ -138,6 +179,7 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
             "to_number": call_details.recipient_phone_number,
             "from_number": did,
             "dedicated_did": did,
+            "variables": dict(call_details.variables or {}),
         },
     }
     if partner_id:
@@ -147,9 +189,10 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
             raise ConfigurationError("partner_id must be numeric.", path="partner_id")
 
     logger.info("talko dial | agent=%s to=%s did=%s", call_details.agent_id, call_details.recipient_phone_number, did)
+    api_base = (call_details.talko_api_base_url or talko_api_base_url).rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post("{}/call".format(talko_api_base_url), headers=_headers(api_key), json=body)
+            resp = await client.post("{}/call".format(api_base), headers=_headers(api_key), json=body)
     except httpx.HTTPError as e:
         raise _trunk_error("dial", e) from e
     if resp.status_code >= 400:
@@ -169,10 +212,11 @@ async def make_call(call_details: TalkoCallDetails, _auth: None = Depends(requir
 )
 async def hangup_call(details: TalkoHangupDetails, _auth: None = Depends(require_telephony_api_key)):
     api_key = _require_key(details.talko_api_key)
+    api_base = (details.talko_api_base_url or talko_api_base_url).rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
-                "{}/call/hangup".format(talko_api_base_url),
+                "{}/call/hangup".format(api_base),
                 headers=_headers(api_key),
                 json={"call_id": details.call_id, "enable_ai_bridge": True},
             )
@@ -193,6 +237,11 @@ async def talko_health():
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get("{}/health".format(talko_api_base_url))
-        return {"talko_reachable": resp.status_code == 200, "talko_status": resp.json()}
+        try:
+            status: Any = resp.json()
+        except ValueError:
+            # Outage pages (Render suspension, proxy errors) are HTML, not JSON.
+            status = "HTTP {} ({})".format(resp.status_code, _page_title(resp.text) or "non-JSON response")
+        return {"talko_reachable": resp.status_code == 200, "talko_status": status}
     except httpx.HTTPError as e:
         raise _trunk_error("health check", e) from e

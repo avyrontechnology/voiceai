@@ -107,6 +107,30 @@ class SimulateCallRequest(BaseModel):
     )
 
 
+class PlaceCallRequest(BaseModel):
+    agent_id: str = Field(..., min_length=1)
+    to_number: str = Field(..., min_length=1)
+    from_number: Optional[str] = Field(
+        None, description="Caller DID override for talko-dialed calls (defaults to trunk TALKO_AI_DID)."
+    )
+    variables: Dict[str, Any] = Field(default_factory=dict)
+    provider: Literal["simulated", "talko"] = Field(
+        "simulated",
+        description="'talko' dials for real via the Talko trunk (Tata Tele); 'simulated' runs the offline runner.",
+    )
+    talko_api_key: Optional[str] = Field(
+        None,
+        description="Talko partner API key for this call (defaults to trunk TALKO_API_KEY). Never persisted.",
+    )
+    partner_id: Optional[str] = Field(
+        None,
+        description="Talko partner account for this call. Credentials resolve from the DB partner record; explicit talko_api_key/from_number win.",
+    )
+    delay_scale: float = Field(
+        0.5, ge=0, description="Simulated provider only: 0 = complete inline (tests), >0 = background."
+    )
+
+
 class BatchEntry(BaseModel):
     to_number: str = Field(..., min_length=1)
     variables: Dict[str, Any] = Field(default_factory=dict)
@@ -144,6 +168,10 @@ class CreateBatchRequest(BaseModel):
         None,
         description="Talko partner API key for this batch's dials (defaults to trunk TALKO_API_KEY). Lets each user dial with their own key.",
     )
+    partner_id: Optional[str] = Field(
+        None,
+        description="Talko partner account for this batch's dials. Resolved from DB partner records; explicit talko_api_key/from_number win.",
+    )
 
 
 class Batch(BaseModel):
@@ -158,6 +186,7 @@ class Batch(BaseModel):
     provider: Literal["simulated", "talko"] = "simulated"
     from_number: Optional[str] = None
     talko_api_key: Optional[str] = None
+    partner_id: Optional[str] = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -165,6 +194,64 @@ class Batch(BaseModel):
 
 class BatchListResponse(BaseModel):
     batches: List[Batch]
+
+
+class TalkoPartnerConfig(BaseModel):
+    """Per-partner Talko trunk credentials, stored in DB (not env).
+
+    partner_id is the Talko/Tata partner account id (e.g. "2") and the
+    natural key. The plaintext key must be retrievable (the engine hands it
+    to the trunk per dial), so API responses never include it — see
+    TalkoPartnerView. Treat the store as a secret boundary.
+    """
+
+    partner_id: str = Field(..., min_length=1)
+    display_name: str = ""
+    talko_api_base_url: Optional[str] = Field(
+        None, description="talk-service base override for this partner (defaults to trunk TALKO_API_BASE_URL)."
+    )
+    talko_api_key: str = Field(..., min_length=1)
+    default_did: Optional[str] = Field(None, description="Default caller DID for this partner's dials.")
+    vendor_config_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CreateTalkoPartnerRequest(BaseModel):
+    partner_id: str = Field(..., min_length=1)
+    display_name: str = ""
+    talko_api_base_url: Optional[str] = None
+    talko_api_key: str = Field(..., min_length=1)
+    default_did: Optional[str] = None
+    vendor_config_id: Optional[str] = None
+
+
+class UpdateTalkoPartnerRequest(BaseModel):
+    display_name: Optional[str] = None
+    talko_api_base_url: Optional[str] = None
+    talko_api_key: Optional[str] = Field(
+        None, description="Omitted or empty keeps the stored key; non-empty rotates it."
+    )
+    default_did: Optional[str] = None
+    vendor_config_id: Optional[str] = None
+
+
+class TalkoPartnerView(BaseModel):
+    """Secret-free projection of a partner record for API responses."""
+
+    partner_id: str
+    display_name: str = ""
+    talko_api_base_url: Optional[str] = None
+    default_did: Optional[str] = None
+    vendor_config_id: Optional[str] = None
+    key_configured: bool = False
+    key_hint: Optional[str] = Field(None, description="Last 4 chars of the stored key, for operator sanity checks.")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class TalkoPartnerListResponse(BaseModel):
+    partners: List[TalkoPartnerView]
 
 
 class CreatePhoneNumberRequest(BaseModel):

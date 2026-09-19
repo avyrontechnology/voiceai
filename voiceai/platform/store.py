@@ -24,6 +24,7 @@ from voiceai.platform.models import (
     PhoneNumber,
     SessionRecord,
     SubAccount,
+    TalkoPartnerConfig,
     Tool,
     User,
     VectorStoreConfig,
@@ -92,6 +93,7 @@ class MemoryStore:
             "sessions": {},
             "invites": {},
             "auth_events": {},
+            "talko_partners": {},
         }
         self._wallet = Wallet().model_dump(mode="json")
         self._ledger: List[Dict[str, Any]] = []
@@ -267,6 +269,23 @@ class MemoryStore:
             items = [b for b in items if b.agent_id == agent_id]
         items.sort(key=lambda b: b.created_at, reverse=True)
         return items
+
+    # -- talko partners (per-partner trunk credentials; DB, not env) -----------------
+
+    async def save_talko_partner(self, partner: TalkoPartnerConfig) -> None:
+        self._put("talko_partners", partner.partner_id, partner.model_dump(mode="json"))
+
+    async def get_talko_partner(self, partner_id: str) -> Optional[TalkoPartnerConfig]:
+        raw = self._get("talko_partners", partner_id)
+        return TalkoPartnerConfig(**raw) if raw else None
+
+    async def list_talko_partners(self) -> List[TalkoPartnerConfig]:
+        items = [TalkoPartnerConfig(**raw) for raw in self._all("talko_partners")]
+        items.sort(key=lambda p: p.partner_id)
+        return items
+
+    async def delete_talko_partner(self, partner_id: str) -> bool:
+        return self._delete("talko_partners", partner_id)
 
     # -- phone numbers -------------------------------------------------------------
 
@@ -752,6 +771,21 @@ class RedisStore(MemoryStore):
     async def get_batch(self, batch_id: str) -> Optional[Batch]:
         raw = await self._read("batches", batch_id)
         return Batch(**raw) if raw else None
+
+    async def save_talko_partner(self, partner: TalkoPartnerConfig) -> None:
+        await self._write("talko_partners", partner.partner_id, partner.model_dump(mode="json"))
+
+    async def get_talko_partner(self, partner_id: str) -> Optional[TalkoPartnerConfig]:
+        raw = await self._read("talko_partners", partner_id)
+        return TalkoPartnerConfig(**raw) if raw else None
+
+    async def list_talko_partners(self) -> List[TalkoPartnerConfig]:
+        items = [TalkoPartnerConfig(**raw) for raw in await self._list_collection("talko_partners")]
+        items.sort(key=lambda p: p.partner_id)
+        return items
+
+    async def delete_talko_partner(self, partner_id: str) -> bool:
+        return (await self._redis.delete(self._key("talko_partners", partner_id))) > 0
 
     async def save_number(self, number: PhoneNumber) -> None:
         await self._write("numbers", number.number_id, number.model_dump(mode="json"))

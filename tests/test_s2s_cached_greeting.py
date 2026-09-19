@@ -40,14 +40,14 @@ def test_cache_hit_returns_pcm_at_model_rate():
             _welcome_cache._CACHE.pop(key, None)
 
 
-def test_hit_encodes_like_model_audio():
+async def test_hit_encodes_like_model_audio():
     """Cached PCM through _s2s_encode_output == mulaw 8k, same as deltas."""
     tm = make_tm(io_provider="talko")
     tm.assistant_id = "agent-1"
     pcm24k = b"\x01\x02" * 2400
     key = _seed("agent-1", "Good day!", pcm24k)
     try:
-        out = tm._s2s_encode_output(tm._s2s_cached_welcome_pcm("Good day!"))
+        out = await tm._s2s_encode_output(tm._s2s_cached_welcome_pcm("Good day!"))
         assert len(out) == len(pcm24k) // 6  # 24k PCM16 -> 8k mulaw
     finally:
         _welcome_cache._CACHE.pop(key, None)

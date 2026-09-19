@@ -50,7 +50,7 @@ async def test_dial_posts_agent_and_number(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     execution = await dial_via_talko(
-        store, agent_id="agent_1", to_number="+9191", from_number="91804",
+        store, agent_id="agent_1", to_number="+919812345678", from_number="91804",
         trunk_url="http://trunk:8004",
     )
     assert execution.status == ExecutionStatus.IN_PROGRESS
@@ -59,7 +59,7 @@ async def test_dial_posts_agent_and_number(monkeypatch):
     assert call["url"] == "http://trunk:8004/talko/call"
     assert call["json"] == {
         "agent_id": "agent_1",
-        "recipient_phone_number": "+9191",
+        "recipient_phone_number": "+919812345678",
         "caller_did": "91804",
     }
     saved = await store.get_execution(execution.execution_id)
@@ -70,7 +70,7 @@ async def test_dial_forwards_per_request_api_key(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     await dial_via_talko(
-        store, agent_id="a", to_number="+9191", talko_api_key="tkp_live_ui",
+        store, agent_id="a", to_number="+919812345678", talko_api_key="tkp_live_ui",
     )
     assert FakeAsyncClient.posted[0]["json"]["talko_api_key"] == "tkp_live_ui"
 
@@ -78,7 +78,7 @@ async def test_dial_forwards_per_request_api_key(monkeypatch):
 async def test_dial_omits_api_key_when_absent(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
-    await dial_via_talko(store, agent_id="a", to_number="+9191")
+    await dial_via_talko(store, agent_id="a", to_number="+919812345678")
     assert "talko_api_key" not in FakeAsyncClient.posted[0]["json"]
 
 
@@ -86,7 +86,7 @@ async def test_dial_trunk_refusal_marks_failed(monkeypatch):
     _patch(monkeypatch)
     FakeAsyncClient.next_post = FakeResponse(500, text="down")
     store = MemoryStore()
-    execution = await dial_via_talko(store, agent_id="a", to_number="+9191")
+    execution = await dial_via_talko(store, agent_id="a", to_number="+919812345678")
     assert execution.status == ExecutionStatus.FAILED
     assert "down" in (execution.summary or "")
 
@@ -95,7 +95,7 @@ async def test_dial_unreachable_marks_failed(monkeypatch):
     _patch(monkeypatch)
     FakeAsyncClient.raise_on_post = httpx.ConnectError("nope")
     store = MemoryStore()
-    execution = await dial_via_talko(store, agent_id="a", to_number="+9191")
+    execution = await dial_via_talko(store, agent_id="a", to_number="+919812345678")
     assert execution.status == ExecutionStatus.FAILED
 
 
@@ -104,7 +104,7 @@ async def test_run_batch_talko_dials_entries(monkeypatch):
     store = MemoryStore()
     batch = Batch(
         batch_id="b1", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
-        entries=[BatchEntry(to_number="+911"), BatchEntry(to_number="+912")],
+        entries=[BatchEntry(to_number="+919812345671"), BatchEntry(to_number="+919812345672")],
         provider="talko", from_number="91804",
     )
     await store.save_batch(batch)
@@ -119,7 +119,7 @@ async def test_run_batch_simulated_unchanged(monkeypatch):
     store = MemoryStore()
     batch = Batch(
         batch_id="b2", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
-        entries=[BatchEntry(to_number="+911")],
+        entries=[BatchEntry(to_number="+919812345671")],
     )
     await store.save_batch(batch)
     out = await run_batch(store, "b2", delay_scale=0)

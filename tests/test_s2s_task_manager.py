@@ -261,18 +261,18 @@ class TestAudioIngest:
 
 
 class TestAudioOutput:
-    def test_model_audio_is_downsampled_and_mulaw_encoded_for_carriers(self):
+    async def test_model_audio_is_downsampled_and_mulaw_encoded_for_carriers(self):
         tm = make_tm(io_provider="plivo", out_rate=24000)
-        encoded = tm._s2s_encode_output(_silence_pcm(480))  # 20ms @24k
+        encoded = await tm._s2s_encode_output(_silence_pcm(480))  # 20ms @24k
         # 480 samples @24k -> 160 samples @8k -> 160 mu-law bytes
         assert len(encoded) == 160
         assert audioop.ulaw2lin(encoded, 2) == _silence_pcm(160)
 
-    def test_web_output_stays_pcm_at_the_playback_rate(self):
+    async def test_web_output_stays_pcm_at_the_playback_rate(self):
         # Model already emits 24k and the browser plays 24k, so nothing is resampled.
         tm = make_tm(io_provider="default", web=True, out_rate=24000)
         pcm = _silence_pcm(480)
-        assert tm._s2s_encode_output(pcm) == pcm
+        assert await tm._s2s_encode_output(pcm) == pcm
 
     def test_hangup_audio_is_tagged_so_it_bypasses_interruption_gating(self):
         tm = make_tm()

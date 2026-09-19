@@ -40,6 +40,8 @@ class TalkoInputHandler(TwilioInputHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.io_provider = "talko"
+        self.caller_number = None
+        self.dialed_number = None
 
     async def call_start(self, packet: dict) -> None:
         start = packet.get("start") if isinstance(packet, dict) else None
@@ -67,6 +69,24 @@ class TalkoInputHandler(TwilioInputHandler):
         )
         if self.stream_sid is None:
             logger.warning(f"talko receiver got start without stream id: {str(packet)[:300]!r}")
+        # Tata's start carries only ids on some relays, full caller/called on
+        # others. Capture both legs when present so the engine can match the
+        # platform execution (per-contact variables) for this call.
+        custom = start.get("customParameters") if isinstance(start.get("customParameters"), dict) else {}
+        self.caller_number = _first_present(
+            start.get("caller"), start.get("from"), start.get("from_number"),
+            start.get("caller_number"), start.get("calling_number"), start.get("callerNumber"),
+            custom.get("caller"), custom.get("from_number"),
+            packet.get("caller") if isinstance(packet, dict) else None,
+            getattr(self, "caller_number", None),
+        )
+        self.dialed_number = _first_present(
+            start.get("called"), start.get("to"), start.get("to_number"),
+            start.get("called_number"), start.get("dialed_number"), start.get("destination"),
+            custom.get("called"), custom.get("to_number"), custom.get("dialed_number"),
+            packet.get("to_number") if isinstance(packet, dict) else None,
+            getattr(self, "dialed_number", None),
+        )
 
     async def _handle_non_telephony_packet(self, packet: Any, raw_message: str) -> bool:
         if await super()._handle_non_telephony_packet(packet, raw_message):

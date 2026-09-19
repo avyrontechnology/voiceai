@@ -24,7 +24,7 @@ from voiceai.platform.models import (
     utcnow,
 )
 from voiceai.platform.store import MemoryStore
-from voiceai.platform.talko_dialer import DIAL_CONCURRENCY, dial_via_talko
+from voiceai.platform.talko_dialer import DIAL_CONCURRENCY, dial_via_talko, resolve_talko_partner_credentials
 
 logger = configure_logger(__name__)
 
@@ -201,6 +201,17 @@ async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5)
 
     use_talko = getattr(batch, "provider", "simulated") == "talko"
     semaphore = asyncio.Semaphore(max(1, DIAL_CONCURRENCY)) if use_talko else None
+    # Resolve partner credentials once (fail fast on unknown partner before
+    # dialing any entry); per-entry dials reuse the resolved values.
+    batch_key: Optional[str] = getattr(batch, "talko_api_key", None)
+    batch_did: Optional[str] = getattr(batch, "from_number", None)
+    batch_base: Optional[str] = None
+    batch_partner: Optional[str] = getattr(batch, "partner_id", None)
+    if use_talko and batch_partner:
+        batch_key, batch_did, batch_base = await resolve_talko_partner_credentials(
+            store, partner_id=batch_partner, explicit_key=batch_key,
+            explicit_did=batch_did, explicit_base=None,
+        )
 
     async def run_entry(entry) -> None:
         current = await store.get_batch(batch_id)
@@ -213,8 +224,10 @@ async def run_batch(store: MemoryStore, batch_id: str, delay_scale: float = 0.5)
                     store,
                     agent_id=batch.agent_id,
                     to_number=entry.to_number,
-                    from_number=getattr(batch, "from_number", None),
-                    talko_api_key=getattr(batch, "talko_api_key", None),
+                    from_number=batch_did,
+                    talko_api_key=batch_key,
+                    talko_api_base_url=batch_base,
+                    partner_id=batch_partner,
                     variables=entry.variables,
                     batch_id=batch_id,
                 )

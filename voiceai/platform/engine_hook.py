@@ -5,9 +5,11 @@ Execution record. This helper never raises: telemetry must not break a
 live call, so failures are logged and `None` is returned instead.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from datetime import datetime, timedelta, timezone
+
+import time
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
@@ -18,9 +20,22 @@ from voiceai.platform.models import (
     new_id,
     utcnow,
 )
-from voiceai.platform.store import MemoryStore
+from voiceai.platform.store import MemoryStore, normalize_phone_digits
 
 logger = configure_logger(__name__)
+
+# Execution states that still describe a live/upcoming call. Terminal rows
+# (completed/failed/no-answer/busy/canceled) never donate variables.
+_NON_TERMINAL_EXECUTION_STATUSES = {
+    ExecutionStatus.QUEUED,
+    ExecutionStatus.RINGING,
+    ExecutionStatus.IN_PROGRESS,
+}
+
+# RC5: in-process TTL for the hydration scan (see _find_contact_execution).
+_CONTACT_EXECUTION_CACHE: Dict[Tuple[str, str], Tuple[Optional[Execution], float]] = {}
+_CONTACT_EXECUTION_CACHE_TTL_S = 10.0
+_CONTACT_EXECUTION_CACHE_MAX = 1000
 
 _ROLE_MAP = {"assistant": "agent", "user": "user"}
 
@@ -83,6 +98,7 @@ def _summarize_latency(latency_dict: Any) -> Optional[LatencyBreakdown]:
 
 
 def _numbers_from_context(context_data: Any) -> Dict[str, Optional[str]]:
+
     """Extract PSTN numbers from context_data recipient_data (pre-call webhook convention).
 
     Supports from_number/to_number plus legacy user_number/agent_number aliases.
@@ -172,6 +188,12 @@ async def record_engine_execution(
             latency=latency,
             ended_at=ended_at or utcnow(),
         )
+        if is_web_based_call is not True and to_number:
+            # Carrier legs: carry the dialed contact's variables onto the
+            # record so history shows per-contact context, not vars: {}.
+            dialed = await _find_contact_execution(store, agent_id=agent_id, to_number=to_number)
+            if dialed is not None and dialed.variables:
+                execution.variables = dict(dialed.variables)
         if started_at is not None:
             execution.started_at = started_at
         execution.duration_s = round((execution.ended_at - execution.started_at).total_seconds(), 2)
@@ -180,4 +202,86 @@ async def record_engine_execution(
         return execution
     except Exception as exc:  # telemetry fallback: log and continue the call path
         logger.warning(f"Failed to log engine execution for agent {agent_id}: {exc}")
+        return None
+
+
+async def _find_contact_execution(store: Any, *, agent_id: str, to_number: Optional[str]) -> Optional[Execution]:
+    """Newest non-terminal outbound execution for (agent, number), digit-insensitive.
+
+    Shared by live hydration (prompt variables) and the execution log (record
+    variables). Returns None when nothing matches; raises only for store
+    failures (callers convert to a skip).
+
+    RC5: the per-call scan (list_executions limit=50) is cached in-process for
+    10s keyed by (agent_id, digit-normalized number), bounded in size. Both
+    hits and misses are cached — executions are created at dial time, before
+    the voice socket opens, so a 10s window cannot serve a newer same-number
+    row to an in-flight hydration. Store failures are never cached. Cached
+    rows are read-only to callers (variables are setdefault-copied out).
+    """
+    needle = normalize_phone_digits(to_number or "")
+    if not needle:
+        return None
+    cache_key = (agent_id, needle)
+    now = time.monotonic()
+    cached = _CONTACT_EXECUTION_CACHE.get(cache_key)
+    if cached is not None:
+        matched, expires_at = cached
+        if now < expires_at:
+            logger.debug("contact execution cache hit | agent=%s needle=%s", agent_id, needle)
+            return matched
+        _CONTACT_EXECUTION_CACHE.pop(cache_key, None)
+    executions = await store.list_executions(agent_id=agent_id, limit=50) or []
+    candidates = [
+        e for e in executions
+        if getattr(e, "direction", "outbound") == "outbound"
+        and getattr(e, "status", None) in _NON_TERMINAL_EXECUTION_STATUSES
+        and normalize_phone_digits(getattr(e, "to_number", None) or "") == needle
+    ]
+    logger.info(f"Contact lookup scanned={len(executions)} needle={needle} "
+                f"statuses={sorted({str(getattr(e, 'status', None)) for e in executions})}")
+    matched: Optional[Execution] = None
+    if candidates:
+        candidates.sort(key=lambda e: str(getattr(e, "started_at", "") or ""), reverse=True)
+        matched = candidates[0]
+    if len(_CONTACT_EXECUTION_CACHE) >= _CONTACT_EXECUTION_CACHE_MAX:
+        _CONTACT_EXECUTION_CACHE.pop(next(iter(_CONTACT_EXECUTION_CACHE)), None)
+    _CONTACT_EXECUTION_CACHE[cache_key] = (matched, time.monotonic() + _CONTACT_EXECUTION_CACHE_TTL_S)
+    return matched
+
+
+async def hydrate_contact_variables(
+    store: Any,
+    *,
+    agent_id: str,
+    to_number: Optional[str],
+    context_data: Optional[Dict[str, Any]],
+) -> Optional[Execution]:
+    """Merge per-contact variables into the live call's context. Never raises.
+
+    Lead lists store dynamic data per entry on ``Execution.variables``. On
+    carrier legs the relay opens a static-URL socket and forwards only ids,
+    so the agent's ``{placeholders}`` would render empty. This finds the
+    newest non-terminal outbound execution for (agent, number, digit-insensitive)
+    and setdefault-merges its variables into ``context_data["recipient_data"]``
+    — the exact dict ``update_prompt_with_context`` renders from. Explicit
+    context values always win; returns the matched execution or None.
+    """
+    try:
+        if store is None or not agent_id or not to_number or not isinstance(context_data, dict):
+            return None
+        matched = await _find_contact_execution(store, agent_id=agent_id, to_number=to_number)
+        if matched is None:
+            return None
+        recipient = context_data.get("recipient_data")
+        if not isinstance(recipient, dict):
+            recipient = {}
+            context_data["recipient_data"] = recipient
+        for key, value in (getattr(matched, "variables", None) or {}).items():
+            recipient.setdefault(key, value)
+        logger.info(f"Hydrated contact variables | agent={agent_id} execution={matched.execution_id} "
+                    f"keys={sorted((matched.variables or {}).keys())}")
+        return matched
+    except Exception as exc:  # hydration fallback: log and continue without variables
+        logger.warning(f"Failed to hydrate contact variables for agent {agent_id}: {exc}")
         return None

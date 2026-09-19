@@ -26,9 +26,10 @@ import copy
 import json
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as redis
 from dotenv import load_dotenv
@@ -271,9 +272,27 @@ _ERROR_RESPONSES = {
 # Agent record storage (functions, not bound methods: tests replace `redis_client` at runtime)
 # ---------------------------------------------------------------------------------------------
 
+# RC5: tiny in-process TTL cache for the hottest Upstash read on the call path
+# (every voice socket loads its agent record). 60s TTL, bounded size, keyed by
+# agent_id. Errors are never cached, callers get deep copies (mutation
+# isolation), and every write path below invalidates. Auth decisions are never
+# cached — this only skips a config re-read, so the worst case is a config
+# edit taking up to 60s to reach new calls.
+_AGENT_RECORD_CACHE: Dict[str, Tuple[float, dict]] = {}
+_AGENT_RECORD_CACHE_TTL_S = 60.0
+_AGENT_RECORD_CACHE_MAX = 500
+
 
 async def load_agent_record(agent_id: str) -> dict:
     """The stored config for ``agent_id`` or ``AgentNotFoundError`` / ``StorageError``."""
+    now = time.monotonic()
+    cached = _AGENT_RECORD_CACHE.get(agent_id)
+    if cached is not None:
+        expires_at, record = cached
+        if now < expires_at:
+            logger.debug("agent record cache hit | agent=%s", agent_id)
+            return copy.deepcopy(record)
+        _AGENT_RECORD_CACHE.pop(agent_id, None)
     try:
         raw = await redis_client.get(agent_id)
     except Exception as exc:
@@ -288,6 +307,9 @@ async def load_agent_record(agent_id: str) -> dict:
         raise StorageError(f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc) from exc
     if not isinstance(record, dict):
         raise StorageError(f"stored config for agent {agent_id} is not an object", details={"agent_id": agent_id})
+    if len(_AGENT_RECORD_CACHE) >= _AGENT_RECORD_CACHE_MAX:
+        _AGENT_RECORD_CACHE.pop(next(iter(_AGENT_RECORD_CACHE)), None)
+    _AGENT_RECORD_CACHE[agent_id] = (time.monotonic() + _AGENT_RECORD_CACHE_TTL_S, copy.deepcopy(record))
     return record
 
 
@@ -298,6 +320,7 @@ async def store_agent_record(agent_id: str, record: dict) -> None:
         if is_cancellation(exc):
             raise
         raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+    _AGENT_RECORD_CACHE.pop(agent_id, None)
 
 
 async def agent_exists(agent_id: str) -> bool:
@@ -316,6 +339,7 @@ async def delete_agent_record(agent_id: str) -> None:
         if is_cancellation(exc):
             raise
         raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
+    _AGENT_RECORD_CACHE.pop(agent_id, None)
 
 
 async def generate_extraction_prompts(tasks: List[dict]) -> None:
@@ -830,12 +854,14 @@ async def websocket_endpoint(
                 call_context["recipient_data"]["to_number"] = to_number
         if call_context is not None:
             assistant_manager = AssistantManager(
-                agent_config, call_socket, agent_id, context_data=call_context, is_web_based_call=is_web_leg
+                agent_config, call_socket, agent_id, context_data=call_context, is_web_based_call=is_web_leg,
+                platform_store=getattr(websocket.app.state, "platform_store", None),
             )
         else:
             # No carrier numbers: legacy call shape (keeps test doubles without
             # context_data working; stored config and audio path untouched).
-            assistant_manager = AssistantManager(agent_config, call_socket, agent_id, is_web_based_call=is_web_leg)
+            assistant_manager = AssistantManager(agent_config, call_socket, agent_id, is_web_based_call=is_web_leg,
+                platform_store=getattr(websocket.app.state, "platform_store", None))
         async for index, task_output in assistant_manager.run(local=True):
             task_outputs.append(task_output)
             keys = sorted(task_output.keys()) if isinstance(task_output, dict) else type(task_output).__name__

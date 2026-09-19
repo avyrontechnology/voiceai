@@ -371,6 +371,16 @@ class OpenAIRealtimeS2S(BaseS2SProvider):
         await self._wait_for_response_done()
         await self._send(payload)
 
+    async def update_instructions(self, instructions: str) -> None:
+        """Push re-rendered instructions (e.g. hydrated contact variables) to the live session.
+
+        Reuses the connect-time session.update mechanism with the full session
+        config, so voice, VAD and tools stay exactly as negotiated; with no
+        turns yet _instructions() returns the new prompt verbatim.
+        """
+        self.system_prompt = instructions
+        await self._send({"type": "session.update", "session": self._build_session_config()})
+
     async def send_text(self, text: str) -> None:
         """User-typed chat turn: append as a caller message, then elicit a reply.
 

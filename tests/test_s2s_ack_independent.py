@@ -94,24 +94,24 @@ class TestTalkoEncodingContract:
         assert tm._s2s_input.encoding is s2s_events.AudioEncoding.MULAW
         assert tm._s2s_input.sample_rate == 8000
 
-    def test_mulaw_8k_in_yields_expected_16k_pcm_length(self):
+    async def test_mulaw_8k_in_yields_expected_16k_pcm_length(self):
         # 160 mu-law bytes (20ms @8k) -> 160 PCM samples -> 320 samples @16k -> 640 bytes.
         tm = make_tm(io_provider="talko", in_rate=16000)
-        out = tm._s2s_encode_input(pcm_to_ulaw(_silence_pcm(160)))
+        out = await tm._s2s_encode_input(pcm_to_ulaw(_silence_pcm(160)))
         assert len(out) == 640
 
-    def test_mulaw_8k_in_yields_expected_24k_pcm_length(self):
+    async def test_mulaw_8k_in_yields_expected_24k_pcm_length(self):
         # Same frame at a 24k provider: 160 samples @8k -> 480 samples @24k -> 960 bytes.
         tm = make_tm(io_provider="talko", in_rate=24000)
-        out = tm._s2s_encode_input(pcm_to_ulaw(_silence_pcm(160)))
+        out = await tm._s2s_encode_input(pcm_to_ulaw(_silence_pcm(160)))
         assert len(out) == 960
 
-    def test_encode_logs_bytes_per_frame_once(self, caplog):
+    async def test_encode_logs_bytes_per_frame_once(self, caplog):
         tm = make_tm(io_provider="talko", in_rate=16000)
         frame = pcm_to_ulaw(_silence_pcm(160))
         with caplog.at_level(logging.INFO, logger="voiceai.agent_manager.task_manager"):
-            tm._s2s_encode_input(frame)
-            tm._s2s_encode_input(frame)
+            await tm._s2s_encode_input(frame)
+            await tm._s2s_encode_input(frame)
         lines = [r.getMessage() for r in caplog.records if "S2S ingest encode" in r.getMessage()]
         assert len(lines) == 1
         assert "in_bytes=160" in lines[0]

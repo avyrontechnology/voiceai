@@ -212,6 +212,6 @@ async def test_talko_dialer_execution_carries_numbers(monkeypatch):
 
     monkeypatch.setattr(_httpx, "AsyncClient", _FakeClient)
     store = MemoryStore()
-    execution = await dial_via_talko(store, agent_id="a", to_number="+9191", from_number="91804")
-    assert execution.to_number == "+9191"
+    execution = await dial_via_talko(store, agent_id="a", to_number="+919812345678", from_number="91804")
+    assert execution.to_number == "+919812345678"
     assert execution.from_number == "91804"
