@@ -218,7 +218,9 @@ async def test_multiagent_builds_the_prompt_map_and_default_prompt(monkeypatch):
     stub = _session(
         task_config={
             "task_type": "conversation",
-            "tools_config": {"llm_agent": {"llm_config": {"agent_map": {"alpha": {}, "beta": {}}, "default_agent": "beta"}}},
+            "tools_config": {
+                "llm_agent": {"llm_config": {"agent_map": {"alpha": {}, "beta": {}}, "default_agent": "beta"}}
+            },
         }
     )
     stub._TaskManager__is_multiagent = lambda: True

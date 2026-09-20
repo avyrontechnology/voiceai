@@ -17,6 +17,9 @@ class Collections(str, Enum):
     AGENTS = "agents"
     EXECUTIONS = "executions"
     HEALTH_CHECKS = "health_checks"
+    WALLETS = "wallets"
+    LEDGER = "ledger"
+    TALKO_PARTNERS = "talko_partners"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

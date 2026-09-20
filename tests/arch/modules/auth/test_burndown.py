@@ -16,6 +16,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient
 
@@ -191,7 +192,7 @@ def wired_quickstart(arch_environment: Environment) -> Iterator[tuple[ModuleType
         The quickstart module and its rewired app.
     """
     from voiceai.core.container import build_container
-    from voiceai.modules.auth.ports import AuthStorePort
+
     from voiceai.platform.store import MemoryStore
 
     qs = _quickstart()
@@ -201,8 +202,8 @@ def wired_quickstart(arch_environment: Environment) -> Iterator[tuple[ModuleType
     previous_container = getattr(state, "container", None)
     previous_store = getattr(state, "platform_store", None)
     store = MemoryStore()
-    container = build_container(arch_environment, modules=[])
-    container.register(AuthStorePort, store)  # type: ignore[type-abstract]
+    container = build_container(arch_environment)
+    container.auth_store.override(providers.Object(store))
     state.container = container
     state.platform_store = store
     try:

@@ -92,9 +92,9 @@ def test_task_manager_keeps_pure_readers_by_identity():
         "_get_latest_response_uid_from_marks": "get_latest_response_uid_from_marks",
     }
     for legacy_name, new_name in pairs.items():
-        assert isinstance(
-            TaskManager.__dict__[legacy_name], staticmethod
-        ), f"{legacy_name} must stay a staticmethod binding"
+        assert isinstance(TaskManager.__dict__[legacy_name], staticmethod), (
+            f"{legacy_name} must stay a staticmethod binding"
+        )
         assert getattr(TaskManager, legacy_name) is getattr(new_home, new_name)
 
 

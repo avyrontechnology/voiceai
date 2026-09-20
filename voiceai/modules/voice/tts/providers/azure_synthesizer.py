@@ -1,6 +1,5 @@
 """Azure TTS provider (spec 0004, B12b)."""
 
-
 import asyncio
 import os
 import time
@@ -22,16 +21,17 @@ load_dotenv()
 
 class AzureSynthesizer(BaseSynthesizer):
     """Azure TTS provider."""
+
     def __init__(
         self,
         voice: Any,
         language: Any,
-        model: Any="neural",
-        stream: Any=False,
-        sampling_rate: Any=8000,
-        buffer_size: Any=150,
-        caching: Any=True,
-        speed: Any=None,
+        model: Any = "neural",
+        stream: Any = False,
+        sampling_rate: Any = 8000,
+        buffer_size: Any = 150,
+        caching: Any = True,
+        speed: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(kwargs.get("task_manager_instance"), stream, buffer_size)
@@ -123,7 +123,7 @@ class AzureSynthesizer(BaseSynthesizer):
             logger.error(f"Azure TTS synthesis failed with reason: {result.reason}")
             return None
 
-    def _log_cancellation_error(self, cancellation: Any, raise_exception: Any=False) -> None:
+    def _log_cancellation_error(self, cancellation: Any, raise_exception: Any = False) -> None:
         error_code = cancellation.error_code
         error_details = cancellation.error_details
         logger.error(f"Azure TTS error details: {error_details}")

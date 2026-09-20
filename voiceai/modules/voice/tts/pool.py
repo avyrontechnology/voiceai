@@ -1,6 +1,5 @@
 """Synthesizer pool: multi-voice fan-out with active-label routing (spec 0004, B12b)."""
 
-
 import asyncio
 from typing import Any
 

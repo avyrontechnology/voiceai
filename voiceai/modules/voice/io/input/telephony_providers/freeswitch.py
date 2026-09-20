@@ -1,6 +1,5 @@
 """FreeSWITCH telephony input handler (spec 0004, B12a)."""
 
-
 import json
 import time
 from typing import Any

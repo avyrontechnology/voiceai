@@ -20,9 +20,9 @@ from voiceai.modules.voice.constants import (
     SEQUENCE_ID_KEY,
     TURN_ID_KEY,
 )
-from voiceai.modules.voice.models import TranscriberEvent, TurnMeta, WsDataPacket
+from voiceai.modules.voice.models import TalkoPartnerConfig, TalkoPartnerView, TranscriberEvent, TurnMeta, WsDataPacket
 
-__all__ = ["packet_view", "transcriber_event_view", "turn_meta_from_meta_info"]
+__all__ = ["packet_view", "talko_partner_view", "transcriber_event_view", "turn_meta_from_meta_info"]
 
 
 def turn_meta_from_meta_info(meta_info: Mapping[str, Any] | None) -> TurnMeta:
@@ -76,3 +76,28 @@ def transcriber_event_view(data: Any) -> TranscriberEvent:  # why: the wire slot
     if isinstance(data, Mapping):
         return TranscriberEvent(type=str(data.get(PACKET_TYPE_KEY, "")), content=data.get(CONTENT_KEY))
     return TranscriberEvent(type=str(data), content=None)
+
+
+def talko_partner_view(partner: TalkoPartnerConfig) -> TalkoPartnerView:
+    """Project a partner record to its secret-free API view (spec 0008).
+
+    The key itself never leaves toward clients; operators get a configured
+    flag plus a last-4 hint for sanity checks.
+
+    Args:
+        partner: The stored partner record (carries the secret).
+
+    Returns:
+        The `TalkoPartnerView` without the secret.
+    """
+    key = partner.talko_api_key or ""
+    return TalkoPartnerView(
+        partner_id=partner.partner_id,
+        display_name=partner.display_name,
+        talko_api_base_url=partner.talko_api_base_url,
+        default_did=partner.default_did,
+        dids=list(partner.dids),
+        vendor_config_id=partner.vendor_config_id,
+        key_configured=bool(key),
+        key_hint=key[-4:] if key else None,
+    )

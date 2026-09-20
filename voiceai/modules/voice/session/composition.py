@@ -176,9 +176,6 @@ def seed_call_state(self: Any, args: CallArgs) -> None:  # why: the live session
     self.task_config = args.task
 
 
-
-
-
 def adopt_call_config(self: Any, args: CallArgs) -> CallConfig:  # why: the live session is duck-typed until cutover
     """Parse the call config over the raw kwargs; apply every mutation and task gate."""
     # spec-0004 B4: the parse runs over the RAW kwargs, before the welcome pops below;
@@ -383,9 +380,6 @@ def wire_tasks_and_history(self: Any, args: CallArgs) -> None:  # why: the live 
     self._forwarded_chat_texts: list = []
 
 
-
-
-
 def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> None:
     """Seed detector, sids, metering, llm configs, output queue and interruption defaults."""
     # Language detection
@@ -473,9 +467,6 @@ def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> No
     self.hangup_task = None
 
     self.conversation_config = None
-
-
-
 
 
 def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> None:
@@ -586,7 +577,9 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
             self.should_backchannel = call_config.should_backchannel
             self.backchanneling_task = None
             self.backchanneling_start_delay = call_config.backchanneling_start_delay
-            self.backchanneling_message_gap = call_config.backchanneling_message_gap  # Amount of duration co routine will sleep  # noqa: E501 — verbatim legacy line (R8)
+            self.backchanneling_message_gap = (
+                call_config.backchanneling_message_gap
+            )  # Amount of duration co routine will sleep  # noqa: E501 — verbatim legacy line (R8)
             if self.should_backchannel and not args.turn_based_conversation and args.task_id == 0:
                 logger.info("Should backchannel")
                 self.backchanneling_audios = f"{args.kwargs.get('backchanneling_audio_location', os.getenv('BACKCHANNELING_PRESETS_DIR'))}/{self.synthesizer_voice.lower()}"  # noqa: E501 — verbatim legacy line (R8)
@@ -608,9 +601,6 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
             # Discard pre-welcome utterance
             self.discard_pre_welcome_utterance = call_config.discard_pre_welcome_utterance
             self._speech_started_before_welcome = False
-
-
-
 
 
 def compose_runtime_legs(self: Any, args: CallArgs, call_config: CallConfig) -> None:

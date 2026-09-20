@@ -1,6 +1,5 @@
 """Telephony-leg input handler base: mark ledger, DTMF and stream SID (spec 0004, B12a)."""
 
-
 import asyncio
 import base64
 import binascii
@@ -24,15 +23,16 @@ load_dotenv()
 
 class TelephonyInputHandler(DefaultInputHandler):
     """Telephony-leg input handler base: stream SID, DTMF digits and mark side effects."""
+
     def __init__(
         self,
         queues: Any,
-        websocket: Any=None,
-        input_types: Any=None,
-        mark_event_meta_data: Any=None,
-        turn_based_conversation: Any=False,
-        is_welcome_message_played: Any=False,
-        observable_variables: Any=None,
+        websocket: Any = None,
+        input_types: Any = None,
+        mark_event_meta_data: Any = None,
+        turn_based_conversation: Any = False,
+        is_welcome_message_played: Any = False,
+        observable_variables: Any = None,
     ) -> None:
         super().__init__(
             queues,

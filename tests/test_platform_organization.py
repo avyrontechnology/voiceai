@@ -113,9 +113,9 @@ async def test_integration_rejects_unknown_kind(client):
 async def test_ledger_type_filter(client):
     await client.post("/wallet/topup", json={"amount_credits": 100})
     all_entries = await client.get("/wallet/ledger")
-    assert len(all_entries.json()["entries"]) == 1
+    assert len(all_entries.json()["data"]["entries"]) == 1
 
     topups = await client.get("/wallet/ledger", params={"type": "topup"})
-    assert len(topups.json()["entries"]) == 1
+    assert len(topups.json()["data"]["entries"]) == 1
     debits = await client.get("/wallet/ledger", params={"type": "debit"})
-    assert debits.json() == {"entries": []}
+    assert debits.json()["data"] == {"entries": []}

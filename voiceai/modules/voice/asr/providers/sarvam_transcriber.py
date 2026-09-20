@@ -1,6 +1,5 @@
 """Sarvam transcriber: Saaras streaming plus segment merge (spec 0004, B12c)."""
 
-
 import asyncio
 import audioop
 import base64
@@ -57,20 +56,21 @@ def merge_transcript_segments(accumulated: str, segment: str) -> str:
 
 class SarvamTranscriber(BaseTranscriber):
     """Sarvam transcriber: Saaras streaming plus segment merge."""
+
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="saaras:v3",
-        stream: Any=True,
-        language: Any="en-IN",
-        target_language: Any=None,
-        encoding: Any="linear16",
-        sampling_rate: Any="16000",
-        output_queue: Any=None,
-        high_vad_sensitivity: Any=True,
-        vad_signals: Any=True,
-        disable_sdk: Any=False,
+        input_queue: Any = None,
+        model: Any = "saaras:v3",
+        stream: Any = True,
+        language: Any = "en-IN",
+        target_language: Any = None,
+        encoding: Any = "linear16",
+        sampling_rate: Any = "16000",
+        output_queue: Any = None,
+        high_vad_sensitivity: Any = True,
+        vad_signals: Any = True,
+        disable_sdk: Any = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -271,7 +271,7 @@ class SarvamTranscriber(BaseTranscriber):
         except Exception:
             return raw_audio
 
-    async def _check_and_process_end_of_stream(self, ws_data_packet: Any, ws: Any=None) -> Any:
+    async def _check_and_process_end_of_stream(self, ws_data_packet: Any, ws: Any = None) -> Any:
         if ws_data_packet and ws_data_packet.get("meta_info", {}).get("eos") is True:
             if ws is not None:
                 try:
@@ -415,9 +415,7 @@ class SarvamTranscriber(BaseTranscriber):
                             # turn_latencies (observability/eval). Each Sarvam "data" message
                             # is a finalized segment; overlap-merge (not join) — segments
                             # re-emit the previous tail and naive joining doubles digits.
-                            self.final_transcript = merge_transcript_segments(
-                                self.final_transcript, transcript.strip()
-                            )
+                            self.final_transcript = merge_transcript_segments(self.final_transcript, transcript.strip())
                             # Segments can arrive AFTER END_SPEECH closed the turn (short
                             # utterances) — backfill the closed entry, else it stores null text.
                             if (
@@ -515,7 +513,7 @@ class SarvamTranscriber(BaseTranscriber):
         except Exception:
             logger.error(f"Sarvam receiver error: {traceback.format_exc()}")
 
-    async def _close(self, ws: ClientConnection, data: Any=None) -> None:
+    async def _close(self, ws: ClientConnection, data: Any = None) -> None:
         try:
             if data:
                 await ws.send(json.dumps(data))

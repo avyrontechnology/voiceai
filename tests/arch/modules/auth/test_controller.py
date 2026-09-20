@@ -10,6 +10,7 @@ route and every 4xx the service can raise.
 from __future__ import annotations
 
 import pytest
+from dependency_injector import providers
 from httpx import ASGITransport, AsyncClient
 
 from voiceai.core.app_factory import create_app
@@ -26,10 +27,10 @@ PREFIX = "/api/v1/auth"
 
 async def _client(store: MemoryStore | None = None) -> AsyncClient:
     """Build the factory app with only the auth module, wired to one store."""
-    container = build_container(Environment(), modules=[auth_module.MODULE])
+    container = build_container(Environment())
     if store is not None:
-        container.register(AuthStorePort, store)  # type: ignore[type-abstract]
-    app = create_app(env=Environment(), container=container, modules=[auth_module.MODULE])
+        container.auth_store.override(providers.Object(store))
+    app = create_app(env=Environment(), container=container)
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url=BASE)
 
@@ -64,8 +65,8 @@ async def _signup_owner(client: AsyncClient, email: str = "owner@x.test"):
 
 def test_routes_are_mounted_under_api_v1() -> None:
     """Every legacy /auth path rides the factory at /api/v1 (cutover keeps paths)."""
-    container = build_container(Environment(), modules=[auth_module.MODULE])
-    app = create_app(env=Environment(), container=container, modules=[auth_module.MODULE])
+    container = build_container(Environment())
+    app = create_app(env=Environment(), container=container)
 
     paths = {getattr(route, "path", "") for route in app.routes}
 
@@ -410,19 +411,6 @@ async def test_member_and_key_gates_across_routes() -> None:
         keyed_me = await bare.get(f"{PREFIX}/me", headers={"authorization": f"Bearer {secret}"})
         assert keyed_me.status_code == 401
         assert keyed_me.json()["detail"] == "Session required"
-
-
-async def test_missing_store_is_503_with_legacy_string() -> None:
-    """No container binding and no app.state store → 503, detail preserved."""
-    from fastapi import FastAPI, Request
-
-    from voiceai.common.errors import DependencyUnavailableError
-    from voiceai.modules.auth.controller import get_store
-
-    scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "app": FastAPI()}
-
-    with pytest.raises(DependencyUnavailableError, match="Platform store unavailable"):
-        get_store(Request(scope))
 
 
 async def test_validation_failure_is_422_envelope() -> None:

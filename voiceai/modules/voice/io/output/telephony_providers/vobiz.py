@@ -1,6 +1,5 @@
 """Vobiz telephony output handler (spec 0004, B12a)."""
 
-
 import base64
 import json
 from typing import Any
@@ -17,7 +16,8 @@ load_dotenv()
 
 class VobizOutputHandler(TelephonyOutputHandler):
     """Vobiz telephony output handler."""
-    def __init__(self, websocket: Any=None, mark_event_meta_data: Any=None, log_dir_name: Any=None) -> None:
+
+    def __init__(self, websocket: Any = None, mark_event_meta_data: Any = None, log_dir_name: Any = None) -> None:
         io_provider = "vobiz"
 
         super().__init__(io_provider, websocket, mark_event_meta_data, log_dir_name)
@@ -39,7 +39,7 @@ class VobizOutputHandler(TelephonyOutputHandler):
             logger.info(f"WebSocket closed during interruption: {e}")
             self._closed = True
 
-    async def form_media_message(self, audio_data: Any, audio_format: Any="audio/x-mulaw") -> Any:
+    async def form_media_message(self, audio_data: Any, audio_format: Any = "audio/x-mulaw") -> Any:
         """Build the media message for an audio frame."""
         base64_audio = base64.b64encode(audio_data).decode("utf-8")
         message = {

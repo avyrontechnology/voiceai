@@ -1,6 +1,5 @@
 """Exotel telephony output handler (spec 0004, B12a)."""
 
-
 import audioop
 import base64
 import json
@@ -18,7 +17,8 @@ load_dotenv()
 
 class ExotelOutputHandler(TelephonyOutputHandler):
     """Exotel telephony output handler."""
-    def __init__(self, websocket: Any=None, mark_event_meta_data: Any=None, log_dir_name: Any=None) -> None:
+
+    def __init__(self, websocket: Any = None, mark_event_meta_data: Any = None, log_dir_name: Any = None) -> None:
         io_provider = "exotel"
 
         super().__init__(io_provider, websocket, mark_event_meta_data, log_dir_name)

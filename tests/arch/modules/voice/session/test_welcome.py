@@ -101,9 +101,7 @@ def _forced_session(**overrides):
         kwargs={"agent_welcome_message": "Namaste"},
         task_config={"tools_config": {"output": {"format": "wav"}}},
         tools={
-            "input": SimpleNamespace(
-                set_welcome_message_played=MagicMock(), update_is_audio_being_played=MagicMock()
-            ),
+            "input": SimpleNamespace(set_welcome_message_played=MagicMock(), update_is_audio_being_played=MagicMock()),
             "output": SimpleNamespace(get_provider=MagicMock(return_value="twilio"), handle=AsyncMock()),
             "synthesizer": SimpleNamespace(get_engine=MagicMock(return_value="engine-1")),
         },

@@ -893,7 +893,6 @@ async def listen_transcriber(self: ListenerSession) -> None:
                         interim_content = message["data"].get("content", "")
                         self._trigger_voicemail_check(interim_content, meta_info, is_final=False)
 
-
                 elif isinstance(message.get("data"), dict) and message["data"].get("type", "") == "eager_end_of_turn":
                     eager_transcript = message["data"].get("content", "").strip()
                     eot_confidence = message["data"].get("confidence")

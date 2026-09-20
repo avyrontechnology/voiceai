@@ -1,6 +1,5 @@
 """Rime TTS provider (spec 0004, B12b)."""
 
-
 import asyncio
 import base64
 import json
@@ -24,17 +23,18 @@ load_dotenv()
 
 class RimeSynthesizer(StreamSynthesizer):
     """Rime TTS provider."""
+
     def __init__(
         self,
         voice_id: Any,
         voice: Any,
-        audio_format: Any="wav",
-        sampling_rate: Any="8000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        caching: Any=True,
-        model: Any="arcana",
-        synthesizer_key: Any=None,
+        audio_format: Any = "wav",
+        sampling_rate: Any = "8000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        caching: Any = True,
+        model: Any = "arcana",
+        synthesizer_key: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -111,7 +111,7 @@ class RimeSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:

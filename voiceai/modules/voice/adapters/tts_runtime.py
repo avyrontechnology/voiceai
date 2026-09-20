@@ -81,9 +81,7 @@ create_ws_data_packet: Final[Callable[..., dict[str, Any]]] = (
 )
 
 #: TLS context factory for wss connections.
-get_ssl_context: Final[Callable[..., Any]] = (
-    _legacy_get_ssl_context  # why: legacy factory takes free-form URL args
-)
+get_ssl_context: Final[Callable[..., Any]] = _legacy_get_ssl_context  # why: legacy factory takes free-form URL args
 
 #: Sarvam model → native sample-rate map.
 SARVAM_MODEL_SAMPLING_RATE_MAPPING: Final[Any] = _LEGACY_SARVAM_MAP  # why: legacy config map

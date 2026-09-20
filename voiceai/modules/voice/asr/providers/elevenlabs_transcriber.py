@@ -1,6 +1,5 @@
 """ElevenLabs transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import base64
 import json
@@ -35,21 +34,22 @@ load_dotenv()
 
 class ElevenLabsTranscriber(BaseTranscriber):
     """ElevenLabs transcriber."""
+
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="scribe_v2_realtime",
-        stream: Any=True,
-        language: Any="en",
-        endpointing: Any="400",
-        sampling_rate: Any="16000",
-        encoding: Any="linear16",
-        output_queue: Any=None,
-        commit_strategy: Any="vad",
-        include_timestamps: Any=True,
-        include_language_detection: Any=True,
-        keywords: Any=None,
+        input_queue: Any = None,
+        model: Any = "scribe_v2_realtime",
+        stream: Any = True,
+        language: Any = "en",
+        endpointing: Any = "400",
+        sampling_rate: Any = "16000",
+        encoding: Any = "linear16",
+        output_queue: Any = None,
+        commit_strategy: Any = "vad",
+        include_timestamps: Any = True,
+        include_language_detection: Any = True,
+        keywords: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)

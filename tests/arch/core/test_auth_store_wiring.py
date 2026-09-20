@@ -13,8 +13,10 @@ never touches code a peer agent may be mid-edit on.
 
 from __future__ import annotations
 
+from dependency_injector import providers
+
 from voiceai.common.constants import CONTAINER_KEY_REDIS
-from voiceai.core.container import Container, build_container
+from voiceai.core.container import VoiceAIContainer, aclose_container, build_container
 from voiceai.core.environment import Environment
 
 from ..conftest import FakeRedis
@@ -27,8 +29,8 @@ def test_default_container_resolves_a_memory_store(arch_environment: Environment
     from voiceai.modules.auth.ports import AuthStorePort
     from voiceai.platform.store import MemoryStore
 
-    container = build_container(arch_environment, modules=[])
-    store = container.resolve(AuthStorePort)  # type: ignore[type-abstract]
+    container = build_container(arch_environment)
+    store = container.auth_store()
 
     assert isinstance(store, MemoryStore)
     assert isinstance(store, AuthStorePort)
@@ -38,9 +40,9 @@ def test_the_store_is_a_container_singleton(arch_environment: Environment) -> No
     """First resolve builds it; later resolves reuse it (rule 9 lifetime)."""
     from voiceai.modules.auth.ports import AuthStorePort
 
-    container = build_container(arch_environment, modules=[])
+    container = build_container(arch_environment)
 
-    assert container.resolve(AuthStorePort) is container.resolve(AuthStorePort)  # type: ignore[type-abstract]
+    assert container.auth_store() is container.auth_store()
 
 
 async def test_configured_redis_url_resolves_a_redis_store(arch_environment: Environment) -> None:
@@ -49,11 +51,11 @@ async def test_configured_redis_url_resolves_a_redis_store(arch_environment: Env
     from voiceai.platform.store import RedisStore
 
     env = arch_environment.model_copy(update={"redis_url": REDIS_URL})
-    container = build_container(env, modules=[])
-    store = container.resolve(AuthStorePort)  # type: ignore[type-abstract]
+    container = build_container(env)
+    store = container.auth_store()
 
     assert isinstance(store, RedisStore)
-    await container.aclose()
+    await aclose_container(container)
 
 
 async def test_redis_store_wraps_the_container_client(arch_environment: Environment, fake_redis: FakeRedis) -> None:
@@ -61,37 +63,13 @@ async def test_redis_store_wraps_the_container_client(arch_environment: Environm
     from voiceai.modules.auth.ports import AuthStorePort
     from voiceai.platform.store import RedisStore
 
-    container = build_container(arch_environment, modules=[])
-    container.register(CONTAINER_KEY_REDIS, fake_redis)
-    store = container.resolve(AuthStorePort)  # type: ignore[type-abstract]
+    container = build_container(arch_environment)
+    container.redis_client.override(providers.Object(fake_redis))
+    store = container.auth_store()
 
     assert isinstance(store, RedisStore)
     assert store._redis is fake_redis  # why: white-box pin — the shared-client contract is the point
-    await container.aclose()
-
-
-def test_auth_module_register_binds_the_same_factory(arch_environment: Environment) -> None:
-    """Composing the auth module resolves identically to the core default wiring."""
-    from voiceai.modules import auth as auth_module
-    from voiceai.modules.auth.ports import AuthStorePort
-    from voiceai.platform.store import MemoryStore
-
-    container = build_container(arch_environment, modules=[auth_module.MODULE])
-
-    assert isinstance(container.resolve(AuthStorePort), MemoryStore)  # type: ignore[type-abstract]
-
-
-def test_module_register_alone_suffices_on_core_wiring() -> None:
-    """The rule-9 callback needs only the redis entry — no full `build_container`."""
-    from voiceai.modules import auth as auth_module
-    from voiceai.modules.auth.ports import AuthStorePort
-    from voiceai.platform.store import MemoryStore
-
-    container = Container()
-    container.register(CONTAINER_KEY_REDIS, None)
-    auth_module.register(container)
-
-    assert isinstance(container.resolve(AuthStorePort), MemoryStore)  # type: ignore[type-abstract]
+    await aclose_container(container)
 
 
 def test_reregistering_the_port_swaps_the_store(arch_environment: Environment) -> None:
@@ -99,10 +77,10 @@ def test_reregistering_the_port_swaps_the_store(arch_environment: Environment) -
     from voiceai.modules.auth.ports import AuthStorePort
     from voiceai.platform.store import MemoryStore
 
-    container = build_container(arch_environment, modules=[])
-    first = container.resolve(AuthStorePort)  # type: ignore[type-abstract]
+    container = build_container(arch_environment)
+    first = container.auth_store()
     fake = MemoryStore()
-    container.register(AuthStorePort, fake)  # type: ignore[type-abstract]
+    container.auth_store.override(providers.Object(fake))
 
-    assert container.resolve(AuthStorePort) is fake  # type: ignore[type-abstract]
-    assert container.resolve(AuthStorePort) is not first  # type: ignore[type-abstract]
+    assert container.auth_store() is fake
+    assert container.auth_store() is not first

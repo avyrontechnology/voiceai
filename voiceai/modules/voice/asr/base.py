@@ -1,6 +1,5 @@
 """Transcriber base: queue contract, latency ledger and socket close (spec 0004, B12c)."""
 
-
 import json
 import time
 import uuid
@@ -17,7 +16,8 @@ logger = get_logger(MODULE_NAME)
 
 class BaseTranscriber:
     """Transcriber base: queue contract, latency ledger and socket close."""
-    def __init__(self, input_queue: Any=None) -> None:
+
+    def __init__(self, input_queue: Any = None) -> None:
         self.input_queue = input_queue
         self.connection_on = True
         self.callee_speaking = False
@@ -103,4 +103,3 @@ class BaseTranscriber:
         first_interim_to_final_ms = round((now - first_received_at) * 1000, 2) if first_received_at else None
         last_interim_to_final_ms = round((now - last_received_at) * 1000, 2) if last_received_at else None
         return first_interim_to_final_ms, last_interim_to_final_ms
-

@@ -121,9 +121,7 @@ class LidGateSession(Protocol):
         meta_info: Any = ...,
         spawn_language: Any = ...,
     ) -> None: ...
-    def _TaskManager__release_lid_playback_gate(
-        self, gate: dict, outcome: str, clear: bool = ...
-    ) -> None: ...  # noqa: D102
+    def _TaskManager__release_lid_playback_gate(self, gate: dict, outcome: str, clear: bool = ...) -> None: ...  # noqa: D102
     def _TaskManager__record_lid_event(self, record: dict) -> None: ...  # noqa: D102
     def _TaskManager__record_lid_usage(self, pool: Any) -> None: ...  # noqa: D102
     def _TaskManager__buffered_language_evidence(self, pool: Any, active_short: str) -> tuple: ...  # noqa: D102
@@ -170,8 +168,7 @@ def arm_lid_playback_gate(self: LidGateSession, sequence_id: Any, decision_task:
         # stop changing; this one cannot, so the gate can never wedge the output loop.
         # monotonic, not time.time(): a backwards wall-clock step (ntp makestep, VM resume)
         # would suppress the one escape that makes a wedged output loop impossible.
-        "deadline": time.monotonic()
-        + float(os.getenv("LANGUAGE_SWITCH_MAX_HOLD_S", str(LANGUAGE_SWITCH_MAX_HOLD_S))),
+        "deadline": time.monotonic() + float(os.getenv("LANGUAGE_SWITCH_MAX_HOLD_S", str(LANGUAGE_SWITCH_MAX_HOLD_S))),
     }
 
 
@@ -272,9 +269,7 @@ def detector_corroborates(segments: Any, target: Any) -> bool:  # why: legacy fr
         return False
     short_target = target.split("-")[0].lower()
     min_prob = float(os.getenv("LANGUAGE_SWITCH_DETECTOR_MIN_PROB", "0.8"))
-    min_segment_s = float(
-        os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-    )
+    min_segment_s = float(os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S)))
     for segment in segments or []:
         lang = (segment.get("lang") or "").split("-")[0].lower()
         if lang != short_target:
@@ -338,9 +333,7 @@ def detector_language_mismatch(self: LidGateSession) -> bool:
     if detected is None:
         return False
     # Substance measured on the FOREIGN segments themselves, like __detector_corroborates.
-    min_segment_s = float(
-        os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-    )
+    min_segment_s = float(os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S)))
     if foreign_max_s < min_segment_s:
         return False
     synth = self.tools.get("synthesizer")

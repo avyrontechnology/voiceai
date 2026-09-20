@@ -1,6 +1,5 @@
 """ElevenLabs TTS provider, base plus v3 (spec 0004, B12b)."""
 
-
 import asyncio
 import base64
 import json
@@ -33,17 +32,17 @@ class ElevenlabsBase(StreamSynthesizer):
         self,
         voice: Any,
         voice_id: Any,
-        model: Any="eleven_turbo_v2_5",
-        audio_format: Any="mp3",
-        sampling_rate: Any="16000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        temperature: Any=0.5,
-        similarity_boost: Any=0.75,
-        speed: Any=1.0,
-        style: Any=0,
-        synthesizer_key: Any=None,
-        caching: Any=True,
+        model: Any = "eleven_turbo_v2_5",
+        audio_format: Any = "mp3",
+        sampling_rate: Any = "16000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        temperature: Any = 0.5,
+        similarity_boost: Any = 0.75,
+        speed: Any = 1.0,
+        style: Any = 0,
+        synthesizer_key: Any = None,
+        caching: Any = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -119,7 +118,7 @@ class ElevenlabsBase(StreamSynthesizer):
             return None
         return await self._generate_http(text)
 
-    async def _generate_http(self, text: Any, format: Any=None) -> Any:
+    async def _generate_http(self, text: Any, format: Any = None) -> Any:
         payload = {
             "text": text,
             "model_id": self.model,
@@ -192,7 +191,7 @@ class ElevenlabsSynthesizer(ElevenlabsBase):
         except Exception:  # noqa: S110 — verbatim best-effort (R8)
             pass
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:
@@ -582,7 +581,7 @@ class ElevenlabsV3Synthesizer(ElevenlabsBase):
                 pass
         await self._ensure_connection()
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:

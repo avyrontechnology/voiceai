@@ -47,6 +47,7 @@ def flux_turn_is_stalled(self: DeepgramTranscriber, now: float) -> Any:  # why: 
         return False
     return (now - self.last_interim_time) > self.flux_turn_stall_timeout_s
 
+
 async def release_stuck_flux_turn(self: DeepgramTranscriber) -> None:
     """Release a stuck flux turn."""
     # A pending eager turn means a speculative LLM task is in flight downstream — cancel it
@@ -63,6 +64,7 @@ async def release_stuck_flux_turn(self: DeepgramTranscriber) -> None:
     else:
         await self.push_to_transcriber_queue(create_ws_data_packet({"type": "speech_ended"}, self.meta_info))
         self._reset_turn_state()
+
 
 async def monitor_flux_turn_timeout(self: DeepgramTranscriber) -> None:
     """Force-close a Flux turn that stays open without any closing event, so a missing
@@ -82,6 +84,7 @@ async def monitor_flux_turn_timeout(self: DeepgramTranscriber) -> None:
     except Exception as e:
         logger.error(f"Error in monitor_flux_turn_timeout: {e}")
         raise
+
 
 async def send_heartbeat_flux(self: DeepgramTranscriber, ws: ClientConnection) -> None:
     """Flux uses WebSocket ping frames instead of KeepAlive JSON"""
@@ -113,6 +116,7 @@ async def send_heartbeat_flux(self: DeepgramTranscriber, ws: ClientConnection) -
     except Exception as e:
         logger.error(f"Error in send_heartbeat_flux: {e}")
         raise
+
 
 async def receiver_flux(self: DeepgramTranscriber, ws: ClientConnection) -> None:
     """Consume flux responses into transcript packets."""
@@ -320,4 +324,3 @@ async def receiver_flux(self: DeepgramTranscriber, ws: ClientConnection) -> None
         except Exception as e:
             traceback.print_exc()
             logger.error(f"Error processing Flux message: {e}")
-

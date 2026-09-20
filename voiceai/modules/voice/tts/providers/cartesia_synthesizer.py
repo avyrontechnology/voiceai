@@ -1,6 +1,5 @@
 """Cartesia TTS provider (spec 0004, B12b)."""
 
-
 import asyncio
 import base64
 import json
@@ -23,19 +22,20 @@ logger = get_logger(MODULE_NAME)
 
 class CartesiaSynthesizer(StreamSynthesizer):
     """Cartesia TTS provider."""
+
     def __init__(
         self,
         voice_id: Any,
         voice: Any,
-        language: Any="en",
-        model: Any="sonic-english",
-        audio_format: Any="mp3",
-        sampling_rate: Any="16000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        synthesizer_key: Any=None,
-        caching: Any=True,
-        speed: Any=1.0,
+        language: Any = "en",
+        model: Any = "sonic-english",
+        audio_format: Any = "mp3",
+        sampling_rate: Any = "16000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        synthesizer_key: Any = None,
+        caching: Any = True,
+        speed: Any = 1.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -145,7 +145,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:
@@ -289,7 +289,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
             output_format={"container": "raw", "encoding": "pcm_s16le", "sample_rate": int(sample_rate)},
         )
 
-    async def _generate_http(self, text: Any, output_format: Any=None) -> Any:
+    async def _generate_http(self, text: Any, output_format: Any = None) -> Any:
         payload = {
             "model_id": self.model,
             "transcript": text,

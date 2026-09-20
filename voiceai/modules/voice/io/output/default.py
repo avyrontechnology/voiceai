@@ -1,6 +1,5 @@
 """Default-leg output handler: websocket send for browser legs (spec 0004, B12a)."""
 
-
 import base64
 import json
 import time
@@ -24,14 +23,15 @@ load_dotenv()
 
 class DefaultOutputHandler:
     """Default-leg output handler: websocket send with chunking support."""
+
     def __init__(
         self,
-        io_provider: Any="default",
-        websocket: Any=None,
-        queue: Any=None,
-        is_web_based_call: Any=False,
-        mark_event_meta_data: Any=None,
-        sampling_rate: Any=WEBCALL_TTS_SAMPLE_RATE,
+        io_provider: Any = "default",
+        websocket: Any = None,
+        queue: Any = None,
+        is_web_based_call: Any = False,
+        mark_event_meta_data: Any = None,
+        sampling_rate: Any = WEBCALL_TTS_SAMPLE_RATE,
     ) -> None:
         self.websocket = websocket
         self.is_interruption_task_on = False
@@ -77,7 +77,7 @@ class DefaultOutputHandler:
             logger.info(f"WebSocket closed during interruption: {e}")
             self._closed = True
 
-    def process_in_chunks(self, yield_chunks: Any=False) -> Any:
+    def process_in_chunks(self, yield_chunks: Any = False) -> Any:
         """Whether this leg sends audio in chunks."""
         return self.is_chunking_supported and yield_chunks
 
@@ -110,10 +110,9 @@ class DefaultOutputHandler:
         fails immediately and re-latches — bounded and fully logged.
         """
         if self._closed:
-            logger.warning(
-                "%s output handler reopening (%s)", self.io_provider, reason or "new turn"
-            )
+            logger.warning("%s output handler reopening (%s)", self.io_provider, reason or "new turn")
             self._closed = False
+
     def hangup_sent(self) -> Any:
         """Whether the hangup message was sent."""
         return self.is_last_hangup_chunk_sent

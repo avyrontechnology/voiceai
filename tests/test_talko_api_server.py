@@ -66,6 +66,13 @@ def load_server(monkeypatch, env):
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     spec.loader.exec_module(module)
+    # Pin module globals: load_dotenv() at import reads the developer's real
+    # .env, which would leak values (e.g. TALKO_AI_DID) into cases that expect
+    # them absent. Tests must be hermetic.
+    module.talko_api_base_url = env.get("TALKO_API_BASE_URL", "")
+    module.talko_api_key = env.get("TALKO_API_KEY", "")
+    module.talko_ai_did = env.get("TALKO_AI_DID", "")
+    module.talko_partner_id = env.get("TALKO_PARTNER_ID", "")
     return module
 
 

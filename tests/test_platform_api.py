@@ -317,14 +317,14 @@ async def test_webhook_crud(client):
 
 
 async def test_wallet_topup_and_ledger(client):
-    assert (await client.get("/wallet")).json()["balance_credits"] == 0
+    assert (await client.get("/wallet")).json()["data"]["balance_credits"] == 0
 
     topup = await client.post("/wallet/topup", json={"amount_credits": 500, "reason": "pilot"})
     assert topup.status_code == 200
-    assert topup.json()["balance_credits"] == 500
+    assert topup.json()["data"]["balance_credits"] == 500
 
     ledger = await client.get("/wallet/ledger")
-    entries = ledger.json()["entries"]
+    entries = ledger.json()["data"]["entries"]
     assert len(entries) == 1
     assert entries[0]["amount_credits"] == 500
 
@@ -339,17 +339,17 @@ async def test_wallet_rejects_non_positive_topup(client):
 
 async def test_templates_list_get_import(client):
     listed = await client.get("/templates")
-    templates = listed.json()["templates"]
+    templates = listed.json()["data"]["templates"]
     assert len(templates) >= 10
 
     first = templates[0]
     get = await client.get(f"/templates/{first['template_id']}")
     assert get.status_code == 200
-    assert get.json()["agent_payload"]["tasks"]
+    assert get.json()["data"]["agent_payload"]["tasks"]
 
     imported = await client.post(f"/templates/{first['template_id']}/import")
     assert imported.status_code == 200
-    assert imported.json()["agent_payload"]["agent_name"]
+    assert imported.json()["data"]["agent_payload"]["agent_name"]
 
 
 async def test_template_not_found(client):

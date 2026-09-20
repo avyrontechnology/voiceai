@@ -172,9 +172,7 @@ def test_call_lifecycle_operations_bind_its_session(monkeypatch):
 
 def test_ignore_gate_truth_table():
     def ignore(hangup_triggered, end_call, transfer):
-        stub = SimpleNamespace(
-            hangup_triggered=hangup_triggered, _end_call_in_progress=end_call, has_transfer=transfer
-        )
+        stub = SimpleNamespace(hangup_triggered=hangup_triggered, _end_call_in_progress=end_call, has_transfer=transfer)
         return hangup.should_ignore_transcriber_input(stub)
 
     assert ignore(False, False, False) is False
@@ -185,9 +183,7 @@ def test_ignore_gate_truth_table():
 
 def test_enter_hangup_state_locks_and_releases_the_audio_gate():
     interruption_manager = MagicMock()
-    stub = SimpleNamespace(
-        hangup_triggered=False, hangup_decision_at=None, interruption_manager=interruption_manager
-    )
+    stub = SimpleNamespace(hangup_triggered=False, hangup_decision_at=None, interruption_manager=interruption_manager)
     before = time.time()
     hangup.enter_hangup_state(stub)
     assert stub.hangup_triggered is True

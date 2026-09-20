@@ -71,6 +71,10 @@ class Environment(BaseModel):
     log_level: str = DEFAULT_LOG_LEVEL
     #: Empty disables every redis-backed feature (the container then registers `None`).
     redis_url: str = ""
+    #: Base URL of the talko-service deployment the outbound bridge dials and
+    #: fetches partner DIDs through (spec 0009). Empty means outbound Talko
+    #: features resolve per-request/per-record values only, never a default.
+    talko_service_base_url: str = ""
     db_backend: Literal["memory", "mongo"] = DB_BACKEND_MEMORY
     db_url: str = ""
     db_name: str = DEFAULT_DB_NAME

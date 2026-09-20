@@ -1,6 +1,5 @@
 """OpenAI transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import audioop
 import base64
@@ -34,22 +33,23 @@ logger = get_logger(MODULE_NAME)
 
 class OpenAITranscriber(BaseTranscriber):
     """OpenAI transcriber."""
+
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="gpt-realtime-whisper",
-        stream: Any=True,
-        language: Any="en",
-        encoding: Any="linear16",
-        sampling_rate: Any="16000",
-        output_queue: Any=None,
-        endpointing: Any=400,
-        delay: Any="medium",
-        noise_reduction: Any=False,
-        speech_rms_threshold: Any=400,
-        vad_threshold: Any=0.5,
-        vad_prefix_padding_ms: Any=300,
+        input_queue: Any = None,
+        model: Any = "gpt-realtime-whisper",
+        stream: Any = True,
+        language: Any = "en",
+        encoding: Any = "linear16",
+        sampling_rate: Any = "16000",
+        output_queue: Any = None,
+        endpointing: Any = 400,
+        delay: Any = "medium",
+        noise_reduction: Any = False,
+        speech_rms_threshold: Any = 400,
+        vad_threshold: Any = 0.5,
+        vad_prefix_padding_ms: Any = 300,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -535,7 +535,7 @@ class OpenAITranscriber(BaseTranscriber):
         except Exception:
             traceback.print_exc()
 
-    async def _check_and_process_end_of_stream(self, ws_data_packet: Any, ws: Any=None) -> Any:
+    async def _check_and_process_end_of_stream(self, ws_data_packet: Any, ws: Any = None) -> Any:
         if ws_data_packet and ws_data_packet.get("meta_info", {}).get("eos") is True:
             # Only commit if there is un-committed audio in the buffer; a prior endpointing
             # commit already drained the buffer and reset _audio_appended_since_commit.

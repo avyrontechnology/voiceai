@@ -22,11 +22,12 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient
 from starlette.routing import Route
 
-from voiceai.core.container import Container, build_container
+from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.core.environment import Environment
 
 AGENT_LIST_PATH = "/all"
@@ -59,7 +60,7 @@ def _quickstart() -> ModuleType:
     return importlib.import_module("local_setup.quickstart_server")
 
 
-def _container_for(env: Environment, store: Any) -> Container:
+def _container_for(env: Environment, store: Any) -> VoiceAIContainer:
     """Build the offline container with `AuthStorePort` bound to `store`.
 
     Args:
@@ -69,10 +70,8 @@ def _container_for(env: Environment, store: Any) -> Container:
     Returns:
         A container whose auth store binding serves `store`.
     """
-    from voiceai.modules.auth.ports import AuthStorePort
-
-    container = build_container(env, modules=[])
-    container.register(AuthStorePort, store)  # type: ignore[type-abstract]
+    container = build_container(env)
+    container.auth_store.override(providers.Object(store))
     return container
 
 

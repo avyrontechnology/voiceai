@@ -42,17 +42,18 @@ _LANGUAGE_ALIASES = {"od": "or"}
 
 class MayaSynthesizer(StreamSynthesizer):
     """Maya TTS provider."""
+
     def __init__(
         self,
-        voice: Any="Ananya",
-        voice_id: Any=None,
-        model: Any=MAYA_DEFAULT_MODEL,
-        language: Any="en",
-        sampling_rate: Any="24000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        synthesizer_key: Any=None,
-        caching: Any=True,
+        voice: Any = "Ananya",
+        voice_id: Any = None,
+        model: Any = MAYA_DEFAULT_MODEL,
+        language: Any = "en",
+        sampling_rate: Any = "24000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        synthesizer_key: Any = None,
+        caching: Any = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -194,7 +195,7 @@ class MayaSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:

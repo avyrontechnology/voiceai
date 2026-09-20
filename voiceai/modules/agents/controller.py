@@ -9,16 +9,15 @@ swallows the missing-agent 404 into a 500 on GET/PUT/DELETE `/agent/{agent_id}`,
 prompts route alone answers a true 404.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Any, Final
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from voiceai.common.responses import success_response
-from voiceai.core.container import Container, get_container
+from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.agents.constants import (
     AGENT_BY_ID_PATH,
     AGENT_ID_KEY,
@@ -58,20 +57,7 @@ class CreateAgentPayload(BaseModel):
     )
 
 
-def get_agent_service(container: Annotated[Container, Depends(get_container)]) -> AgentService:
-    """Resolve the agents service from the container on `app.state`.
-
-    Args:
-        container: The application container, injected by the core dependency.
-
-    Returns:
-        The service registered by this module's `register` callback (AGENTS.md rule 9 —
-        controllers resolve services, they never construct them).
-    """
-    return container.resolve(AgentService)
-
-
-ServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+ServiceDep = Annotated[AgentService, Depends(Provide[VoiceAIContainer.agent_service])]
 
 
 def _swallowed_not_found(exc: AgentNotFoundError, agent_id: str) -> AgentsError:
@@ -92,6 +78,7 @@ def _swallowed_not_found(exc: AgentNotFoundError, agent_id: str) -> AgentsError:
 
 
 @router.get(AGENT_BY_ID_PATH)
+@inject
 async def read_agent(agent_id: str, service: ServiceDep) -> JSONResponse:
     """Return the raw stored configuration (the quickstart GET payload) in the envelope.
 
@@ -106,6 +93,7 @@ async def read_agent(agent_id: str, service: ServiceDep) -> JSONResponse:
 
 
 @router.get(AGENT_PROMPTS_PATH)
+@inject
 async def read_agent_prompts(agent_id: str, service: ServiceDep) -> JSONResponse:
     """Return `{"agent_id", "agent_prompts"}`; a missing agent answers a TRUE 404 here.
 
@@ -116,6 +104,7 @@ async def read_agent_prompts(agent_id: str, service: ServiceDep) -> JSONResponse
 
 
 @router.post(AGENT_PATH, status_code=_HTTP_CREATED)
+@inject
 async def create_agent(payload: CreateAgentPayload, service: ServiceDep) -> JSONResponse:
     """Create an agent; answers 201 with `{"agent_id", "state": "created"}` as data."""
     created = await service.create_agent(payload.agent_config, payload.agent_prompts)
@@ -123,6 +112,7 @@ async def create_agent(payload: CreateAgentPayload, service: ServiceDep) -> JSON
 
 
 @router.put(AGENT_BY_ID_PATH)
+@inject
 async def update_agent(agent_id: str, payload: CreateAgentPayload, service: ServiceDep) -> JSONResponse:
     """Overwrite an agent; answers `{"agent_id", "state": "updated"}` as data.
 
@@ -137,6 +127,7 @@ async def update_agent(agent_id: str, payload: CreateAgentPayload, service: Serv
 
 
 @router.delete(AGENT_BY_ID_PATH)
+@inject
 async def delete_agent(agent_id: str, service: ServiceDep) -> JSONResponse:
     """Delete an agent's definition; answers `{"agent_id", "state": "deleted"}` as data.
 
@@ -151,6 +142,7 @@ async def delete_agent(agent_id: str, service: ServiceDep) -> JSONResponse:
 
 
 @router.get(ALL_AGENTS_PATH)
+@inject
 async def read_all_agents(service: ServiceDep) -> JSONResponse:
     """Return the agent directory, `{"agents": [{"agent_id", "data"}, ...]}` as data."""
     return success_response(await service.list_agents())

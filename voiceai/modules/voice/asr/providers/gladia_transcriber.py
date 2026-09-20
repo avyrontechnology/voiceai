@@ -1,6 +1,5 @@
 """Gladia transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import base64
 import json
@@ -42,8 +41,8 @@ class GladiaTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: str,
-        input_queue: Any=None,
-        output_queue: Any=None,
+        input_queue: Any = None,
+        output_queue: Any = None,
         stream: bool = True,
         language: str = "en",
         endpointing: int = 500,  # milliseconds (same format as Deepgram), converted to seconds for Gladia

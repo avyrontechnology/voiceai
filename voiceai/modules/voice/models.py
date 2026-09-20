@@ -13,20 +13,31 @@ until the report builders (step B6) tighten them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from voiceai.database.base import BaseFields
 from voiceai.enums import HangupReason
+from voiceai.modules.voice.constants import PROVIDER_SIMULATED
 
 __all__ = [
     "CallContext",
     "ComponentLatencies",
+    "ConnectTalkoPartnerRequest",
+    "CreateTalkoPartnerRequest",
     "HangupDetail",
     "LatencyReport",
     "LidDecisionRecord",
+    "PlaceCallRequest",
+    "PlacedCall",
+    "TalkoPartnerConfig",
+    "TalkoPartnerListResponse",
+    "TalkoPartnerPreview",
+    "TalkoPartnerView",
     "TranscriberEvent",
     "TurnMeta",
+    "UpdateTalkoPartnerRequest",
     "UserBotLatency",
     "WsDataPacket",
 ]
@@ -277,3 +288,201 @@ class CallContext(BaseModel):
     task_id: int | None = None
     call_sid: str | None = None
     stream_sid: str | None = None
+
+
+class PlaceCallRequest(BaseModel):
+    """One outbound call request (spec 0008).
+
+    Module-level input model (never persisted): the controller validates it at the
+    boundary and the service resolves credentials per call. Field-for-field
+    compatible with the legacy ``SimulateCallRequest``/``PlaceCallRequest`` shape
+    the UI already sends, so no UI change is needed.
+
+    Attributes:
+        agent_id: The agent definition that handles the call.
+        to_number: Destination in any common format (E.164 with `+`, digits,
+            spaces/dashes); validated to dialable digits by the service.
+        from_number: Optional caller-DID override (Talko trunk default otherwise).
+        variables: Per-contact dynamic data (e.g. student name, amount due);
+            carried onto the execution, never used for routing.
+        provider: `constants.PROVIDER_SIMULATED` (offline runner) or
+            `constants.PROVIDER_TALKO` (real trunk dial).
+        partner_id: Talko partner account; credentials resolve from the DB
+            record, explicit `talko_api_key`/`from_number` win.
+        talko_api_key: Per-call key override; never persisted.
+        delay_scale: Simulated provider pacing (0 completes inline).
+    """
+
+    agent_id: str = Field(..., min_length=1)
+    to_number: str = Field(..., min_length=1)
+    from_number: str | None = None
+    variables: dict[str, Any] = Field(default_factory=dict)  # why: free-form per-contact data
+    provider: Literal["simulated", "talko"] = "simulated"
+    partner_id: str | None = None
+    talko_api_key: str | None = None
+    delay_scale: float = Field(0.5, ge=0.0)
+
+
+class PlacedCall(BaseFields):
+    """One placed outbound call, as persisted and returned (spec 0008).
+
+    Persisted execution view: inherits `BaseFields` (`id` is the execution id).
+    Trunk-dialed rows stay in-progress — call outcome lives in Tata's CDR, not
+    in this record (preserved quirk from the legacy runner).
+
+    Attributes:
+        execution_id: Stable id clients poll (`id` mirrors it for the repository).
+        agent_id: Handling agent definition.
+        to_number: Destination as dialed.
+        from_number: Caller DID used, when known.
+        status: `queued`/`ringing`/`in_progress`/`completed`/`failed`.
+        provider: Which engine placed the call.
+        variables: The per-contact data this call carries.
+    """
+
+    execution_id: str
+    agent_id: str
+    to_number: str
+    from_number: str | None = None
+    status: str = "queued"
+    provider: str = PROVIDER_SIMULATED
+    variables: dict[str, Any] = Field(default_factory=dict)  # why: free-form per-contact data
+
+
+class TalkoPartnerConfig(BaseFields):
+    """Per-partner Talko trunk credentials, stored in DB — never env (spec 0008).
+
+    The plaintext key must stay retrievable (the service hands it to the trunk
+    per dial), so API responses never carry it — see `TalkoPartnerView`. Treat
+    the store as a secret boundary.
+
+    Attributes:
+        partner_id: Talko/Tata partner account id (e.g. `"2"`); the natural key.
+        display_name: Operator label.
+        talko_api_base_url: Per-partner service-base override (trunk default otherwise).
+        talko_api_key: Partner secret for trunk dials.
+        default_did: Default caller DID for this partner's dials.
+        vendor_config_id: Tata vendor config reference, when known.
+    """
+
+    partner_id: str = Field(..., min_length=1)
+    display_name: str = ""
+    talko_api_base_url: str | None = None
+    talko_api_key: str = Field(..., min_length=1)
+    default_did: str | None = None
+    dids: list[str] = Field(default_factory=list)
+    vendor_config_id: str | None = None
+
+
+class CreateTalkoPartnerRequest(BaseModel):
+    """Body for creating a partner record (spec 0008).
+
+    Attributes:
+        partner_id: Natural key; 409 when taken.
+        display_name: Operator label.
+        talko_api_base_url: Optional service-base override.
+        talko_api_key: The partner secret (required on create).
+        default_did: Optional default caller DID (digits-normalized on write).
+        vendor_config_id: Optional Tata vendor config reference.
+    """
+
+    partner_id: str = Field(..., min_length=1)
+    display_name: str = ""
+    talko_api_base_url: str | None = None
+    talko_api_key: str = Field(..., min_length=1)
+    default_did: str | None = None
+    dids: list[str] = Field(default_factory=list)
+    vendor_config_id: str | None = None
+
+
+class UpdateTalkoPartnerRequest(BaseModel):
+    """Body for updating a partner record (spec 0008).
+
+    All fields optional; an omitted or empty `talko_api_key` keeps the stored
+    key (rotation is explicit, never accidental).
+
+    Attributes:
+        display_name: Replacement label.
+        talko_api_base_url: Replacement override (`None` keeps, empty string clears).
+        talko_api_key: Replacement secret when non-empty.
+        default_did: Replacement DID (digits-normalized on write).
+        dids: Replacement DID set (`None` keeps; normalized, deduped).
+        vendor_config_id: Replacement vendor reference.
+    """
+
+    display_name: str | None = None
+    talko_api_base_url: str | None = None
+    talko_api_key: str | None = None
+    default_did: str | None = None
+    dids: list[str] | None = None
+    vendor_config_id: str | None = None
+
+
+class TalkoPartnerView(BaseModel):
+    """Secret-free projection of a partner record for API responses (spec 0008).
+
+    The key itself never leaves the repository toward clients; operators get a
+    configured flag plus a last-4 hint for sanity checks.
+
+    Attributes:
+        partner_id: Natural key.
+        display_name: Operator label.
+        talko_api_base_url: Service-base override, when set.
+        default_did: Default caller DID, when set.
+        vendor_config_id: Tata vendor reference, when set.
+        key_configured: Whether a secret is stored.
+        key_hint: Last 4 chars of the stored key, when configured.
+    """
+
+    partner_id: str
+    display_name: str = ""
+    talko_api_base_url: str | None = None
+    default_did: str | None = None
+    dids: list[str] = Field(default_factory=list)
+    vendor_config_id: str | None = None
+    key_configured: bool = False
+    key_hint: str | None = None
+
+
+class TalkoPartnerListResponse(BaseModel):
+    """Paginated-list envelope for partner records (spec 0008).
+
+    Attributes:
+        partners: Secret-free partner views.
+    """
+
+    partners: list[TalkoPartnerView] = Field(default_factory=list)
+
+
+class ConnectTalkoPartnerRequest(BaseModel):
+    """Body for the one-click connect flow (spec 0009).
+
+    The operator pastes a partner key (plus an optional nickname); the service
+    validates it against talko-service, fetches the partner's DIDs, and upserts
+    the record — no hand-typed DIDs, base URLs, or vendor ids.
+
+    Attributes:
+        talko_api_key: The partner secret (used once for fetch/store, never returned).
+        display_name: Optional operator label (nickname guess otherwise).
+        partner_id: Optional override when the fetch cannot derive it (empty DID set).
+        talko_api_base_url: Optional service-base override for the fetch itself.
+    """
+
+    talko_api_key: str = Field(..., min_length=1)
+    display_name: str = ""
+    partner_id: str | None = None
+    talko_api_base_url: str | None = None
+
+
+class TalkoPartnerPreview(BaseModel):
+    """Key-free preview of what connecting would store (spec 0009).
+
+    Attributes:
+        partner_id: Derived from the fetched DIDs, or `None` when empty.
+        dids: Digits-normalized DIDs, Mapped status first.
+        display_name: Nickname guess for the operator to confirm.
+    """
+
+    partner_id: str | None = None
+    dids: list[str] = Field(default_factory=list)
+    display_name: str = ""

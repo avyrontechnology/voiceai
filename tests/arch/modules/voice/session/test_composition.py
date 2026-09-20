@@ -162,15 +162,3 @@ async def test_from_components_builds_a_live_session_with_reconfigured_gates():
     # quirk): the instance answers the call's gates, not the defaults.
     assert isinstance(tm.interruption_manager, InterruptionManager)
     assert tm.interruption_manager.number_of_words_for_interruption == 3
-
-
-def test_voice_register_leaves_the_store_empty_without_the_agents_module():
-    from voiceai.core.container import Container
-    from voiceai.modules.voice import VoiceCallService, register
-
-    container = Container()
-    register(container)
-    service = container.resolve(VoiceCallService)
-    assert isinstance(service, VoiceCallService)
-    # No agents module composed here: no store, so the legacy prompt fetch stays.
-    assert service._session_store is None

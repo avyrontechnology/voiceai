@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from voiceai.common.errors import AppError
+from voiceai.common.constants import HTTP_BAD_REQUEST, HTTP_CONFLICT
+from voiceai.common.errors import AppError, ErrorCode
 from voiceai.modules.voice.constants import (
     COMPONENT_LLM,
     COMPONENT_S2S,
@@ -26,10 +27,13 @@ from voiceai.modules.voice.constants import (
 
 __all__ = [
     "LlmError",
+    "PlaceCallError",
+    "TalkoPartnerExistsError",
     "S2SError",
     "SynthesisError",
     "TranscriptionError",
     "UnknownComponentLabelError",
+    "UnknownTalkoPartnerError",
     "VoiceComponentError",
     "VoiceError",
 ]
@@ -110,3 +114,29 @@ class S2SError(VoiceComponentError):
     """The speech-to-speech provider session failed."""
 
     component_name: ClassVar[str | None] = COMPONENT_S2S
+
+
+class PlaceCallError(VoiceError):
+    """An outbound place-call request failed validation or dialing (spec 0008).
+
+    Raised for undialable destinations and trunk refusals alike; the envelope
+    carries the operator-safe message while identifiers stay in details.
+    """
+
+    code: ClassVar[ErrorCode] = ErrorCode.INVALID_REQUEST
+    http_status: ClassVar[int] = HTTP_BAD_REQUEST
+
+
+class UnknownTalkoPartnerError(PlaceCallError):
+    """A `partner_id` named no stored partner record (spec 0008).
+
+    Fail-closed by design: the service never dials on another partner's
+    credentials, so an unknown id is a 400, never a fallback.
+    """
+
+
+class TalkoPartnerExistsError(PlaceCallError):
+    """A partner record already exists for the requested id (spec 0008)."""
+
+    code: ClassVar[ErrorCode] = ErrorCode.CONFLICT
+    http_status: ClassVar[int] = HTTP_CONFLICT

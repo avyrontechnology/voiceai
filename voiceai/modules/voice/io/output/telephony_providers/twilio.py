@@ -1,6 +1,5 @@
 """Twilio telephony output handler (spec 0004, B12a)."""
 
-
 import asyncio
 import audioop
 import base64
@@ -19,7 +18,8 @@ load_dotenv()
 
 class TwilioOutputHandler(TelephonyOutputHandler):
     """Twilio telephony output handler."""
-    def __init__(self, websocket: Any=None, mark_event_meta_data: Any=None, log_dir_name: Any=None) -> None:
+
+    def __init__(self, websocket: Any = None, mark_event_meta_data: Any = None, log_dir_name: Any = None) -> None:
         io_provider = "twilio"
 
         super().__init__(io_provider, websocket, mark_event_meta_data, log_dir_name)
@@ -52,7 +52,7 @@ class TwilioOutputHandler(TelephonyOutputHandler):
             except Exception as e:
                 logger.warning(f"Mark clear_data failed during interruption: {e}")
 
-    async def form_media_message(self, audio_data: Any, audio_format: Any="wav") -> Any:
+    async def form_media_message(self, audio_data: Any, audio_format: Any = "wav") -> Any:
         """Build the media message for an audio frame."""
         if audio_format != "mulaw":
             logger.info("Converting to mulaw")

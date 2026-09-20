@@ -1,6 +1,5 @@
 """Default-leg input handler: websocket/queue ingest for browser legs (spec 0004, B12a)."""
 
-
 import asyncio
 import base64
 import time
@@ -20,17 +19,18 @@ load_dotenv()
 
 class DefaultInputHandler:
     """Default-leg input handler: queue/websocket ingest with heard-text ledgers."""
+
     def __init__(
         self,
-        queues: Any=None,
-        websocket: Any=None,
-        input_types: Any=None,
-        mark_event_meta_data: Any=None,
-        queue: Any=None,
-        turn_based_conversation: Any=False,
-        conversation_recording: Any=None,
-        is_welcome_message_played: Any=False,
-        observable_variables: Any=None,
+        queues: Any = None,
+        websocket: Any = None,
+        input_types: Any = None,
+        mark_event_meta_data: Any = None,
+        queue: Any = None,
+        turn_based_conversation: Any = False,
+        conversation_recording: Any = None,
+        is_welcome_message_played: Any = False,
+        observable_variables: Any = None,
     ) -> None:
         self.queues = queues
         self.websocket = websocket
@@ -123,7 +123,7 @@ class DefaultInputHandler:
         self.response_heard_by_response = {}
         self.last_heard_response_uid = None
 
-    def get_response_heard_for_turn(self, turn_id: Any=None) -> Any:
+    def get_response_heard_for_turn(self, turn_id: Any = None) -> Any:
         """Return heard text for a turn id."""
         if turn_id is None:
             turn_id = self.last_heard_turn_id
@@ -131,7 +131,7 @@ class DefaultInputHandler:
             return ""
         return (self.response_heard_by_turn.get(turn_id) or "").strip()
 
-    def get_response_heard_for_response(self, response_uid: Any=None) -> Any:
+    def get_response_heard_for_response(self, response_uid: Any = None) -> Any:
         """Return heard text for a response uid."""
         if response_uid is None:
             response_uid = self.last_heard_response_uid

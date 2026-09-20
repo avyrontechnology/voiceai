@@ -1,82 +1,31 @@
 """The dependency-injection container (AGENTS.md rule 9).
 
-`build_container` and each module's `register(container)` are the only composition points in
-the project: nothing constructs a service, a repository or a client on its own, and nothing
-imports a global singleton. Controllers reach the container through `get_container`, tests
-swap fakes by re-registering the same keys.
+We use `dependency_injector` for declarative dependency management.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from typing import Any, Final
 
-from starlette.requests import Request
+from dependency_injector import containers, providers
 
-from voiceai.common.constants import (
-    CONTAINER_KEY_DB,
-    CONTAINER_KEY_REDIS,
-    CONTAINER_STATE_ATTR,
-)
-from voiceai.common.errors import ConfigurationError
+from voiceai.common.datetime_utils import utc_now
 from voiceai.common.logger import configure_logging, get_logger
 from voiceai.common.security import redact_secrets
 from voiceai.core.db import create_db
 from voiceai.core.environment import Environment, get_environment
 from voiceai.core.redis import create_redis
 
-if TYPE_CHECKING:  # import-direction rule: modules → core is the only static direction
-    from voiceai.modules import ModuleDef
-    from voiceai.modules.auth.ports import AuthStorePort
-
-__all__ = ["Container", "build_container", "create_auth_store", "get_container", "resolve_modules"]
-
-T = TypeVar("T")
+__all__ = ["VoiceAIContainer", "aclose_container", "build_container"]
 
 _LOGGER_MODULE: Final[str] = "core.container"
-_UNKNOWN_KEY_MESSAGE: Final[str] = "No provider registered for container key '{key}'"
 _MISSING_CONTAINER_MESSAGE: Final[str] = "Application state has no container; build the app with create_app()"
 _LOG_CONTAINER_BUILT: Final[str] = "container built: %s"
-_LOG_CLOSE_FAILED: Final[str] = "redis close failed (%s)"
-#: Connection URLs embed credentials, so they never reach a log line — not even redacted by
-#: key name, since `redis_url` does not look like a secret to `redact_secrets`.
 _SENSITIVE_ENV_FIELDS: Final[set[str]] = {"redis_url", "db_url"}
 
 
-def _key_name(key: type[Any] | str) -> str:  # why: keys are types or strings by design
-    """Render a container key for messages and logs.
-
-    Args:
-        key: The type or string key.
-
-    Returns:
-        The class name for a type key, the string itself otherwise.
-    """
-    return key.__name__ if isinstance(key, type) else str(key)
-
-
-def _constant_provider(value: Any) -> Callable[[Container], Any]:  # why: any registered object
-    """Wrap an already-built object so every registration is a provider callable.
-
-    Args:
-        value: The object to hand back on every resolve.
-
-    Returns:
-        A provider returning `value`.
-    """
-
-    def provide(_container: Container) -> Any:  # why: mirrors the wrapped value
-        return value
-
-    return provide
-
-
-async def _close_client(client: Any) -> None:  # why: clients come from third-party drivers
-    """Close a client that may expose `aclose()`, `close()`, or neither.
-
-    Args:
-        client: The object to close. Failures are logged, never raised: shutdown must finish.
-    """
+async def _close_client(client: Any) -> None:
+    """Close a client that may expose `aclose()`, `close()`, or neither."""
     closer = getattr(client, "aclose", None) or getattr(client, "close", None)
     if closer is None:
         return
@@ -84,229 +33,207 @@ async def _close_client(client: Any) -> None:  # why: clients come from third-pa
         result = closer()
         if hasattr(result, "__await__"):
             await result
-    except Exception as exc:  # a failed close must not mask the real shutdown reason
-        get_logger(_LOGGER_MODULE).warning(_LOG_CLOSE_FAILED, type(exc).__name__)
+    except Exception as exc:
+        get_logger(_LOGGER_MODULE).warning("client close failed (%s)", type(exc).__name__)
 
 
-class Container:
-    """A tiny service locator used only at composition time.
+def create_auth_store(redis_client: Any) -> Any:
+    """Build the auth store selected by the environment (spec 0006 E1)."""
+    from voiceai.platform.store import MemoryStore, RedisStore  # strangler bridge
 
-    Keys are either a type (preferred — `resolve` then returns that type) or a string for
-    things a type cannot name, such as the redis client that may legitimately be `None`.
-    """
-
-    def __init__(self) -> None:
-        self._providers: dict[Any, Callable[[Container], Any]] = {}  # why: heterogeneous registry
-        self._singletons: dict[Any, bool] = {}  # why: keys mirror `_providers`
-        self._instances: dict[Any, Any] = {}  # why: keys and values mirror `_providers`
-
-    @overload
-    def register(self, key: type[T], provider: Callable[[Container], T] | T, *, singleton: bool = True) -> None: ...
-
-    @overload
-    def register(  # why: string keys are untyped by nature, exactly as in `resolve`
-        self,
-        key: str,
-        provider: Callable[[Container], Any] | Any,
-        *,
-        singleton: bool = True,
-    ) -> None: ...
-
-    def register(
-        self,
-        key: type[T] | str,
-        provider: Callable[[Container], T] | T,
-        *,
-        singleton: bool = True,
-    ) -> None:
-        """Register (or replace) the provider for `key`.
-
-        Re-registering an existing key replaces the provider **and drops any cached singleton**,
-        which is what lets a test swap a fake in after `build_container` has already run.
-
-        Args:
-            key: The type or string the dependency is resolved by.
-            provider: A callable taking the container, or an already-built object. Anything
-                callable is treated as a provider — to register a class *itself* as a value,
-                wrap it: `register("model_type", lambda _c: HealthCheckRecord)`.
-            singleton: When `True` (default) the provider runs once and the result is cached;
-                when `False` every `resolve` calls it again.
-        """
-        factory: Callable[[Container], Any]  # why: providers return heterogeneous objects
-        if callable(provider):
-            factory = cast("Callable[[Container], Any]", provider)
-        else:
-            factory = _constant_provider(provider)
-        self._providers[key] = factory
-        self._singletons[key] = singleton
-        self._instances.pop(key, None)
-
-    @overload
-    def resolve(self, key: type[T]) -> T: ...
-
-    @overload
-    def resolve(self, key: str) -> Any: ...  # why: string keys are untyped by nature
-
-    def resolve(self, key: type[T] | str) -> Any:  # why: see the overloads above
-        """Resolve a dependency, building it on first use.
-
-        Args:
-            key: The type or string the dependency was registered under.
-
-        Returns:
-            The dependency — typed for a type key, `Any` for a string key.
-
-        Raises:
-            ConfigurationError: When nothing is registered for `key`. A typo in a key is a
-                wiring bug, so it fails loudly instead of returning `None`.
-        """
-        provider = self._providers.get(key)
-        if provider is None:
-            name = _key_name(key)
-            raise ConfigurationError(_UNKNOWN_KEY_MESSAGE.format(key=name), path=name)
-        if not self._singletons.get(key, True):
-            return provider(self)
-        if key not in self._instances:
-            # Membership, not truthiness: `None` (an unconfigured redis) is a valid singleton.
-            self._instances[key] = provider(self)
-        return self._instances[key]
-
-    def has(self, key: type[T] | str) -> bool:
-        """Report whether a provider is registered for `key`.
-
-        Args:
-            key: The type or string to look up.
-
-        Returns:
-            `True` when `resolve(key)` would succeed.
-        """
-        return key in self._providers
-
-    async def aclose(self) -> None:
-        """Release the clients this container built. Idempotent.
-
-        Only already-built singletons are closed — closing must never *create* a
-        connection. Called from the app's lifespan shutdown. Each client closes
-        independently: redis being unconfigured must not skip the database close.
-        """
-        redis_client = self._instances.pop(CONTAINER_KEY_REDIS, None)
-        if redis_client is not None:
-            await _close_client(redis_client)
-        database_client = self._instances.pop(CONTAINER_KEY_DB, None)
-        if database_client is not None:
-            await _close_client(database_client)
-
-
-def create_auth_store(container: Container) -> AuthStorePort:
-    """Build the auth store selected by the environment (spec 0006 E1).
-
-    The legacy import is deferred to call time on purpose: `core` must never import a
-    module's internals or a legacy package at module scope (AGENTS.md §3), and this
-    bridge retires at the E4 shim deletion — when the store gains a module-native home,
-    this factory repoints without touching the registration sites. `MemoryStore` and
-    `RedisStore` satisfy `AuthStorePort` structurally (the C0 seam test pins that at
-    runtime), so no module import is needed here either.
-
-    Selection reuses the existing redis knob (spec 0003 precedent: the environment, not
-    code, picks the backend — no new variable was added): no redis URL (tests,
-    single-proc dev) resolves to the in-process `MemoryStore`; a configured redis
-    resolves to `RedisStore` over the container client, the same connection the rest of
-    the process shares.
-
-    Args:
-        container: The container being composed, already carrying the redis client under
-            `CONTAINER_KEY_REDIS` (possibly `None` when redis is unconfigured).
-
-    Returns:
-        The env-selected store behind the auth port.
-    """
-    from voiceai.platform.store import MemoryStore, RedisStore  # strangler bridge (spec 0006 E1)
-
-    redis_client = container.resolve(CONTAINER_KEY_REDIS)
     if redis_client is None:
-        return MemoryStore()  # why: structural AuthStorePort, pinned by the C0 seam test
-    return RedisStore(redis_client)  # why: same structural conformance, over the shared client
+        return MemoryStore()
+    return RedisStore(redis_client)
 
 
-def _register_auth_store(container: Container) -> None:
-    """Bind the auth store port to the environment-selected legacy store (spec 0006 E1).
+def _build_auth_service(auth_store: Any) -> Any:
+    from voiceai.modules.auth.service import AuthService
 
-    Split out of `build_container` so the intent reads at the composition site; the
-    module's own `register` re-affirms the same binding through the same factory
-    (AGENTS.md rule 9 — a module owns its providers), so both paths resolve identically.
+    return AuthService(auth_store)
 
-    The `AuthStorePort` class object is the key: a `Protocol` is abstract for mypy
-    (hence the ignore below) but a plain, hashable class object at runtime — exactly
-    what the heterogeneous registry is built for.
+
+def _build_health_repository(redis_client: Any, db_client: Any) -> Any:
+    from voiceai.modules.health.repository import HealthRepository
+
+    return HealthRepository(redis_client=redis_client, db_client=db_client)
+
+
+def _build_health_service(repo: Any, logger: Any, started_at: Any) -> Any:
+    from voiceai.modules.health.service import HealthService
+
+    return HealthService(repo=repo, logger=logger, started_at=started_at)
+
+
+def _build_agent_repository(client: Any) -> Any:
+    if not client:
+        return None
+    from voiceai.modules.agents.repository import RedisAgentRepository
+
+    return RedisAgentRepository(client)
+
+
+def _build_agent_session_store() -> Any:
+    from voiceai.modules.agents.repository import FilePromptStore
+
+    return FilePromptStore()
+
+
+def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
+    from voiceai.modules.agents.adapters.llm import (
+        EXTRACTION_SYSTEM_PROMPT,
+        ensure_extraction_model_configured,
+        generate_extraction_text,
+    )
+    from voiceai.modules.agents.service import AgentService
+
+    return AgentService(
+        definitions=definitions,
+        prompt_store=prompt_store,
+        extraction_llm=generate_extraction_text,
+        require_extraction_model=ensure_extraction_model_configured,
+        extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,
+        logger=get_logger("agents"),
+    )
+
+
+def _build_voice_call_service(session_store: Any, db_client: Any, environment: Any) -> Any:
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import BaseRepository, InMemoryRepository, MotorRepository
+    from voiceai.modules.voice.adapters.manager import (
+        build_assistant_manager,
+        record_execution,
+    )
+    from voiceai.modules.voice.adapters.outbound import OutboundDialBridge
+    from voiceai.modules.voice.models import PlacedCall, TalkoPartnerConfig
+    from voiceai.modules.voice.repository import VoicePlaceCallRepository
+    from voiceai.modules.voice.service import VoiceCallService
+
+    executions: BaseRepository[PlacedCall]
+    partners: BaseRepository[TalkoPartnerConfig]
+    if isinstance(db_client, InMemoryDatabase):
+        executions = InMemoryRepository[PlacedCall](db_client, Collections.EXECUTIONS, PlacedCall)
+        partners = InMemoryRepository[TalkoPartnerConfig](db_client, Collections.TALKO_PARTNERS, TalkoPartnerConfig)
+    else:
+        executions = MotorRepository[PlacedCall](db_client, Collections.EXECUTIONS, PlacedCall)
+        partners = MotorRepository[TalkoPartnerConfig](db_client, Collections.TALKO_PARTNERS, TalkoPartnerConfig)
+    return VoiceCallService(
+        manager_factory=build_assistant_manager,
+        execution_recorder=record_execution,
+        logger=get_logger("voice"),
+        session_store=session_store,
+        place_repository=VoicePlaceCallRepository(executions, partners),
+        outbound=OutboundDialBridge(),
+        talko_service_base_url=environment.talko_service_base_url,
+    )
+
+
+def _build_wallet_service(db_client: Any) -> Any:
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import BaseRepository, InMemoryRepository, MotorRepository
+    from voiceai.modules.wallet.models import LedgerEntry, Wallet
+    from voiceai.modules.wallet.repository import MongoWalletRepository
+    from voiceai.modules.wallet.service import WalletService
+
+    wallet_repo: BaseRepository[Wallet]
+    ledger_repo: BaseRepository[LedgerEntry]
+    if isinstance(db_client, InMemoryDatabase):
+        wallet_repo = InMemoryRepository[Wallet](db_client, Collections.WALLETS, Wallet)
+        ledger_repo = InMemoryRepository[LedgerEntry](db_client, Collections.LEDGER, LedgerEntry)
+    else:
+        wallet_repo = MotorRepository[Wallet](db_client, Collections.WALLETS, Wallet)
+        ledger_repo = MotorRepository[LedgerEntry](db_client, Collections.LEDGER, LedgerEntry)
+    return WalletService(MongoWalletRepository(wallet_repo, ledger_repo))
+
+
+class VoiceAIContainer(containers.DeclarativeContainer):
+    """The central dependency injection container for VoiceAI."""
+
+    # Core Infrastructure
+    environment = providers.Singleton(get_environment)
+
+    redis_client = providers.Singleton(create_redis, environment)
+    db_client = providers.Singleton(create_db, environment)
+
+    auth_store = providers.Singleton(create_auth_store, redis_client)
+
+    # Auth Module
+    auth_service = providers.Factory(_build_auth_service, auth_store)
+
+    # Health Module
+    health_repository = providers.Factory(_build_health_repository, redis_client=redis_client, db_client=db_client)
+    health_service = providers.Factory(
+        _build_health_service,
+        repo=health_repository,
+        logger=providers.Callable(get_logger, "health"),
+        started_at=providers.Callable(utc_now),
+    )
+
+    # Agents Module
+    agent_definitions = providers.Singleton(_build_agent_repository, redis_client)
+    agent_session_store = providers.Singleton(_build_agent_session_store)
+
+    agent_service = providers.Factory(
+        _build_agent_service,
+        definitions=agent_definitions,
+        prompt_store=agent_session_store,
+    )
+
+    # Voice Module
+    voice_call_service = providers.Factory(
+        _build_voice_call_service,
+        session_store=agent_session_store,
+        db_client=db_client,
+        environment=environment,
+    )
+
+    # Wallet Module
+    wallet_service = providers.Factory(_build_wallet_service, db_client=db_client)
+
+
+async def aclose_container(container: VoiceAIContainer) -> None:
+    """Release the container's infrastructure clients.
+
+    Dependency-injector drops methods defined on declarative containers, so shutdown
+    lives here, not on the class. Both providers are resolved unconditionally: client
+    construction opens no socket (documented, tested), so closing an unused container
+    is a safe no-op, and the current binding — override or built — is always released.
+    One client's close failure never blocks the other.
 
     Args:
-        container: The container being composed.
+        container: The container whose clients to release.
     """
-    from voiceai.modules.auth.ports import AuthStorePort  # deferred: modules → core is the only static direction
-
-    container.register(AuthStorePort, create_auth_store)  # type: ignore[type-abstract]
-
-
-def resolve_modules(modules: Sequence[ModuleDef] | None) -> Sequence[ModuleDef]:
-    """Return the module definitions to compose, importing the registry only when needed.
-
-    The import of `voiceai.modules` lives inside this function body on purpose: `modules → core`
-    is the only static import direction allowed, so core must never import the registry at
-    module scope (spec 0001, "Import direction").
-
-    Args:
-        modules: An explicit module list, or `None` for the project registry. Tests pass `[]`
-            to compose nothing at all.
-
-    Returns:
-        The module definitions to register and mount.
-    """
-    if modules is not None:
-        return modules
-    from voiceai.modules import ALL_MODULES
-
-    return ALL_MODULES
+    await _close_client(container.redis_client())
+    await _close_client(container.db_client())
 
 
-def build_container(env: Environment | None = None, *, modules: Sequence[ModuleDef] | None = None) -> Container:
-    """Compose the process: configuration, logging, infrastructure clients, then modules.
+def build_container(env: Environment | None = None) -> VoiceAIContainer:
+    """Compose the process: configuration, logging, infrastructure clients.
 
     Args:
         env: Explicit configuration; `None` uses the cached process environment.
-        modules: Explicit module definitions; `None` uses the project registry.
 
     Returns:
-        A container with `Environment`, `"redis"` (possibly `None`), `"db"`, and the
-        `AuthStorePort` (env-selected legacy store) registered, plus whatever each
-        module's `register` added.
+        A wired container.
     """
     environment = env if env is not None else get_environment()
     configure_logging(environment.log_level)
-    container = Container()
-    container.register(Environment, environment)
-    container.register(CONTAINER_KEY_REDIS, lambda current: create_redis(current.resolve(Environment)))
-    container.register(CONTAINER_KEY_DB, lambda current: create_db(current.resolve(Environment)))
-    _register_auth_store(container)
+
+    container = VoiceAIContainer()
+    container.environment.override(providers.Singleton(lambda: environment))
+
     summary = environment.model_dump(exclude=_SENSITIVE_ENV_FIELDS)
     get_logger(_LOGGER_MODULE).info(_LOG_CONTAINER_BUILT, redact_secrets(summary))
-    for module in resolve_modules(modules):
-        module.register(container)
+
+    container.wire(
+        modules=[
+            "voiceai.modules.auth.controller",
+            "voiceai.modules.health.controller",
+            "voiceai.modules.agents.controller",
+            "voiceai.modules.voice.controller",
+            "voiceai.modules.wallet.controller",
+        ]
+    )
+
     return container
-
-
-def get_container(request: Request) -> Container:
-    """FastAPI dependency returning the container stored on the application.
-
-    Args:
-        request: The incoming request, whose `app.state` carries the container.
-
-    Returns:
-        The application's container.
-
-    Raises:
-        ConfigurationError: When the app was not built by `create_app`.
-    """
-    container = getattr(request.app.state, CONTAINER_STATE_ATTR, None)
-    if container is None:
-        raise ConfigurationError(_MISSING_CONTAINER_MESSAGE, path=CONTAINER_STATE_ATTR)
-    return cast("Container", container)

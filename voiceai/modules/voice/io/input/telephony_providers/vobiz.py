@@ -1,6 +1,5 @@
 """Vobiz telephony input handler (spec 0004, B12a)."""
 
-
 import asyncio
 import json
 import os
@@ -20,16 +19,17 @@ load_dotenv()
 
 class VobizInputHandler(TelephonyInputHandler):
     """Vobiz telephony input handler."""
+
     def __init__(
         self,
         queues: Any,
-        websocket: Any=None,
-        input_types: Any=None,
-        mark_event_meta_data: Any=None,
-        turn_based_conversation: Any=False,
-        is_welcome_message_played: Any=False,
-        observable_variables: Any=None,
-        auth_credentials: Any=None,
+        websocket: Any = None,
+        input_types: Any = None,
+        mark_event_meta_data: Any = None,
+        turn_based_conversation: Any = False,
+        is_welcome_message_played: Any = False,
+        observable_variables: Any = None,
+        auth_credentials: Any = None,
     ) -> None:
         self.auth_credentials = auth_credentials or {}
         super().__init__(

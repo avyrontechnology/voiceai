@@ -12,6 +12,7 @@ here, so a port moving between files can never ripple.
 from __future__ import annotations
 
 from voiceai.modules.voice.ports.llm import AgentBrainPort, GraphBrainPort, LlmPort
+from voiceai.modules.voice.ports.outbound import DialOutcome, OutboundDialPort, PartnerPreview
 from voiceai.modules.voice.ports.s2s import S2SPort
 from voiceai.modules.voice.ports.synthesis import SequenceGatePort, SynthesisPoolPort, SynthesisPort
 from voiceai.modules.voice.ports.telephony import (
@@ -28,6 +29,9 @@ from voiceai.modules.voice.ports.transcription import (
 
 __all__ = [
     "ActiveTranscriberProbePort",
+    "DialOutcome",
+    "OutboundDialPort",
+    "PartnerPreview",
     "AgentBrainPort",
     "CallInputPort",
     "CallOutputPort",

@@ -46,6 +46,7 @@ __all__ = ["DeepgramTranscriber"]
 
 class DeepgramTranscriber(BaseTranscriber):
     """Deepgram transcriber: nova/flux sessions behind one facade."""
+
     @property
     def is_english(self) -> Any:
         """Whether the session language is English."""
@@ -54,16 +55,16 @@ class DeepgramTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="nova-2",
-        stream: Any=True,
-        language: Any="en",
-        endpointing: Any="400",
-        sampling_rate: Any="16000",
-        encoding: Any="linear16",
-        output_queue: Any=None,
-        keywords: Any=None,
-        process_interim_results: Any="true",
+        input_queue: Any = None,
+        model: Any = "nova-2",
+        stream: Any = True,
+        language: Any = "en",
+        endpointing: Any = "400",
+        sampling_rate: Any = "16000",
+        encoding: Any = "linear16",
+        output_queue: Any = None,
+        keywords: Any = None,
+        process_interim_results: Any = "true",
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -151,7 +152,6 @@ class DeepgramTranscriber(BaseTranscriber):
         # merged into lid_shadow_events.asr_lid_events at call end.
         self.flux_lid_events: list[dict] = []
 
-
     # --- connection session (connection.py) ---
 
     def get_deepgram_ws_url(self) -> Any:
@@ -209,7 +209,7 @@ class DeepgramTranscriber(BaseTranscriber):
         """Return the transcriber meta info."""
         return _dg_nova.get_meta_info(self)
 
-    async def sender(self, ws: Any=None) -> None:
+    async def sender(self, ws: Any = None) -> None:
         """Stream queued audio to the socket (non-streaming legs)."""
         # Async generator: re-yield (the B11b _llm_stream precedent).
         async for item in _dg_nova.sender(self, ws):
@@ -274,7 +274,7 @@ class DeepgramTranscriber(BaseTranscriber):
             logger.warning("Missing start or duration in Deepgram message, cannot update transcription cursor")
         return self.transcription_cursor
 
-    def _mark_last_interim_final(self, latency_ms: Any=None) -> None:
+    def _mark_last_interim_final(self, latency_ms: Any = None) -> None:
         """Mark the last interim entry as final and optionally update its latency.
         Clears prior is_final flags first — prevents double-counting on the
         EagerEndOfTurn → TurnResumed → Updates → EndOfTurn path where an earlier

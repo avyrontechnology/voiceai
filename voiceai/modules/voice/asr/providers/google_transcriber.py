@@ -1,6 +1,5 @@
 """Google transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import queue
 import threading
@@ -29,13 +28,13 @@ class GoogleTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        output_queue: Any=None,
-        language: Any="en-US",
-        encoding: Any=None,
-        sample_rate_hertz: Any=None,
-        model: Any="latest_long",
-        run_id: Any="",
+        input_queue: Any = None,
+        output_queue: Any = None,
+        language: Any = "en-US",
+        encoding: Any = None,
+        sample_rate_hertz: Any = None,
+        model: Any = "latest_long",
+        run_id: Any = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -103,7 +102,7 @@ class GoogleTranscriber(BaseTranscriber):
         except Exception:
             self.loop = None
 
-    def _enqueue_output(self, data: Any, meta: Any=None) -> None:
+    def _enqueue_output(self, data: Any, meta: Any = None) -> None:
         """Thread-safe enqueue to transcriber_output_queue."""
         if self.transcriber_output_queue is None:
             return
@@ -260,7 +259,7 @@ class GoogleTranscriber(BaseTranscriber):
                 except Exception:
                     logger.exception("Non-bytes chunk received in google audio generator; dropping")
 
-    def _append_turn_latency(self, final_transcript: Any=None) -> None:
+    def _append_turn_latency(self, final_transcript: Any = None) -> None:
         """
         Add a turn latency entry compatible with the Deepgram 'turn_latencies' entries.
         Called when a final transcript arrives (end-of-turn semantics).

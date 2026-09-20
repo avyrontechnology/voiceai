@@ -1,6 +1,5 @@
 """Smallest AI transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import json
 import os
@@ -42,8 +41,8 @@ class SmallestTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: str,
-        input_queue: Any=None,
-        output_queue: Any=None,
+        input_queue: Any = None,
+        output_queue: Any = None,
         stream: bool = True,
         language: str = "en",
         endpointing: str = "400",

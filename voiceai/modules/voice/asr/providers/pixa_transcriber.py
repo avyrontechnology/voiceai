@@ -1,6 +1,5 @@
 """Pixa transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import json
 import os
@@ -39,13 +38,13 @@ class PixaTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="pixa-1",
-        stream: Any=True,
-        language: Any="hi",
-        encoding: Any="linear16",
-        sampling_rate: Any="16000",
-        output_queue: Any=None,
+        input_queue: Any = None,
+        model: Any = "pixa-1",
+        stream: Any = True,
+        language: Any = "hi",
+        encoding: Any = "linear16",
+        sampling_rate: Any = "16000",
+        output_queue: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)

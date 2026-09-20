@@ -30,7 +30,7 @@ from voiceai.modules.agents.repository import FilePromptStore
 from voiceai.modules.agents.service import AgentService
 
 if TYPE_CHECKING:  # annotation only: the spy stands in for a container at runtime
-    from voiceai.core.container import Container
+    from voiceai.core.container import VoiceAIContainer
 
 
 def test_module_is_a_frozen_module_def_named_agents():
@@ -42,11 +42,6 @@ def test_module_is_a_frozen_module_def_named_agents():
         agents.MODULE.name = "renamed"  # type: ignore[misc]  # the point: assignment must raise
 
 
-def test_agents_module_is_registered_in_all_modules():
-    """Spec 0001 registry pattern: the module rides `ALL_MODULES` from day one (step A1)."""
-    assert agents.MODULE in ALL_MODULES
-
-
 def test_router_mounts_exactly_the_four_legacy_paths():
     """A4's controller serves the quickstart surface under the API prefix — no more, no less."""
     from fastapi.routing import APIRoute
@@ -55,22 +50,6 @@ def test_router_mounts_exactly_the_four_legacy_paths():
 
     assert len(agents.MODULE.router.routes) == 6  # GET+PUT+DELETE on /agent/{id} share a path
     assert paths == {AGENT_PATH, AGENT_BY_ID_PATH, AGENT_PROMPTS_PATH, ALL_AGENTS_PATH}
-
-
-def test_register_binds_the_repository_service_and_ports():
-    """A4's `register` binds every composition key spec 0002 names (rule 9), via a spy."""
-    keys: list[object] = []
-    spy = SimpleNamespace(register=lambda key, provider, **kwargs: keys.append(key))
-
-    agents.MODULE.register(cast("Container", spy))
-
-    assert set(keys) == {
-        agents.CONTAINER_KEY_AGENT_DEFINITIONS,
-        FilePromptStore,
-        AgentService,
-        AgentDefinitionPort,
-        AgentSessionStorePort,
-    }
 
 
 def test_public_surface_exports_the_ports():

@@ -10,12 +10,13 @@ the flag on, an unknown agent id closes 4404 and a served definition runs throug
 production uses). Every close carries a code, never an error body.
 """
 
+from dependency_injector import providers
+
 from voiceai.core.app_factory import create_app
 from voiceai.core.container import build_container
 from voiceai.core.environment import Environment
-from voiceai.modules.agents.ports import AgentDefinitionPort
 from voiceai.modules.voice import MODULE as VOICE_MODULE
-from voiceai.modules.voice import VoiceCallService, register
+from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.constants import WS_CLOSE_DARK, WS_CLOSE_UNKNOWN_AGENT
 from voiceai.modules.voice.controller import voice_chat
 
@@ -62,26 +63,32 @@ class _Socket:
 
 
 def _container(*, flag, store=_Definitions(CONFIG), service=None):
-    container = build_container(Environment(voice_ws_enabled=flag), modules=[VOICE_MODULE])
-    container.register(AgentDefinitionPort, store)
-    container.register(VoiceCallService, service or _Service())
+    container = build_container(Environment(voice_ws_enabled=flag))
+    container.agent_definitions.override(providers.Object(store))
+    container.voice_call_service.override(providers.Object(service or _Service()))
     return container
 
 
 def test_route_is_mounted_on_the_factory_app():
     from voiceai.modules.voice.constants import CHAT_WS_PATH
 
-    container = build_container(Environment(), modules=[VOICE_MODULE])
-    app = create_app(env=Environment(), container=container, modules=[VOICE_MODULE])
+    container = build_container(Environment())
+    app = create_app(env=Environment(), container=container)
     paths = [getattr(route, "path", "") for route in app.routes]
     assert f"/api/v1{CHAT_WS_PATH}" in paths
 
 
 async def test_dark_route_closes_immediately():
     container = _container(flag=False)
-    service = container.resolve(VoiceCallService)
+    service = container.voice_call_service()
     socket = _Socket()
-    await voice_chat(socket, AGENT_ID, service, container)
+    await voice_chat(
+        websocket=socket,  # type: ignore[arg-type]  # why: offline fake, no extra deps per module docstring
+        agent_id=AGENT_ID,
+        service=service,
+        environment=container.environment(),
+        definitions=container.agent_definitions(),
+    )
     assert socket.accepted is True
     assert socket.close_code == WS_CLOSE_DARK
     assert service.calls == []
@@ -89,9 +96,15 @@ async def test_dark_route_closes_immediately():
 
 async def test_unknown_agent_closes_when_flag_on():
     container = _container(flag=True, store=_Definitions(None))
-    service = container.resolve(VoiceCallService)
+    service = container.voice_call_service()
     socket = _Socket()
-    await voice_chat(socket, AGENT_ID, service, container)
+    await voice_chat(
+        websocket=socket,  # type: ignore[arg-type]  # why: offline fake, no extra deps per module docstring
+        agent_id=AGENT_ID,
+        service=service,
+        environment=container.environment(),
+        definitions=container.agent_definitions(),
+    )
     assert socket.close_code == WS_CLOSE_UNKNOWN_AGENT
     assert service.calls == []
 
@@ -100,17 +113,15 @@ async def test_served_agent_runs_through_the_service():
     service = _Service()
     container = _container(flag=True, service=service)
     socket = _Socket()
-    await voice_chat(socket, AGENT_ID, service, container)
+    await voice_chat(
+        websocket=socket,  # type: ignore[arg-type]  # why: offline fake, no extra deps per module docstring
+        agent_id=AGENT_ID,
+        service=service,  # type: ignore[arg-type]  # why: recording double stands in for VoiceCallService
+        environment=container.environment(),
+        definitions=container.agent_definitions(),
+    )
     (call,) = service.calls
     assert call["agent_config"] == CONFIG
     assert call["agent_id"] == AGENT_ID
     assert call["ws"] is socket
     assert socket.close_code == 1000
-
-
-def test_container_without_the_agents_port_still_builds_dark():
-    from voiceai.core.container import Container
-
-    container = Container()
-    register(container)
-    assert container.resolve(VoiceCallService)._session_store is None

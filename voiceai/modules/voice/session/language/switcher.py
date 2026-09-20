@@ -200,9 +200,7 @@ class SwitcherSession(Protocol):
     def _TaskManager__detector_corroborates(self, segments: Any, target: Any) -> bool: ...  # noqa: D102
     def _TaskManager__detector_language_mismatch(self) -> bool: ...  # noqa: D102
     def _TaskManager__arm_lid_playback_gate(self, sequence_id: Any, decision_task: Any) -> None: ...  # noqa: D102
-    def _TaskManager__release_lid_playback_gate(
-        self, gate: dict, outcome: str, clear: bool = ...
-    ) -> None: ...  # noqa: D102
+    def _TaskManager__release_lid_playback_gate(self, gate: dict, outcome: str, clear: bool = ...) -> None: ...  # noqa: D102
     def _TaskManager__language_directive(self, label: str) -> str: ...  # noqa: D102
     def _TaskManager__apply_language_directive(self, label: str, context_note: Any = ...) -> None: ...  # noqa: D102
     async def _TaskManager__play_switch_handoff(self, target: str) -> None: ...  # noqa: D102
@@ -400,9 +398,7 @@ async def run_language_switch(
         ),
         default=0.0,
     )
-    min_segment_s = float(
-        os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S))
-    )
+    min_segment_s = float(os.getenv("LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S", str(LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S)))
     # Late arm: the spawn-time arm reads the buffer at one instant, and an idle-flush decide's
     # drain (or a segment landing just after) leaves it empty there — the reply then plays in
     # the old language while this decide runs. Arm here from the drained evidence instead.
@@ -501,7 +497,9 @@ async def run_language_switch(
                 detector_transcript,
                 active_transcript,
                 active,
-                recent_turns=None if self.language_switcher.explicit_only else self._TaskManager__recent_detected_turns(pool),  # noqa: E501
+                recent_turns=None
+                if self.language_switcher.explicit_only
+                else self._TaskManager__recent_detected_turns(pool),  # noqa: E501
                 last_agent_turn=self.conversation_history.last_assistant_content(),
             ),
             timeout=decide_timeout_s,
@@ -573,8 +571,7 @@ async def run_language_switch(
                 (
                     lang.get("confidence")
                     for lang in languages
-                    if isinstance(lang, dict)
-                    and str(lang.get("language") or "").split("-")[0].lower() == short_target
+                    if isinstance(lang, dict) and str(lang.get("language") or "").split("-")[0].lower() == short_target
                 ),
                 None,
             )
@@ -719,9 +716,7 @@ async def run_language_switch(
                 "correction, generating follow-up for the latest turn"
             )
         else:
-            logger.info(
-                f"LanguageSwitcher: corrected user turn to detector transcript {detector_transcript[:80]!r}"
-            )
+            logger.info(f"LanguageSwitcher: corrected user turn to detector transcript {detector_transcript[:80]!r}")
     elif self.conversation_history.user_turn_signature() != history_signature_at_decide:
         # A main turn landed during the decide; appending would re-route on phantom input.
         transcript_corrected = False
@@ -1033,9 +1028,7 @@ class LanguageSwitchCoordinator:
         spawn_language: str | None = None,
     ) -> None:
         """Run the locked decide-and-apply wrapper (see `handle_language_switch`)."""
-        return await handle_language_switch(
-            self.session, active_transcript, meta_info, spawn_language=spawn_language
-        )
+        return await handle_language_switch(self.session, active_transcript, meta_info, spawn_language=spawn_language)
 
     async def run_language_switch(
         self,

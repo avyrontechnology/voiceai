@@ -1,6 +1,5 @@
 """Azure transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import os
 import sys
@@ -23,8 +22,15 @@ load_dotenv()
 
 class AzureTranscriber(BaseTranscriber):
     """Azure transcriber."""
+
     def __init__(
-        self, telephony_provider: Any, input_queue: Any=None, output_queue: Any=None, language: Any="en-US", encoding: Any="linear16", **kwargs: Any  # noqa: E501 — verbatim legacy line (R8)
+        self,
+        telephony_provider: Any,
+        input_queue: Any = None,
+        output_queue: Any = None,
+        language: Any = "en-US",
+        encoding: Any = "linear16",
+        **kwargs: Any,  # noqa: E501 — verbatim legacy line (R8)
     ) -> None:
         super().__init__(input_queue)
         self.transcription_task = None

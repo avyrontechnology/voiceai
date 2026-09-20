@@ -630,9 +630,7 @@ def _promote_progression_turn_ids(progression_data: dict[str, Any]) -> None:
             _ub["turn_id"] = _seq_to_asr_turn[_seq]
 
     # Stamp a user-speech record for unanswered/interrupted turns too (agent_start_ms stays None).
-    _ub_turns = {
-        _ub.get("turn_id") for _ub in progression_data["user_bot_latencies"] if _ub.get("turn_id") is not None
-    }
+    _ub_turns = {_ub.get("turn_id") for _ub in progression_data["user_bot_latencies"] if _ub.get("turn_id") is not None}
     for _tt in progression_data["transcriber_latencies"].get("turn_latencies", []):
         # _ub_turns holds ints; "turn_3" in {3} is always False, which duplicated every
         # covered Whisper turn. Compare/store as int (progression copy only).

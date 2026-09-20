@@ -570,83 +570,6 @@ async def delete_webhook(webhook_id: str, store: MemoryStore = Depends(get_store
     return DeletedResponse()
 
 
-# --- wallet --------------------------------------------------------------------------
-
-wallet_router = APIRouter(prefix="/wallet", tags=["Wallet"])
-
-
-@wallet_router.get("", response_model=Wallet)
-async def get_wallet(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_role("admin")),
-) -> Wallet:
-    return await store.get_wallet()
-
-
-@wallet_router.post("/topup", response_model=Wallet)
-async def topup_wallet(payload: TopUpRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_role("admin")),
-) -> Wallet:
-    wallet = await store.get_wallet()
-    wallet.balance_credits += payload.amount_credits
-    wallet.updated_at = utcnow()
-    await store.save_wallet(wallet)
-    await store.add_ledger_entry(
-        LedgerEntry(entry_id=new_id("led"), type="topup", amount_credits=payload.amount_credits, reason=payload.reason)
-    )
-    return wallet
-
-
-@wallet_router.get("/ledger", response_model=LedgerListResponse)
-async def get_ledger(
-    limit: int = 50, type: Optional[str] = None, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_role("admin")),
-) -> LedgerListResponse:
-    return LedgerListResponse(entries=await store.list_ledger(limit=limit, entry_type=type))
-
-
-# --- templates --------------------------------------------------------------------------
-
-templates_router = APIRouter(prefix="/templates", tags=["Templates"])
-
-
-@templates_router.get("", response_model=TemplateListResponse)
-async def list_templates(
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> TemplateListResponse:
-    return TemplateListResponse(
-        templates=[
-            TemplateSummary(
-                template_id=t.template_id,
-                name=t.name,
-                industry=t.industry,
-                description=t.description,
-                languages=t.languages,
-            )
-            for t in TEMPLATES
-        ]
-    )
-
-
-@templates_router.get("/{template_id}")
-async def get_template(template_id: str,
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> JSONResponse:
-    template = lookup_template(template_id)
-    if template is None:
-        raise _not_found("Template", template_id)
-    return JSONResponse(content=template.model_dump(mode="json"))
-
-
-@templates_router.post("/{template_id}/import")
-async def import_template(template_id: str,
-    _auth: Principal = Depends(require_scope("agents:write")),
-) -> JSONResponse:
-    template = lookup_template(template_id)
-    if template is None:
-        raise _not_found("Template", template_id)
-    logger.info(f"Template {template_id} imported")
-    return JSONResponse(content={"agent_payload": template.agent_payload})
-
 
 # --- inbound --------------------------------------------------------------------------
 
@@ -1334,6 +1257,11 @@ async def delete_api_key(
 def build_routers() -> list[APIRouter]:
     from voiceai.platform.auth_router import auth_router
 
+    # Strangler: wallet/templates routes moved to voiceai.modules.wallet (their
+    # canonical home); the legacy bare mounts below re-export the module's
+    # public routers until the bare paths retire.
+    from voiceai.modules.wallet import templates_router, wallet_router
+
     return [
         auth_router,
         calls_router,
@@ -1374,7 +1302,11 @@ def create_platform_app(store: Optional[MemoryStore] = None) -> FastAPI:
     Returns:
         The FastAPI application with each router mounted bare and prefixed.
     """
+    from dependency_injector import providers
+
     from voiceai.common.constants import API_PREFIX
+    from voiceai.core.container import build_container
+    from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
 
     app = FastAPI(title="VoiceAI Platform", version="0.1.0")
     app.state.platform_store = store or MemoryStore()
@@ -1383,4 +1315,12 @@ def create_platform_app(store: Optional[MemoryStore] = None) -> FastAPI:
         # Spec 0007: dual-serve — the same handler answers under `/api/v1` too.
         # Bare paths stay byte-identical; duplicate operation_ids warn only.
         app.include_router(router, prefix=API_PREFIX)
+    # The migrated wallet/templates routes resolve their service from a container:
+    # this app owns one, with the wallet bound to THIS app's store (one ledger,
+    # not two). Instance-scoped — class-level overrides do not reach instances.
+    container = build_container()
+    container.wallet_service.override(
+        providers.Factory(build_legacy_wallet_service, app.state.platform_store)
+    )
+    app.state.container = container
     return app

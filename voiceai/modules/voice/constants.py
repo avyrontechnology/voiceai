@@ -135,3 +135,40 @@ CHAT_WS_PATH: Final[str] = "/chat/v1/{agent_id}"
 WS_CLOSE_DARK: Final[int] = 4403
 #: WS close code when no agent definition exists for the id (mirrors HTTP 404).
 WS_CLOSE_UNKNOWN_AGENT: Final[int] = 4404
+
+# --- Outbound place-call (spec 0008) -------------------------------------------------
+#: HTTP route for single-call outbound dials (dual-served bare + API prefix).
+PLACE_CALL_PATH: Final[str] = "/calls/place"
+#: Partner credential collection routes (dual-served bare + API prefix).
+PARTNERS_PATH: Final[str] = "/talko/partners"
+PARTNER_ITEM_PATH: Final[str] = "/talko/partners/{partner_id}"
+#: `PlaceCallRequest.provider` values (mirrors the legacy trunk contract).
+PROVIDER_SIMULATED: Final[str] = "simulated"
+PROVIDER_TALKO: Final[str] = "talko"
+#: Destination-number rule (Tata rejects malformed numbers opaquely; fail fast).
+RECIPIENT_MIN_DIGITS: Final[int] = 10
+RECIPIENT_MAX_DIGITS: Final[int] = 15
+#: Indian country code: `91…` destinations must be exactly this many digits.
+INDIA_COUNTRY_CODE: Final[str] = "91"
+INDIA_FULL_LENGTH: Final[int] = 12
+#: Default per-dial delay scale for simulated calls (inline when 0).
+DEFAULT_DELAY_SCALE: Final[float] = 0.5
+#: Detail keys for client-safe validation failures (identifiers only).
+PARTNER_ID_KEY: Final[str] = "partner_id"
+TO_NUMBER_KEY: Final[str] = "to_number"
+
+# --- Talko partner connect + multi-DID (spec 0009) -----------------------------------
+#: Preview route: validate a partner key and fetch its DIDs without persisting.
+PARTNERS_PREVIEW_PATH: Final[str] = "/talko/partners/preview"
+#: Connect route: preview + upsert in one step for the integrations UI.
+PARTNERS_CONNECT_PATH: Final[str] = "/talko/partners/connect"
+#: Refresh route: re-fetch a stored partner's DIDs with its own key.
+PARTNER_REFRESH_PATH: Final[str] = "/talko/partners/{partner_id}/refresh"
+#: Talko-service DID listing, relative to the service base URL.
+TALKO_DIDS_PATH: Final[str] = "/dids/list-dids"
+#: Bounded fetch page (partner DID sets are small; one page suffices).
+TALKO_DIDS_PAGE_SIZE: Final[int] = 200
+#: Outbound HTTP bound for the partner-DID fetch (AGENTS.md §4: timeouts mandatory).
+TALKO_FETCH_TIMEOUT_S: Final[float] = 15.0
+#: Detail keys for client-safe failures (identifiers only).
+TALKO_API_KEY_TRUNCATED_KEY: Final[str] = "key_hint"

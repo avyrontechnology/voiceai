@@ -146,6 +146,4 @@ async def report_stream_connect(self: HealthSession) -> None:
     self._cb_stream_reported = True
     # welcome_message_delay is slept through before the poll; it is agent config, not carrier latency.
     latency_ms = round(self.stream_sid_ts - self.conversation_start_init_ts - (self.welcome_message_delay or 0))
-    await self._report_provider_health(
-        "telephony_stream", provider, None, True, max(0, latency_ms), phase="connect"
-    )
+    await self._report_provider_health("telephony_stream", provider, None, True, max(0, latency_ms), phase="connect")

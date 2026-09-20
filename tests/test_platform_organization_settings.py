@@ -75,7 +75,7 @@ async def test_workspace_reset_wipes_platform_data(client):
     assert reset.status_code == 200
     assert reset.json()["state"] == "reset"
 
-    assert (await client.get("/wallet")).json()["balance_credits"] == 0
+    assert (await client.get("/wallet")).json()["data"]["balance_credits"] == 0
     assert (await client.get("/batches")).json() == {"batches": []}
     assert (await client.get("/sub-accounts")).json() == {"sub_accounts": []}
     # Organization profile itself survives the reset.

@@ -402,9 +402,7 @@ class CallConfig:
             preloaded_welcome_audio=preloaded_welcome_audio,
             language_injection_mode=task["task_config"].get("language_injection_mode"),
             language_instruction_template=task["task_config"].get("language_instruction_template"),
-            stream=(
-                task["tools_config"]["synthesizer"] is not None and task["tools_config"]["synthesizer"]["stream"]
-            )
+            stream=(task["tools_config"]["synthesizer"] is not None and task["tools_config"]["synthesizer"]["stream"])
             and (enforce_streaming or not turn_based_conversation),
             llm_config=llm_config,
             llm_config_map=llm_config_map,
@@ -417,9 +415,7 @@ class CallConfig:
             ),
             check_if_user_online=conversation_config.get("check_if_user_online", True),
             check_user_online_message_config=check_user_online_message_config,
-            process_interim_results=(
-                "true" if conversation_config.get("optimize_latency", False) is True else "false"
-            ),
+            process_interim_results=("true" if conversation_config.get("optimize_latency", False) is True else "false"),
             minimum_wait_duration=(task["tools_config"].get("transcriber") or {}).get("endpointing"),
             incremental_delay=conversation_config.get("incremental_delay", 100),
             hang_conversation_after=conversation_config.get("hangup_after_silence", 10),

@@ -1,6 +1,5 @@
 """Talko telephony input handler: Twilio-compatible rescue leg (spec 0004, B12a)."""
 
-
 import base64
 import binascii
 from typing import Any

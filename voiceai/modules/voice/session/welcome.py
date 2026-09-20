@@ -258,9 +258,7 @@ async def synthesize_welcome_audio(self: WelcomeSession, text: Any) -> Any:
             return None
     pcm = None
     try:
-        processor = getattr(synth, "_process_audio_data", None) or getattr(
-            synth, "_process_audio_chunk", None
-        )
+        processor = getattr(synth, "_process_audio_data", None) or getattr(synth, "_process_audio_chunk", None)
         pcm = processor(raw) if callable(processor) else None
     except Exception as e:
         logger.error(f"Welcome TTS post-processing failed: {e}")
@@ -388,9 +386,7 @@ async def handle_init_event(self: WelcomeSession, init_meta_data: Any) -> None:
                 self.context_data["recipient_data"].update(incoming)
             logger.info(f"Context data updated - {self.context_data}")
 
-            self.prompts["system_prompt"] = update_prompt_with_context(
-                self.prompts["system_prompt"], self.context_data
-            )
+            self.prompts["system_prompt"] = update_prompt_with_context(self.prompts["system_prompt"], self.context_data)
 
             if self.system_prompt["content"]:
                 system_prompt = self.system_prompt["content"]

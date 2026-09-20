@@ -383,9 +383,7 @@ async def test_list_agents_answers_the_quickstart_directory_shape():
     """`{"agents": [{"agent_id", "data"}, ...]}` — empty list when nothing is stored."""
     store = FakeDefinitionStore({AGENT_ID: stored_record()})
 
-    assert await build_service(store).list_agents() == {
-        "agents": [{"agent_id": AGENT_ID, "data": stored_record()}]
-    }
+    assert await build_service(store).list_agents() == {"agents": [{"agent_id": AGENT_ID, "data": stored_record()}]}
     assert await build_service(FakeDefinitionStore()).list_agents() == {"agents": []}
 
 

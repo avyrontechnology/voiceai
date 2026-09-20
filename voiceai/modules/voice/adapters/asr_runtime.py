@@ -135,9 +135,7 @@ create_ws_data_packet: Final[Callable[..., dict[str, Any]]] = (
 )
 
 #: TLS context factory for wss connections.
-get_ssl_context: Final[Callable[..., Any]] = (
-    _legacy_get_ssl_context  # why: legacy factory takes free-form URL args
-)
+get_ssl_context: Final[Callable[..., Any]] = _legacy_get_ssl_context  # why: legacy factory takes free-form URL args
 
 #: The legacy audio resampler.
 resample: Final[Callable[..., Any]] = _legacy_resample  # why: the legacy DSP helper takes free-form kwargs

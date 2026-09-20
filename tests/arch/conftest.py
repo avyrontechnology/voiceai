@@ -16,11 +16,14 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from dependency_injector import providers
 from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from voiceai.common.constants import CONTAINER_KEY_DB, CONTAINER_KEY_REDIS
+from voiceai.common.errors import ConfigurationError
 from voiceai.common.logger import set_request_id
-from voiceai.core.container import Container
+from voiceai.core.container import VoiceAIContainer
 from voiceai.core.environment import Environment, reset_environment
 
 if TYPE_CHECKING:  # annotation only: collecting this tree must never import voiceai.modules
@@ -144,19 +147,29 @@ def client_factory() -> Callable[..., AsyncClient]:
     return _factory
 
 
+#: Legacy string keys tests use, mapped to the container provider that serves them.
+#: Unknown keys fail loudly instead of silently doing nothing.
+_KEY_TO_PROVIDER = {
+    CONTAINER_KEY_REDIS: "redis_client",
+    CONTAINER_KEY_DB: "db_client",
+}
+
+
 @pytest.fixture
-def container_override() -> Callable[[FastAPI | Container, str, Any], None]:
+def container_override() -> Callable[[FastAPI | VoiceAIContainer, str, Any], None]:
     """Return a helper that swaps a container entry for a fake after `build_container` ran.
 
-    Registration replaces the provider and drops any cached singleton, so this works on a fully
-    built application:
+    Overriding replaces the provider, so this works on a fully built application:
 
         container_override(app, "redis", fake_redis)
     """
 
-    def _override(target: FastAPI | Container, key: str, value: Any) -> None:
+    def _override(target: FastAPI | VoiceAIContainer, key: str, value: Any) -> None:
         container = target.state.container if isinstance(target, FastAPI) else target
-        container.register(key, value)
+        provider_name = _KEY_TO_PROVIDER.get(key)
+        if provider_name is None:
+            raise ConfigurationError(f"No provider mapped for override key '{key}'", path=key)
+        getattr(container, provider_name).override(providers.Object(value))
 
     return _override
 

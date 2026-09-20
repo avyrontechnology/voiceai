@@ -185,6 +185,4 @@ async def test_play_switch_handoff_cold_cache_synthesizes_live():
     assert packet["meta_info"]["format"] == "pcm"
     assert packet["meta_info"]["sequence_id"] == -1
     stub._TaskManager__enqueue_chunk.assert_not_called()
-    stub._TaskManager__record_lid_event.assert_called_once_with(
-        {"type": "handoff", "source": "live", "target": "mr"}
-    )
+    stub._TaskManager__record_lid_event.assert_called_once_with({"type": "handoff", "source": "live", "target": "mr"})

@@ -17,10 +17,11 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from voiceai.core.container import Container, build_container
+from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.core.environment import Environment
 
 LEGACY_SIGNUP_PATH = "/auth/signup"
@@ -45,7 +46,7 @@ def _quickstart() -> ModuleType:
     return importlib.import_module("local_setup.quickstart_server")
 
 
-def _container_for(env: Environment, store: Any) -> Container:
+def _container_for(env: Environment, store: Any) -> VoiceAIContainer:
     """Build the offline container with `AuthStorePort` bound to `store`.
 
     Args:
@@ -57,8 +58,8 @@ def _container_for(env: Environment, store: Any) -> Container:
     """
     from voiceai.modules.auth.ports import AuthStorePort
 
-    container = build_container(env, modules=[])
-    container.register(AuthStorePort, store)  # type: ignore[type-abstract]
+    container = build_container(env)
+    container.auth_store.override(providers.Object(store))
     return container
 
 
@@ -134,7 +135,7 @@ def test_import_time_wiring_binds_the_live_store() -> None:
     qs = _quickstart()
 
     container = qs.app.state.container
-    assert container.resolve(AuthStorePort) is qs.app.state.platform_store  # type: ignore[type-abstract]
+    assert container.auth_store() is qs.app.state.platform_store
 
 
 async def test_import_time_wiring_serves_auth_without_500(

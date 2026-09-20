@@ -1,6 +1,5 @@
 """FreeSWITCH telephony output handler (spec 0004, B12a)."""
 
-
 import asyncio
 import base64
 import json
@@ -29,7 +28,7 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
     mod_audio_stream does NOT echo playback marks (like Asterisk), so playback-completion is
     simulated by audio duration and fed back via input_handler.process_mark_message."""
 
-    def __init__(self, *args: Any, sampling_rate: Any=24000, input_handler: Any=None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, sampling_rate: Any = 24000, input_handler: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.io_provider = "freeswitch"
         self.sampling_rate = sampling_rate

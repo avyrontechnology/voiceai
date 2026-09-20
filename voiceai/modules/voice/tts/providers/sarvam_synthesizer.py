@@ -1,6 +1,5 @@
 """Sarvam TTS provider: Bulbul voices plus HTTP one-shot (spec 0004, B12b)."""
 
-
 import asyncio
 import base64
 import json
@@ -32,16 +31,17 @@ BULBUL_V2_SPEAKERS = frozenset({"anushka", "abhilash", "manisha", "vidya", "arya
 
 class SarvamSynthesizer(StreamSynthesizer):
     """Sarvam TTS provider: Bulbul voices plus HTTP one-shot."""
+
     def __init__(
         self,
         voice_id: Any,
         model: Any,
         language: Any,
-        sampling_rate: Any="8000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        speed: Any=1.0,
-        synthesizer_key: Any=None,
+        sampling_rate: Any = "8000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        speed: Any = 1.0,
+        synthesizer_key: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -135,7 +135,7 @@ class SarvamSynthesizer(StreamSynthesizer):
     # sender / receiver
     # ------------------------------------------------------------------
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:

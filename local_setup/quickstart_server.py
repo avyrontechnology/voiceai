@@ -12,21 +12,37 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 import redis.asyncio as redis
+from dependency_injector import providers
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from voiceai.common.constants import API_PREFIX, CONTAINER_KEY_REDIS, CONTAINER_STATE_ATTR, HTTP_SERVICE_UNAVAILABLE
+from voiceai.common.constants import API_PREFIX, CONTAINER_STATE_ATTR, HTTP_SERVICE_UNAVAILABLE
 from voiceai.common.errors import AppError
-from voiceai.core.container import Container
+from voiceai.common.errors import AppError as _QuickstartAppError
+from voiceai.common.responses import error_response as _quickstart_error_response
+from voiceai.common.responses import success_response as _quickstart_success_response
+from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
 from voiceai.modules import auth as auth_module
 from voiceai.modules.agents import AgentNotFoundError, AgentService
-from voiceai.modules.agents import register as register_agents_module
 from voiceai.modules.voice import VoiceCallService
-from voiceai.modules.voice import register as register_voice_module
+from voiceai.modules.voice.models import (
+    ConnectTalkoPartnerRequest as _ConnectTalkoPartnerRequest,
+    CreateTalkoPartnerRequest as _CreateTalkoPartnerRequest,
+)
+from voiceai.modules.voice.models import (
+    PlaceCallRequest as _PlaceCallRequest,
+)
+from voiceai.modules.voice.models import (
+    TalkoPartnerListResponse as _TalkoPartnerListResponse,
+)
+from voiceai.modules.voice.models import (
+    UpdateTalkoPartnerRequest as _UpdateTalkoPartnerRequest,
+)
+from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
 
 load_dotenv()
 logger = configure_logger(__name__)
@@ -78,20 +94,19 @@ class _AgentRedisSeam:
 
 
 # Spec 0002 (A5): the agent CRUD handlers below are thin delegates into the agents module.
-# The service is composed ONCE at module init through the module's own register() hook
-# (AGENTS.md rule 9) — routes, auth deps, JSON shapes and quirks stay byte-identical, and
-# the only quickstart-owned piece of the composition is the redis seam above.
-_agents_container = Container()
-_agents_container.register(CONTAINER_KEY_REDIS, _AgentRedisSeam())
-register_agents_module(_agents_container)
-agent_service: AgentService = _agents_container.resolve(AgentService)
+# Services compose ONCE at module init from the central container (AGENTS.md rule 9) —
+# routes, auth deps, JSON shapes and quirks stay byte-identical, and the only
+# quickstart-owned piece of the composition is the redis seam above, bound over the
+# container's redis entry so the repository resolves it like production wiring.
+_agents_container = build_container()
+_agents_container.redis_client.override(providers.Object(_AgentRedisSeam()))
+agent_service: AgentService = _agents_container.agent_service()
 
 # Spec 0004 (B4): the live-call WS handler below is a thin delegate into the voice
-# module, composed through the same module-init container seam as the agents CRUD
-# above (the A5 precedent). Resolving here keeps the legacy engine import at module
-# init, exactly where the old direct AssistantManager import loaded it.
-register_voice_module(_agents_container)
-voice_call_service: VoiceCallService = _agents_container.resolve(VoiceCallService)
+# module, composed through the same container as the agents CRUD above (the A5
+# precedent). Resolving here keeps the legacy engine import at module init, exactly
+# where the old direct AssistantManager import loaded it.
+voice_call_service: VoiceCallService = _agents_container.voice_call_service()
 
 app = FastAPI()
 
@@ -128,10 +143,13 @@ def _auth_service_from_app(app: FastAPI) -> auth_module.AuthService:
     Raises:
         HTTPException: 503 with the legacy `get_store` string when neither seam has a store.
     """
-    container: Container | None = getattr(app.state, CONTAINER_STATE_ATTR, None)
+    container: VoiceAIContainer | None = getattr(app.state, CONTAINER_STATE_ATTR, None)
     store: auth_module.AuthStorePort | None = None
-    if container is not None and container.has(auth_module.AuthStorePort):
-        store = container.resolve(auth_module.AuthStorePort)  # type: ignore[type-abstract]
+    if container is not None:
+        try:
+            store = container.auth_store()
+        except Exception:
+            store = None
     if store is None:
         store = getattr(app.state, _PLATFORM_STORE_ATTR, None)
     if store is None:
@@ -403,10 +421,13 @@ try:
     # Cutover follow-up (spec 0006 post-E4): the module controller resolves its
     # service from `state.container`, which quickstart never set — every
     # `/api/v1/auth/*` request died there. Bind the SAME store instance the
-    # legacy seam serves (one session ledger, not two). Deliberately not
-    # auth.register(): that factory would resolve CONTAINER_KEY_REDIS to the
-    # agents RedisLike seam, which is not a driver client.
-    _agents_container.register(auth_module.AuthStorePort, app.state.platform_store)  # type: ignore[type-abstract]
+    # legacy seam serves (one session ledger, not two).
+    _agents_container.auth_store.override(providers.Object(app.state.platform_store))
+    # Same seam for the migrated wallet/templates routes: the module service
+    # reads this app's store, so topups, ledger and reset stay consistent.
+    _agents_container.wallet_service.override(
+        providers.Factory(build_legacy_wallet_service, app.state.platform_store)
+    )
     app.state.container = _agents_container
     logger.info("Platform routers mounted")
 except Exception as exc:  # platform is additive; agent CRUD must keep working without it
@@ -467,7 +488,7 @@ async def websocket_endpoint(
         retrieved_agent_config = await redis_client.get(agent_id)
         logger.info(f"Retrieved agent config: {retrieved_agent_config}")
         agent_config = json.loads(retrieved_agent_config)
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -510,3 +531,127 @@ async def websocket_endpoint(
     except Exception as e:
         traceback.print_exc()
         logger.error(f"error in executing {e}")
+
+
+# Spec 0008: dual-serve place-call + partner routes — each direct route below
+# registers twice (bare + API_PREFIX), sharing one thin delegate into the voice
+# module service. The UI (unchanged) speaks the bare paths; /api/v1 twins keep
+# the new-arch contract reachable through the factory app.
+@app.post(f"{API_PREFIX}/calls/place", status_code=202)
+@app.post("/calls/place", status_code=202)
+async def place_call(
+    payload: _PlaceCallRequest, _auth: None = Depends(require_scope("calls:write"))
+) -> JSONResponse:
+    """Place one outbound call through the voice module (spec 0008)."""
+    try:
+        placed = await _agents_container.voice_call_service().place_call(payload=payload)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(placed.model_dump(mode="json"), status_code=202)
+
+
+@app.post(f"{API_PREFIX}/talko/partners", status_code=201)
+@app.post("/talko/partners", status_code=201)
+async def create_talko_partner(
+    payload: _CreateTalkoPartnerRequest, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Store one Talko partner credential record (spec 0008)."""
+    try:
+        view = await _agents_container.voice_call_service().create_partner(payload=payload)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(view.model_dump(mode="json"), status_code=201)
+
+
+@app.get(f"{API_PREFIX}/talko/partners")
+@app.get("/talko/partners")
+async def list_talko_partners(_auth: None = Depends(require_scope("platform:read"))) -> JSONResponse:
+    """List Talko partner records without secrets (spec 0008)."""
+    try:
+        views = await _agents_container.voice_call_service().list_partners()
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(_TalkoPartnerListResponse(partners=views).model_dump(mode="json"))
+
+
+@app.get(f"{API_PREFIX}/talko/partners/{{partner_id}}")
+@app.get("/talko/partners/{partner_id}")
+async def get_talko_partner(
+    partner_id: str, _auth: None = Depends(require_scope("platform:read"))
+) -> JSONResponse:
+    """Read one Talko partner record without its secret (spec 0008)."""
+
+    try:
+        view = await _agents_container.voice_call_service().get_partner(partner_id=partner_id)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(view.model_dump(mode="json"))
+
+
+@app.put(f"{API_PREFIX}/talko/partners/{{partner_id}}")
+@app.put("/talko/partners/{partner_id}")
+async def update_talko_partner(
+    partner_id: str, payload: _UpdateTalkoPartnerRequest, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Patch one Talko partner record; empty key keeps the secret (spec 0008)."""
+
+    try:
+        view = await _agents_container.voice_call_service().update_partner(
+            partner_id=partner_id, payload=payload
+        )
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(view.model_dump(mode="json"))
+
+
+@app.delete(f"{API_PREFIX}/talko/partners/{{partner_id}}")
+@app.delete("/talko/partners/{partner_id}")
+async def delete_talko_partner(
+    partner_id: str, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Soft-delete one Talko partner record (spec 0008)."""
+
+    try:
+        await _agents_container.voice_call_service().delete_partner(partner_id=partner_id)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response({"deleted": True})
+
+
+@app.post(f"{API_PREFIX}/talko/partners/preview")
+@app.post("/talko/partners/preview")
+async def preview_talko_partner(
+    payload: _ConnectTalkoPartnerRequest, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Validate a partner key and preview its DIDs without persisting (spec 0009)."""
+    try:
+        preview = await _agents_container.voice_call_service().preview_partner(talko_api_key=payload.talko_api_key)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(preview.model_dump(mode="json"))
+
+
+@app.post(f"{API_PREFIX}/talko/partners/connect", status_code=201)
+@app.post("/talko/partners/connect", status_code=201)
+async def connect_talko_partner(
+    payload: _ConnectTalkoPartnerRequest, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Fetch-and-store a partner in one step for the connect UI (spec 0009)."""
+    try:
+        view = await _agents_container.voice_call_service().connect_partner(payload=payload)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(view.model_dump(mode="json"), status_code=201)
+
+
+@app.post(f"{API_PREFIX}/talko/partners/{{partner_id}}/refresh")
+@app.post("/talko/partners/{partner_id}/refresh")
+async def refresh_talko_partner(
+    partner_id: str, _auth: None = Depends(require_scope("platform:write"))
+) -> JSONResponse:
+    """Re-fetch a stored partner's DIDs with its own key (spec 0009)."""
+    try:
+        view = await _agents_container.voice_call_service().refresh_partner_dids(partner_id=partner_id)
+    except _QuickstartAppError as exc:
+        return _quickstart_error_response(exc)
+    return _quickstart_success_response(view.model_dump(mode="json"))

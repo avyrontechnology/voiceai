@@ -28,13 +28,22 @@ from typing import Any
 
 from voiceai.enums import ToolScope
 from voiceai.modules.voice.adapters import END_CALL_FUNCTION_PREFIX, END_CALL_TOOL_DEFINITION, resample
+from voiceai.modules.voice.constants import (
+    INDIA_COUNTRY_CODE,
+    INDIA_FULL_LENGTH,
+    RECIPIENT_MAX_DIGITS,
+    RECIPIENT_MIN_DIGITS,
+)
 
 __all__ = [
     "_inject_end_call_tool",
     "asr_id_to_int",
     "build_lid_decision_record",
     "is_alphanumeric_readout",
+    "normalize_did_digits",
+    "normalize_did_list",
     "trailing_utterance_text",
+    "validate_recipient_number",
     "welcome_pcm_upsampled",
 ]
 
@@ -186,3 +195,73 @@ def trailing_utterance_text(
             tail_lang = tail_lang or lang
         prev_start = (ts - (seg.get("audio_s") or 0.0)) if ts is not None else None
     return " ".join(reversed(tail)).strip()
+
+
+def normalize_did_digits(raw: str | None) -> str | None:
+    """Strip a DID to digits-only (talko-service demands 10-15 digits).
+
+    Deterministic and I/O-free: E.164 `+`, spaces and dashes vanish; empty or
+    digitless input yields `None` so callers fail closed on missing DIDs.
+
+    Args:
+        raw: The DID in any common format, or `None`.
+
+    Returns:
+        The digits, or `None` when there is nothing dialable.
+    """
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    return digits or None
+
+
+def validate_recipient_number(to_number: str) -> str:
+    """Return the dialable digits for a destination, or raise `ValueError`.
+
+    Deterministic and I/O-free: 10–15 digits overall; Indian (`91…`) numbers
+    must be exactly 91 + 10 digits (an 11-digit `91…` value is almost always a
+    dropped-digit typo, and Tata rejects it with an opaque BAD_REQUEST).
+
+    Args:
+        to_number: The destination in any common format.
+
+    Returns:
+        The digits-only destination.
+
+    Raises:
+        ValueError: When the destination is not dialable; the service converts
+            this to `PlaceCallError` (never leaks across layers raw).
+    """
+    digits = re.sub(r"\D", "", to_number or "")
+    if not RECIPIENT_MIN_DIGITS <= len(digits) <= RECIPIENT_MAX_DIGITS:
+        raise ValueError(
+            f"to_number {to_number!r} is not dialable: "
+            f"need {RECIPIENT_MIN_DIGITS}-{RECIPIENT_MAX_DIGITS} digits, got {len(digits)}."
+        )
+    if digits.startswith(INDIA_COUNTRY_CODE) and len(digits) != INDIA_FULL_LENGTH:
+        raise ValueError(
+            f"to_number {to_number!r} looks like a truncated Indian mobile: "
+            f"need {INDIA_COUNTRY_CODE} + 10 digits."
+        )
+    return digits
+
+
+def normalize_did_list(raw: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalize DID lists to unique digits, preserving order (spec 0009).
+
+    Deterministic and I/O-free; blanks and digitless entries vanish.
+
+    Args:
+        raw: DIDs in any common format, or `None`.
+
+    Returns:
+        The normalized unique digits.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in raw or []:
+        digits = normalize_did_digits(entry)
+        if digits and digits not in seen:
+            seen.add(digits)
+            out.append(digits)
+    return out

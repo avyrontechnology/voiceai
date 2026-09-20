@@ -1,6 +1,5 @@
 """Pixa TTS provider (spec 0004, B12b)."""
 
-
 import asyncio
 import audioop
 import copy
@@ -26,19 +25,20 @@ logger = get_logger(MODULE_NAME)
 
 class PixaSynthesizer(BaseSynthesizer):
     """Pixa TTS provider."""
+
     def __init__(
         self,
         voice_id: Any,
         voice: Any,
-        model: Any="luna-tts",
-        language: Any="hi",
-        sampling_rate: Any="32000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        top_p: Any=0.95,
-        repetition_penalty: Any=1.3,
-        synthesizer_key: Any=None,
-        caching: Any=False,
+        model: Any = "luna-tts",
+        language: Any = "hi",
+        sampling_rate: Any = "32000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        top_p: Any = 0.95,
+        repetition_penalty: Any = 1.3,
+        synthesizer_key: Any = None,
+        caching: Any = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(kwargs.get("task_manager_instance", None), stream)
@@ -125,14 +125,14 @@ class PixaSynthesizer(BaseSynthesizer):
         except Exception as e:
             logger.error(f"Error in handle_interruption: {e}")
 
-    def form_payload(self, text: Any, is_final: Any=False) -> Any:
+    def form_payload(self, text: Any, is_final: Any = False) -> Any:
         """Build the provider request payload."""
         payload = {"type": "text", "content": text, "is_final": is_final}
         if self.context_id:
             payload["context_id"] = self.context_id
         return payload
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             if self.conversation_ended:

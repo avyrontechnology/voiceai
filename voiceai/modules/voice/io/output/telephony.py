@@ -1,6 +1,5 @@
 """Telephony-leg output handler base: send timeouts, mark ACKs, hangup latch (spec 0004, B12a)."""
 
-
 import asyncio
 import json
 import os
@@ -29,7 +28,10 @@ OUTPUT_SEND_TIMEOUT_S = float(os.getenv("OUTPUT_SEND_TIMEOUT_S", "5"))
 
 class TelephonyOutputHandler(DefaultOutputHandler):
     """Telephony-leg output handler base: bounded sends, mark ACKs, hangup latch."""
-    def __init__(self, io_provider: Any, websocket: Any=None, mark_event_meta_data: Any=None, log_dir_name: Any=None) -> None:  # noqa: E501 — verbatim legacy line (R8)
+
+    def __init__(
+        self, io_provider: Any, websocket: Any = None, mark_event_meta_data: Any = None, log_dir_name: Any = None
+    ) -> None:  # noqa: E501 — verbatim legacy line (R8)
         super().__init__(io_provider, websocket, log_dir_name, mark_event_meta_data=mark_event_meta_data)
         self.mark_event_meta_data = mark_event_meta_data
 
@@ -191,9 +193,7 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                 # Transient stall (event-loop hiccup, throttled CPU) — drop
                 # this packet but STAY OPEN. Latching closed here used to
                 # mute the agent for the rest of the call with no log trace.
-                logger.warning(
-                    f"{self.io_provider} output send timed out, packet dropped, socket kept open"
-                )
+                logger.warning(f"{self.io_provider} output send timed out, packet dropped, socket kept open")
             except (WebSocketDisconnect, RuntimeError) as e:
                 self._closed = True  # Prevent further send attempts
                 logger.info(f"WebSocket send failed (client disconnected): {e}")

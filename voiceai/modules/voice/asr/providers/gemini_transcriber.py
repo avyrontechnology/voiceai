@@ -1,6 +1,5 @@
 """Gemini transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import base64
 import json
@@ -44,17 +43,17 @@ class GeminiTranscriber(BaseTranscriber):
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="gemini-3.5-transcribe-live",
-        stream: Any=True,
-        language: Any=None,
-        endpointing: Any="500",
-        sampling_rate: Any="16000",
-        encoding: Any="linear16",
-        output_queue: Any=None,
-        keywords: Any=None,
-        process_interim_results: Any="true",
-        language_hints: Any=None,
+        input_queue: Any = None,
+        model: Any = "gemini-3.5-transcribe-live",
+        stream: Any = True,
+        language: Any = None,
+        endpointing: Any = "500",
+        sampling_rate: Any = "16000",
+        encoding: Any = "linear16",
+        output_queue: Any = None,
+        keywords: Any = None,
+        process_interim_results: Any = "true",
+        language_hints: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)

@@ -1,6 +1,5 @@
 """Polly TTS provider (spec 0004, B12b)."""
 
-
 import os
 import unicodedata
 from contextlib import AsyncExitStack
@@ -21,18 +20,19 @@ load_dotenv()
 
 class PollySynthesizer(BaseSynthesizer):
     """Polly TTS provider."""
+
     def __init__(
         self,
         voice: Any,
         language: Any,
-        audio_format: Any="pcm",
-        sampling_rate: Any=8000,
-        stream: Any=False,
-        engine: Any="neural",
-        buffer_size: Any=400,
-        speaking_rate: Any="100%",
-        volume: Any="0dB",
-        caching: Any=True,
+        audio_format: Any = "pcm",
+        sampling_rate: Any = 8000,
+        stream: Any = False,
+        engine: Any = "neural",
+        buffer_size: Any = 400,
+        speaking_rate: Any = "100%",
+        volume: Any = "0dB",
+        caching: Any = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(kwargs.get("task_manager_instance"), stream, buffer_size)

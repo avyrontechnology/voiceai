@@ -179,7 +179,12 @@ def _make_conversation_tm(seed, s2s_leg=False):
             turn_latencies=seed["tts_turns"],
             get_synthesized_characters=lambda: 42,
         )
-        tm.tools = {"transcriber": transcriber, "synthesizer": synthesizer, "output": output_handler, "input": input_handler}
+        tm.tools = {
+            "transcriber": transcriber,
+            "synthesizer": synthesizer,
+            "output": output_handler,
+            "input": input_handler,
+        }
 
     tm.interruption_manager = SimpleNamespace(
         interrupted_transcriber_turn_ids={"turn_2"},

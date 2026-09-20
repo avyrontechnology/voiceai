@@ -1,6 +1,5 @@
 """AssemblyAI transcriber (spec 0004, B12c)."""
 
-
 import asyncio
 import json
 import os
@@ -28,17 +27,18 @@ load_dotenv()
 
 class AssemblyAITranscriber(BaseTranscriber):
     """AssemblyAI transcriber."""
+
     def __init__(
         self,
         telephony_provider: Any,
-        input_queue: Any=None,
-        model: Any="universal-streaming",
-        stream: Any=True,
-        language: Any="en",
-        sampling_rate: Any="16000",
-        encoding: Any="pcm_s16le",
-        output_queue: Any=None,
-        format_turns: Any=True,
+        input_queue: Any = None,
+        model: Any = "universal-streaming",
+        stream: Any = True,
+        language: Any = "en",
+        sampling_rate: Any = "16000",
+        encoding: Any = "pcm_s16le",
+        output_queue: Any = None,
+        format_turns: Any = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -274,7 +274,7 @@ class AssemblyAITranscriber(BaseTranscriber):
 
         return None
 
-    async def sender(self, ws: Any=None) -> None:
+    async def sender(self, ws: Any = None) -> None:
         """Sender for non-streaming mode"""
         try:
             while True:

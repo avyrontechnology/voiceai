@@ -36,7 +36,14 @@ MAX_CONNECTION_FAILURES = 3
 class StreamSynthesizer(BaseSynthesizer):
     """Base class for all WebSocket-streaming synthesizers."""
 
-    def __init__(self, stream: Any=True, provider_name: Any="stream", task_manager_instance: Any=None, buffer_size: Any=400, **kwargs: Any) -> None:  # noqa: E501 — verbatim legacy line (R8)
+    def __init__(
+        self,
+        stream: Any = True,
+        provider_name: Any = "stream",
+        task_manager_instance: Any = None,
+        buffer_size: Any = 400,
+        **kwargs: Any,
+    ) -> None:  # noqa: E501 — verbatim legacy line (R8)
         super().__init__(
             task_manager_instance=task_manager_instance,
             stream=stream,
@@ -76,7 +83,7 @@ class StreamSynthesizer(BaseSynthesizer):
         """Connect to the provider WebSocket. Return the websocket object or None."""
         raise NotImplementedError
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Send *text* to the WebSocket. Called as an asyncio task."""
         raise NotImplementedError
 
@@ -125,7 +132,7 @@ class StreamSynthesizer(BaseSynthesizer):
         ws = self.websocket
         return ws is not None and ws.state is not websockets.protocol.State.CLOSED
 
-    async def _wait_for_ws(self, poll_interval: Any=1) -> None:
+    async def _wait_for_ws(self, poll_interval: Any = 1) -> None:
         """Block until the WebSocket is connected."""
         while not self._is_ws_connected():
             if self.conversation_ended or self.connection_error:

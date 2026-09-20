@@ -64,6 +64,7 @@ def reset_turn_state(self: DeepgramTranscriber) -> None:
     # A stale pending-eager flag would mark the NEXT turn's EndOfTurn as was_eager
     self.eager_transcript_pending = None
 
+
 async def force_finalize_utterance(self: DeepgramTranscriber) -> None:
     """Force-finalize a stuck utterance and send to queue"""
 
@@ -119,6 +120,7 @@ async def force_finalize_utterance(self: DeepgramTranscriber) -> None:
     # Reset state (same as normal UtteranceEnd)
     self._reset_turn_state()
 
+
 async def monitor_utterance_timeout(self: DeepgramTranscriber) -> None:
     """Monitor for stuck utterances that never receive UtteranceEnd"""
     try:
@@ -146,6 +148,7 @@ async def monitor_utterance_timeout(self: DeepgramTranscriber) -> None:
         logger.error(f"Error in monitor_utterance_timeout: {e}")
         raise
 
+
 async def get_http_transcription(self: DeepgramTranscriber, audio_data: bytes) -> Any:
     """Transcribe one audio blob over HTTP."""  # why: free-form provider payload
     if self.session is None or self.session.closed:
@@ -165,6 +168,7 @@ async def get_http_transcription(self: DeepgramTranscriber, audio_data: bytes) -
             self.meta_info["transcriber_duration"] = response_data["metadata"]["duration"]
             return create_ws_data_packet(transcript, self.meta_info)
 
+
 async def check_and_process_end_of_stream(self: DeepgramTranscriber, ws_data_packet: dict, ws: ClientConnection) -> Any:
     """Finalize the turn on end-of-stream."""  # why: free-form provider payload
     if "eos" in ws_data_packet["meta_info"] and ws_data_packet["meta_info"]["eos"] is True:
@@ -173,11 +177,13 @@ async def check_and_process_end_of_stream(self: DeepgramTranscriber, ws_data_pac
 
     return False
 
+
 def get_meta_info(self: DeepgramTranscriber) -> Any:
     """Return the transcriber meta info."""  # why: free-form provider payload
     return self.meta_info
 
-async def sender(self: DeepgramTranscriber, ws: ClientConnection | None=None) -> None:
+
+async def sender(self: DeepgramTranscriber, ws: ClientConnection | None = None) -> None:
     """Stream queued audio to the socket (non-streaming legs)."""
     try:
         while True:
@@ -218,6 +224,7 @@ async def sender(self: DeepgramTranscriber, ws: ClientConnection | None=None) ->
     except asyncio.CancelledError:
         logger.info("Cancelled sender task")
         return
+
 
 async def sender_stream(self: DeepgramTranscriber, ws: ClientConnection) -> None:
     """Stream queued audio to the socket."""
@@ -273,6 +280,7 @@ async def sender_stream(self: DeepgramTranscriber, ws: ClientConnection) -> None
     except Exception as e:
         logger.error("Error in sender_stream: " + str(e))
         raise
+
 
 async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
     """Consume nova responses into transcript packets."""
@@ -419,9 +427,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                             self.final_transcript = ""
                             self.is_transcript_sent_for_processing = True
                         except Exception as e:
-                            logger.error(
-                                f"Failed to extract transcript from Deepgram response in speech_final: {e}"
-                            )
+                            logger.error(f"Failed to extract transcript from Deepgram response in speech_final: {e}")
                             pass
                         self.meta_info["user_stop_offset_ms"] = self.endpointing_ms
                         # Always assign (even None) to clear any stale value from a previous turn.
@@ -449,8 +455,8 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
 
                     # Build turn_latencies with new metrics before resetting
                     try:
-                        first_interim_to_final_ms, last_interim_to_final_ms = (
-                            self.calculate_interim_to_final_latencies(self.current_turn_interim_details)
+                        first_interim_to_final_ms, last_interim_to_final_ms = self.calculate_interim_to_final_latencies(
+                            self.current_turn_interim_details
                         )
 
                         self._upsert_turn_latency(
@@ -513,4 +519,3 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
         except Exception as e:  # noqa: F841 — verbatim dead local (R8)
             traceback.print_exc()
             self.interruption_signalled = False
-

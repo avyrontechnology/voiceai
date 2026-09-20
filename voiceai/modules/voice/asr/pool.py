@@ -1,6 +1,5 @@
 """Transcriber pool: multi-provider fan-out with LID-gated routing (spec 0004, B12c)."""
 
-
 import asyncio
 import os
 import time

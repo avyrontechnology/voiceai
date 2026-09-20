@@ -15,20 +15,19 @@ Thirteen routes moved line-by-line from ``voiceai/platform/auth_router.py`` (spe
   backstop. ``get_store`` maps the legacy 503 seam onto ``DependencyUnavailableError``.
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Annotated
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from voiceai.common.constants import EMAIL_PATTERN
-from voiceai.common.errors import AppError, ConfigurationError, DependencyUnavailableError
+from voiceai.common.errors import AppError
 from voiceai.common.logger import get_logger
 from voiceai.common.responses import error_response, success_response
-from voiceai.core.container import Container, get_container
+from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.adapters.cookies import COOKIE_SAMESITE, COOKIE_SECURE
 from voiceai.modules.auth.errors import InvalidCredentialsError
@@ -37,7 +36,6 @@ from voiceai.modules.auth.models.audit import AuthEvent
 from voiceai.modules.auth.models.invite import Invite
 from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.user import User, UserRole
-from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
 
 __all__ = ["router"]
@@ -151,49 +149,6 @@ class AuthEventListResponse(BaseModel):
 # -- seams --------------------------------------------------------------------
 
 
-def get_store(request: Request) -> AuthStorePort:
-    """Read the platform store off app.state (spec 0006 E1 demotes this to the fallback).
-
-    Reached only when the container has no `AuthStorePort` binding (partial
-    compositions, legacy tests); spec 0006 E3 deletes this seam once the container owns
-    every serving path.
-
-    Args:
-        request: The incoming request, carrying the app state.
-
-    Returns:
-        The store as the service's port — no legacy import needed (structural).
-
-    Raises:
-        DependencyUnavailableError: When the seam has no store (legacy 503 string).
-    """
-    store: AuthStorePort | None = getattr(request.app.state, "platform_store", None)
-    if store is None:
-        raise DependencyUnavailableError("Platform store unavailable")
-    return store  # why: MemoryStore/RedisStore satisfy the port structurally
-
-
-def get_service(request: Request, container: Annotated[Container, Depends(get_container)]) -> AuthService:
-    """Resolve the service over the container store (AGENTS.md rule 9; spec 0006 E1).
-
-    The container binding wins; a container without one falls back to the app.state
-    seam, and requests still read 503 when neither exists. Route shapes, statuses and
-    the `AppError` funnel are unchanged.
-
-    Args:
-        request: The incoming request, carrying the app.state fallback seam.
-        container: The application container, injected by the core dependency.
-
-    Returns:
-        The auth service over the resolved store.
-    """
-    try:
-        # The port class object is the key: abstract for mypy, hashable at runtime.
-        return AuthService(container.resolve(AuthStorePort))  # type: ignore[type-abstract]
-    except ConfigurationError:
-        return AuthService(get_store(request))
-
-
 def client_ip(request: Request) -> str:
     """Extract the client address, preferring the leftmost forwarded entry."""
     forwarded = request.headers.get("x-forwarded-for")
@@ -202,7 +157,11 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-async def get_principal(request: Request, service: Annotated[AuthService, Depends(get_service)]) -> Principal:
+ServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_service])]
+
+
+@inject
+async def get_principal(request: Request, service: ServiceDep) -> Principal:
     """Resolve the caller from session cookie, else Bearer key (401 when neither)."""
     return await service.authenticate(request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", ""))
 
@@ -246,8 +205,6 @@ def _session_scopes(user: User) -> list[str]:
     ).effective_scopes()
 
 
-StoreDep = Annotated[AuthStorePort, Depends(get_store)]
-ServiceDep = Annotated[AuthService, Depends(get_service)]
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
 
 
@@ -255,6 +212,7 @@ PrincipalDep = Annotated[Principal, Depends(get_principal)]
 
 
 @router.post("/signup", status_code=201)
+@inject
 async def signup(payload: SignupRequest, service: ServiceDep) -> JSONResponse:
     """Register the first user (owner); later signups need an invite."""
     try:
@@ -268,6 +226,7 @@ async def signup(payload: SignupRequest, service: ServiceDep) -> JSONResponse:
 
 
 @router.post("/login")
+@inject
 async def login(payload: LoginRequest, request: Request, service: ServiceDep) -> JSONResponse:
     """Check credentials, mint a session cookie, return the caller identity."""
     try:
@@ -282,6 +241,7 @@ async def login(payload: LoginRequest, request: Request, service: ServiceDep) ->
 
 
 @router.post("/logout")
+@inject
 async def logout(request: Request, service: ServiceDep) -> JSONResponse:
     """Revoke the session cookie's token (anonymous logout still clears it)."""
     try:
@@ -300,6 +260,7 @@ async def logout(request: Request, service: ServiceDep) -> JSONResponse:
 
 
 @router.get("/me")
+@inject
 async def me(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Return the session caller's identity (keys read 401 here)."""
     try:
@@ -310,6 +271,7 @@ async def me(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
 
 
 @router.post("/invite", status_code=201)
+@inject
 async def invite(payload: InviteRequest, principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Create an invite; HYBRID delivery — the raw token rides the response."""
     try:
@@ -329,6 +291,7 @@ async def invite(payload: InviteRequest, principal: PrincipalDep, service: Servi
 
 
 @router.get("/invites")
+@inject
 async def list_invites(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """List pending invites (never token hashes)."""
     try:
@@ -339,6 +302,7 @@ async def list_invites(principal: PrincipalDep, service: ServiceDep) -> JSONResp
 
 
 @router.delete("/invites/{invite_id}")
+@inject
 async def delete_invite(invite_id: str, principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Revoke an invite."""
     try:
@@ -349,6 +313,7 @@ async def delete_invite(invite_id: str, principal: PrincipalDep, service: Servic
 
 
 @router.post("/accept", status_code=201)
+@inject
 async def accept_invite(payload: AcceptInviteRequest, service: ServiceDep) -> JSONResponse:
     """Redeem an invite token into a user plus a first session cookie."""
     try:
@@ -361,6 +326,7 @@ async def accept_invite(payload: AcceptInviteRequest, service: ServiceDep) -> JS
 
 
 @router.get("/users")
+@inject
 async def list_users(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """List every user (admins only)."""
     try:
@@ -371,6 +337,7 @@ async def list_users(principal: PrincipalDep, service: ServiceDep) -> JSONRespon
 
 
 @router.put("/users/{user_id}/role")
+@inject
 async def set_user_role(
     user_id: str, payload: SetRoleRequest, principal: PrincipalDep, service: ServiceDep
 ) -> JSONResponse:
@@ -383,6 +350,7 @@ async def set_user_role(
 
 
 @router.delete("/users/{user_id}")
+@inject
 async def delete_user(user_id: str, principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Delete a user plus all their sessions (owners only)."""
     try:
@@ -393,6 +361,7 @@ async def delete_user(user_id: str, principal: PrincipalDep, service: ServiceDep
 
 
 @router.put("/password")
+@inject
 async def change_password(
     payload: ChangePasswordRequest,
     request: Request,
@@ -413,6 +382,7 @@ async def change_password(
 
 
 @router.post("/ws-ticket")
+@inject
 async def ws_ticket(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Mint a short-lived single-use websocket ticket (calls scope only)."""
     try:
@@ -423,6 +393,7 @@ async def ws_ticket(principal: PrincipalDep, service: ServiceDep) -> JSONRespons
 
 
 @router.get("/events")
+@inject
 async def auth_events(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """List recent audit events, newest first (admins only)."""
     try:

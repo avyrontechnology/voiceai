@@ -1,6 +1,5 @@
 """OpenAI TTS provider (spec 0004, B12b)."""
 
-
 import io
 import os
 from typing import Any
@@ -19,8 +18,16 @@ load_dotenv()
 
 class OPENAISynthesizer(BaseSynthesizer):
     """OpenAI TTS provider."""
+
     def __init__(
-        self, voice: Any, audio_format: Any="mp3", model: Any="tts-1", stream: Any=False, sampling_rate: Any=8000, buffer_size: Any=400, **kwargs: Any  # noqa: E501 — verbatim legacy line (R8)
+        self,
+        voice: Any,
+        audio_format: Any = "mp3",
+        model: Any = "tts-1",
+        stream: Any = False,
+        sampling_rate: Any = 8000,
+        buffer_size: Any = 400,
+        **kwargs: Any,  # noqa: E501 — verbatim legacy line (R8)
     ) -> None:
         super().__init__(kwargs.get("task_manager_instance"), stream, buffer_size)
         self.voice = voice

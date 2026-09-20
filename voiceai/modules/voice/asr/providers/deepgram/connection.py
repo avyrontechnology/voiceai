@@ -48,6 +48,7 @@ def get_deepgram_ws_url(self: DeepgramTranscriber) -> Any:
     else:
         return self._get_nova_ws_url()
 
+
 def get_nova_ws_url(self: DeepgramTranscriber) -> Any:
     """Return the nova websocket URL."""  # why: free-form provider payload
     dg_params = {
@@ -115,6 +116,7 @@ def get_nova_ws_url(self: DeepgramTranscriber) -> Any:
 
     return websocket_url
 
+
 def get_flux_ws_url(self: DeepgramTranscriber) -> Any:
     """Return the flux websocket URL."""  # why: free-form provider payload
     dg_params = {
@@ -166,6 +168,7 @@ def get_flux_ws_url(self: DeepgramTranscriber) -> Any:
     websocket_url = websocket_api + urlencode(dg_params, doseq=True)
     return websocket_url
 
+
 def resolve_language_hints(self: DeepgramTranscriber) -> Any:  # why: free-form provider payload
     """Resolve language_hint values for flux-general-multi.
 
@@ -179,6 +182,7 @@ def resolve_language_hints(self: DeepgramTranscriber) -> Any:  # why: free-form 
     if self.language.startswith("multi-"):
         return [self.language.split("-", 1)[1]]
     return [self.language]
+
 
 async def send_heartbeat(self: DeepgramTranscriber, ws: ClientConnection) -> None:
     """Keep the nova websocket alive."""
@@ -210,6 +214,7 @@ async def send_heartbeat(self: DeepgramTranscriber, ws: ClientConnection) -> Non
         logger.error("Error in send_heartbeat: " + str(e))
         raise
 
+
 async def toggle_connection(self: DeepgramTranscriber) -> None:
     """Reconnect the Deepgram websocket."""
     self.connection_on = False
@@ -231,6 +236,7 @@ async def toggle_connection(self: DeepgramTranscriber) -> None:
         finally:
             self.websocket_connection = None
             self.connection_authenticated = False
+
 
 async def cleanup(self: DeepgramTranscriber) -> None:
     """Clean up all resources including HTTP session and websocket."""
@@ -276,6 +282,7 @@ async def cleanup(self: DeepgramTranscriber) -> None:
     self.audio_frame_timestamps = []
     self.current_turn_interim_details = []
 
+
 async def deepgram_connect(self: DeepgramTranscriber) -> Any:  # why: free-form provider payload
     """Establish websocket connection to Deepgram with proper error handling"""
     try:
@@ -309,4 +316,3 @@ async def deepgram_connect(self: DeepgramTranscriber) -> Any:  # why: free-form 
     except Exception as e:
         logger.error(f"Unexpected error connecting to Deepgram websocket: {e}")
         raise ConnectionError(f"Unexpected error connecting to Deepgram websocket: {e}")  # noqa: B904 — verbatim raise without cause (R8)
-

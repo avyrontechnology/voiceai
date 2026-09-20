@@ -70,9 +70,7 @@ class DtmfSession(Protocol):
 
     # --- legacy session methods the consumer calls back into ---
     def _TaskManager__get_updated_meta_info(self, meta_info: Any = ...) -> Any: ...  # noqa: D102
-    async def _handle_transcriber_output(
-        self, next_task: Any, transcriber_message: Any, meta_info: Any
-    ) -> Any: ...  # noqa: D102
+    async def _handle_transcriber_output(self, next_task: Any, transcriber_message: Any, meta_info: Any) -> Any: ...  # noqa: D102
 
 
 async def inject_digits_to_conversation(self: DtmfSession) -> None:

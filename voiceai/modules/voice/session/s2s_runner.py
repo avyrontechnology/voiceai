@@ -222,9 +222,7 @@ def _build_s2s_provider(self: S2SSession) -> Any:  # why: the frozen registry's 
     if self.s2s_provider_name == S2SProvider.GEMINI_LIVE.value:
         # GeminiTranscriber and most docs use GEMINI_API_KEY; GeminiLLM reads
         # GOOGLE_API_KEY. Accept either so a key set for one path works for S2S.
-        api_key = (
-            self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        )
+        api_key = self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("No Gemini API key: set GEMINI_API_KEY or GOOGLE_API_KEY, or pass s2s_key.")
     else:
@@ -447,9 +445,7 @@ async def _s2s_audio_ingest_loop(self: S2SSession) -> None:
 
         pcm = ulaw_to_pcm(data) if self._s2s_input.encoding is s2s_events.AudioEncoding.MULAW else data
         if self._s2s_input.sample_rate != s2s.input_sample_rate:
-            pcm = resample(
-                pcm, s2s.input_sample_rate, format="pcm", original_sample_rate=self._s2s_input.sample_rate
-            )
+            pcm = resample(pcm, s2s.input_sample_rate, format="pcm", original_sample_rate=self._s2s_input.sample_rate)
 
         try:
             await s2s.send_audio(pcm)
@@ -578,9 +574,7 @@ async def _s2s_event_loop(self: S2SSession) -> None:
         elif isinstance(event, s2s_events.S2SError):
             logger.error(f"S2S error: {event.message} (code={event.code})")
             if event.fatal:
-                await self._report_provider_health(
-                    "s2s", self.s2s_provider_name, self.s2s_model, False, blocking=True
-                )
+                await self._report_provider_health("s2s", self.s2s_provider_name, self.s2s_model, False, blocking=True)
                 self.hangup_detail = HangupReason.S2S_ERROR
                 raise LLMError(event.message, provider=self.s2s_provider_name, model=self.s2s_model)
 

@@ -12,8 +12,8 @@ import logging
 
 import pytest
 
-from voiceai.core.container import Container
-from voiceai.modules.voice import VoiceCallService, register
+from voiceai.core.container import VoiceAIContainer
+from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.service import DIRECTION_INBOUND
 
 
@@ -62,7 +62,7 @@ def _service(manager, recorder):
         return manager
 
     service = VoiceCallService(
-        manager_factory=factory,
+        manager_factory=factory,  # type: ignore[arg-type]
         execution_recorder=recorder,
         logger=logging.getLogger("otobaai.voice.test"),
     )
@@ -243,14 +243,3 @@ async def test_broken_store_never_fails_the_call(caplog):
 
     assert result == [{"messages": ["hi"]}]
     assert any("Prompt prefetch skipped" in record.getMessage() for record in caplog.records)
-
-
-def test_register_binds_a_singleton_voice_call_service():
-    """The module's real register() composes a resolvable, cached service (rule 9)."""
-    container = Container()
-    register(container)
-
-    service = container.resolve(VoiceCallService)
-
-    assert isinstance(service, VoiceCallService)
-    assert container.resolve(VoiceCallService) is service

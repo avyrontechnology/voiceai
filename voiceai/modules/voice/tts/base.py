@@ -1,6 +1,5 @@
 """Synthesizer base: provider contract, sequence gate and chunk stamping (spec 0004, B12b)."""
 
-
 import asyncio
 import io
 import re
@@ -18,13 +17,21 @@ logger = get_logger(MODULE_NAME)
 
 class BaseSynthesizer:
     """Synthesizer base: provider contract, sequence gate and chunk stamping."""
-    def __init__(self, task_manager_instance: Any=None, stream: Any=True, buffer_size: Any=40, event_loop: Any=None, sequence_gate: Any=None) -> None:  # noqa: E501 — verbatim legacy line (R8)
+
+    def __init__(
+        self,
+        task_manager_instance: Any = None,
+        stream: Any = True,
+        buffer_size: Any = 40,
+        event_loop: Any = None,
+        sequence_gate: Any = None,
+    ) -> None:  # noqa: E501 — verbatim legacy line (R8)
         """Args:
-            sequence_gate: Optional ``SequenceGatePort`` conformer (spec 0004 step B2).
-                When provided, `should_synthesize_response` prefers it over the legacy
-                ``task_manager_instance`` backref (which keeps flowing until step
-                B13c). Injected as a kwarg so this legacy module never imports
-                ``voiceai.modules.*`` (AGENTS.md §3.1 bridge 3).
+        sequence_gate: Optional ``SequenceGatePort`` conformer (spec 0004 step B2).
+            When provided, `should_synthesize_response` prefers it over the legacy
+            ``task_manager_instance`` backref (which keeps flowing until step
+            B13c). Injected as a kwarg so this legacy module never imports
+            ``voiceai.modules.*`` (AGENTS.md §3.1 bridge 3).
         """
         self.stream = stream
         self.buffer_size = buffer_size
@@ -191,7 +198,7 @@ class BaseSynthesizer:
             self._stamp_mark_id(meta_info)
             yield create_ws_data_packet(audio, meta_info)
 
-    async def _fetch_http_audio(self, text: Any, meta_info: Any=None) -> Any:
+    async def _fetch_http_audio(self, text: Any, meta_info: Any = None) -> Any:
         """Fetch audio via HTTP, with optional caching. Tracks synthesized_characters."""
         if getattr(self, "caching", False) and hasattr(self, "cache"):
             cached = self.cache.get(text)

@@ -281,9 +281,7 @@ async def test_coordinator_run_language_switch_drives_the_moved_body(monkeypatch
 
 async def test_coordinator_handoff_and_gate_ops_bind_the_session(monkeypatch):
     seen = []
-    monkeypatch.setattr(
-        lid_gate, "arm_lid_playback_gate", lambda s, sid, task: seen.append(("arm", s, sid, task))
-    )
+    monkeypatch.setattr(lid_gate, "arm_lid_playback_gate", lambda s, sid, task: seen.append(("arm", s, sid, task)))
     handoff_mock = AsyncMock(return_value=None)
     from voiceai.modules.voice.session.language import handoff as handoff_module
 

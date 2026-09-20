@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from collections.abc import Collection
 
+from voiceai.modules.voice import static_methods
 from voiceai.modules.voice.constants import (
     AVAILABLE_LABELS_KEY,
     LABEL_KEY,
+    PARTNER_ID_KEY,
+    TO_NUMBER_KEY,
     UNKNOWN_LABEL_MESSAGE_TEMPLATE,
 )
-from voiceai.modules.voice.errors import UnknownComponentLabelError
+from voiceai.modules.voice.errors import PlaceCallError, UnknownComponentLabelError, UnknownTalkoPartnerError
+from voiceai.modules.voice.models import TalkoPartnerConfig
 
 __all__ = ["ensure_label_known"]
 
@@ -43,3 +47,48 @@ def ensure_label_known(label: str, available: Collection[str]) -> str:
             details={LABEL_KEY: label, AVAILABLE_LABELS_KEY: sorted(available)},
         )
     return label
+
+
+__all__ += ["ensure_recipient_dialable", "ensure_talko_partner_known"]
+
+
+def ensure_talko_partner_known(partner_id: str, record: TalkoPartnerConfig | None) -> TalkoPartnerConfig:
+    """Return the partner record, or raise fail-closed on unknown ids.
+
+    The service never dials on another partner's credentials, so a missing
+    record is an error, never a fallback to trunk defaults.
+
+    Args:
+        partner_id: The requested Talko partner account id.
+        record: The repository's record for it, or `None`.
+
+    Returns:
+        The record, guaranteed present.
+
+    Raises:
+        UnknownTalkoPartnerError: When no record exists for `partner_id`.
+    """
+    if record is None:
+        raise UnknownTalkoPartnerError(
+            f"Unknown Talko partner {partner_id!r}.",
+            details={PARTNER_ID_KEY: partner_id},
+        )
+    return record
+
+
+def ensure_recipient_dialable(to_number: str) -> str:
+    """Return dialable digits, converting the static validator's `ValueError`.
+
+    Args:
+        to_number: The destination in any common format.
+
+    Returns:
+        The digits-only destination.
+
+    Raises:
+        PlaceCallError: When the destination is not dialable.
+    """
+    try:
+        return static_methods.validate_recipient_number(to_number)
+    except ValueError as exc:
+        raise PlaceCallError(str(exc), details={TO_NUMBER_KEY: to_number}) from exc

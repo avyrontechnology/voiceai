@@ -38,7 +38,7 @@ from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.input_handlers.default import DefaultInputHandler
 from voiceai.input_handlers.telephony import TelephonyInputHandler
-from voiceai.modules import ALL_MODULES, ModuleDef, voice
+from voiceai.modules import ModuleDef, voice
 from voiceai.modules.voice.constants import (
     CATEGORY_IS_USER_ONLINE,
     COMPONENT_SYNTHESIZER,
@@ -57,7 +57,6 @@ from voiceai.modules.voice.errors import (
 from voiceai.modules.voice.exceptions import ensure_label_known
 from voiceai.modules.voice.helpers import packet_view, transcriber_event_view, turn_meta_from_meta_info
 from voiceai.modules.voice.models import HangupDetail, LatencyReport, LidDecisionRecord
-from voiceai.modules.voice.utils import epoch_seconds, new_mark_id
 from voiceai.modules.voice.ports import (
     ActiveTranscriberProbePort,
     AgentBrainPort,
@@ -74,6 +73,7 @@ from voiceai.modules.voice.ports import (
     TranscriptionPort,
     WelcomeStateSetterPort,
 )
+from voiceai.modules.voice.utils import epoch_seconds, new_mark_id
 from voiceai.output_handlers.telephony import TelephonyOutputHandler
 from voiceai.s2s.base_s2s import BaseS2SProvider
 from voiceai.synthesizer.base_synthesizer import BaseSynthesizer
@@ -81,7 +81,7 @@ from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 if TYPE_CHECKING:  # annotation only: the spy stands in for a container at runtime
-    from voiceai.core.container import Container
+    pass
 
 ACTIVE_LABEL = "english"
 
@@ -490,31 +490,33 @@ def test_module_is_a_frozen_module_def_named_voice():
         voice.MODULE.name = "renamed"  # type: ignore[misc]  # the point: assignment must raise
 
 
-def test_voice_module_is_registered_in_all_modules():
-    """Spec 0001 registry pattern: the module rides `ALL_MODULES` from day one (B0)."""
-    assert voice.MODULE in ALL_MODULES
+def test_router_mounts_ws_plus_place_call_surface() -> None:
+    """Spec 0008 flip of the B14 route pin (same flip precedent), extended by 0009:
+    the router carries the dark-until-cutover WS route, the outbound place-call
+    route, the partner-credential CRUD routes, and the connect/refresh routes,
+    in declaration order."""
+    from voiceai.modules.voice.constants import (
+        CHAT_WS_PATH,
+        PARTNER_ITEM_PATH,
+        PARTNER_REFRESH_PATH,
+        PARTNERS_CONNECT_PATH,
+        PARTNERS_PATH,
+        PARTNERS_PREVIEW_PATH,
+        PLACE_CALL_PATH,
+    )
 
-
-def test_router_mounts_exactly_the_flagged_ws_route():
-    """B14 flip of the B0 empty-router pin (1<->1, same precedent as the B2/B4 pin flips):
-    the router carries exactly the dark-until-cutover WS route and nothing else."""
-    from voiceai.modules.voice.constants import CHAT_WS_PATH
-
-    assert [route.path for route in voice.MODULE.router.routes] == [CHAT_WS_PATH]
-
-
-def test_register_binds_exactly_the_voice_call_service():
-    """B4 seam: `register` binds `VoiceCallService` and nothing else (B13a adds the rest).
-
-    Rewrite of the B0 no-op pin (`test_register_is_a_noop_until_b13a`), 1<->1: the
-    planned binding landed, so the pin flips the same way the B2 probe-surface pin did.
-    """
-    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-    spy = SimpleNamespace(register=lambda *args, **kwargs: calls.append((args, kwargs)))
-
-    voice.MODULE.register(cast("Container", spy))
-
-    assert [args[0] for args, _kwargs in calls] == [voice.VoiceCallService]
+    assert [getattr(route, "path", "") for route in voice.MODULE.router.routes] == [
+        CHAT_WS_PATH,
+        PLACE_CALL_PATH,
+        PARTNERS_PATH,
+        PARTNERS_PATH,
+        PARTNER_ITEM_PATH,
+        PARTNER_ITEM_PATH,
+        PARTNER_ITEM_PATH,
+        PARTNERS_PREVIEW_PATH,
+        PARTNERS_CONNECT_PATH,
+        PARTNER_REFRESH_PATH,
+    ]
 
 
 def test_public_surface_exports_the_ports():

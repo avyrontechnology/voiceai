@@ -78,13 +78,13 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
 
     def __init__(
         self,
-        io_provider: Any="sip-trunk",
-        websocket: Any=None,
-        mark_event_meta_data: Any=None,
-        log_dir_name: Any=None,
-        asterisk_media_start: Any=None,
-        agent_config: Any=None,
-        input_handler: Any=None,
+        io_provider: Any = "sip-trunk",
+        websocket: Any = None,
+        mark_event_meta_data: Any = None,
+        log_dir_name: Any = None,
+        asterisk_media_start: Any = None,
+        agent_config: Any = None,
+        input_handler: Any = None,
     ) -> None:
         super().__init__(io_provider, websocket, mark_event_meta_data, log_dir_name)
         self.asterisk_media_start = asterisk_media_start or {}
@@ -390,7 +390,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
     # Control helpers
     # ------------------------------------------------------------------
 
-    async def _send_control(self, command: Any, params: Any=None) -> None:
+    async def _send_control(self, command: Any, params: Any = None) -> None:
         """Send one control command as TEXT (plain text, Asterisk-compatible)."""
         try:
             if self._closed:
@@ -416,7 +416,7 @@ class SipTrunkOutputHandler(TelephonyOutputHandler):
 
     # sip-trunk sends audio as raw binary frames and marks as MARK_MEDIA TEXT frames,
     # so the JSON media/mark framing used by Twilio/Plivo is intentionally unused here.
-    async def form_media_message(self, audio_data: Any, audio_format: Any="wav") -> Any:
+    async def form_media_message(self, audio_data: Any, audio_format: Any = "wav") -> Any:
         """Build the media message for an audio frame."""
         return None
 

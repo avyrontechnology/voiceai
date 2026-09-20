@@ -155,6 +155,7 @@ class LifecycleSession(Protocol):
 
     # --- legacy session methods the lifecycle calls back into ---
     mark_event_meta_data: Any  # why: legacy mark ledger crossed by the terminal trim
+
     async def wait_for_current_message(self) -> Any: ...  # noqa: D102
     async def sync_history(  # noqa: D102
         self, mark_events_data: Any, interruption_processed_at: float, extend_with_playback_estimate: bool = ...
@@ -584,9 +585,7 @@ async def check_for_completion(self: LifecycleSession) -> None:
             and not self.response_in_pipeline
             and not has_pending_generation
         ):
-            await self._inject_and_run_llm(
-                f"[silence] User was silent for {self.repeat_after_silence_seconds} seconds"
-            )
+            await self._inject_and_run_llm(f"[silence] User was silent for {self.repeat_after_silence_seconds} seconds")
             continue
 
         if (
@@ -612,9 +611,7 @@ async def check_for_completion(self: LifecycleSession) -> None:
             self.asked_if_user_is_still_there = True
 
             if self.check_if_user_online:
-                user_online_message = select_message_by_language(
-                    self.check_user_online_message_config, self.language
-                )
+                user_online_message = select_message_by_language(self.check_user_online_message_config, self.language)
 
                 if self._TaskManager__is_s2s():
                     # The model owns the audio stream and there is no synthesizer to render
@@ -681,15 +678,10 @@ async def check_for_backchanneling(self: LifecycleSession) -> None:
     """
     while True:
         user_speaking_duration = self.interruption_manager.get_user_speaking_duration()
-        if (
-            self.interruption_manager.is_user_speaking()
-            and user_speaking_duration > self.backchanneling_start_delay
-        ):
+        if self.interruption_manager.is_user_speaking() and user_speaking_duration > self.backchanneling_start_delay:
             filename = random.choice(self.filenames)  # noqa: S311 - clip variety, not security
             logger.info(f"Should send a random backchanneling words and sending them {filename}")
-            audio = await get_raw_audio_bytes(
-                f"{self.backchanneling_audios}/{filename}", local=True, is_location=True
-            )
+            audio = await get_raw_audio_bytes(f"{self.backchanneling_audios}/{filename}", local=True, is_location=True)
             if not self.turn_based_conversation:
                 # backchannel wavs are 8kHz; web/freeswitch play raw PCM at the synth rate
                 # (self.sampling_rate, e.g. 24k) — sending them labeled 24k without upsampling

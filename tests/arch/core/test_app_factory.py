@@ -19,7 +19,7 @@ from httpx import AsyncClient
 from voiceai.common.errors import ConfigurationError
 from voiceai.common.logger import LOGGER_NAME
 from voiceai.core.app_factory import create_app
-from voiceai.core.container import Container, build_container
+from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.core.environment import Environment
 
 if TYPE_CHECKING:  # annotation only: collecting this file must never import voiceai.modules
@@ -76,10 +76,10 @@ class TestComposition:
     """What `create_app` wires together."""
 
     def test_the_container_is_published_on_app_state(self, app: FastAPI) -> None:
-        assert isinstance(app.state.container, Container)
+        assert isinstance(app.state.container.environment(), Environment)
 
     def test_a_supplied_container_is_reused(self, arch_environment: Environment, dummy_module: ModuleDef) -> None:
-        container = build_container(arch_environment, modules=[dummy_module])
+        container = build_container(arch_environment)
         built = create_app(env=arch_environment, container=container, modules=[dummy_module])
         assert built.state.container is container
 
@@ -247,9 +247,9 @@ class TestLifespan:
         fake_redis: object,
         container_override: Callable[..., None],
     ) -> None:
-        built = create_app(env=arch_environment, modules=[dummy_module])
+        built = create_app(env=arch_environment)
         container_override(built, "redis", fake_redis)
-        built.state.container.resolve("redis")  # the client only exists once something asked for it
+        built.state.container.redis_client()  # the client only exists once something asked for it
         async with built.router.lifespan_context(built):
             pass
         assert getattr(fake_redis, "closed") is True
@@ -261,9 +261,9 @@ class TestLifespan:
         fake_redis: object,
         container_override: Callable[..., None],
     ) -> None:
-        built = create_app(env=arch_environment, modules=[dummy_module])
+        built = create_app(env=arch_environment)
         container_override(built, "redis", fake_redis)
-        built.state.container.resolve("redis")
+        built.state.container.redis_client()
         with pytest.raises(RuntimeError, match="startup interrupted"):
             async with built.router.lifespan_context(built):
                 raise RuntimeError("startup interrupted")
@@ -276,4 +276,4 @@ class TestCorsDefenseInDepth:
     def test_model_copy_injected_wildcard_is_rejected_at_create_app(self, arch_environment: Environment) -> None:
         env = arch_environment.model_copy(update={"allowed_origins": ("*",)})
         with pytest.raises(ConfigurationError):
-            create_app(env, modules=[])
+            create_app(env)

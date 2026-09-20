@@ -16,15 +16,18 @@ def mount_new_auth(app):
     Binds the app's own store in a fresh container (mirrors production wiring)
     so the controller resolves its service without touching the legacy seam.
     """
+    from dependency_injector import providers
+
     from voiceai.common.responses import register_exception_handlers
     from voiceai.core.container import build_container
     from voiceai.core.environment import Environment
     from voiceai.modules import auth as auth_module
-    from voiceai.modules.auth.ports import AuthStorePort
+    from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
 
     register_exception_handlers(app)  # why: the cut-over controller raises AppError; the factory owns rendering
-    container = build_container(Environment(), modules=[auth_module.MODULE])
-    container.register(AuthStorePort, app.state.platform_store)  # type: ignore[type-abstract]
+    container = build_container(Environment())
+    container.auth_store.override(providers.Object(app.state.platform_store))
+    container.wallet_service.override(providers.Factory(build_legacy_wallet_service, app.state.platform_store))
     app.state.container = container
     app.include_router(auth_module.MODULE.router, prefix="/api/v1")
     return app

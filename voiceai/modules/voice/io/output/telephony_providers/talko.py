@@ -1,6 +1,5 @@
 """Talko telephony output handler: Twilio-compatible rescue leg (spec 0004, B12a)."""
 
-
 from typing import Any
 
 from dotenv import load_dotenv
@@ -21,7 +20,7 @@ class TalkoOutputHandler(TwilioOutputHandler):
     so playout-ack tracking keeps working).
     """
 
-    def __init__(self, websocket: Any=None, mark_event_meta_data: Any=None, log_dir_name: Any=None) -> None:
+    def __init__(self, websocket: Any = None, mark_event_meta_data: Any = None, log_dir_name: Any = None) -> None:
         super().__init__(websocket, mark_event_meta_data, log_dir_name)
         self.io_provider = "talko"
         self.is_chunking_supported = True

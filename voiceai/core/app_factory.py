@@ -31,7 +31,7 @@ from voiceai.common.errors import AppError
 from voiceai.common.logger import configure_logging, set_request_id
 from voiceai.common.responses import register_exception_handlers, unexpected_error_response
 from voiceai.common.security import REQUEST_ID_PATTERN
-from voiceai.core.container import Container, build_container, resolve_modules
+from voiceai.core.container import VoiceAIContainer, aclose_container, build_container
 from voiceai.core.environment import Environment, ensure_exact_origins, get_environment
 
 if TYPE_CHECKING:  # import-direction rule: modules → core is the only static direction
@@ -102,7 +102,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _build_lifespan(container: Container) -> Lifespan[FastAPI]:
+def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
     """Build the lifespan handler that releases the container's clients on shutdown.
 
     Args:
@@ -119,7 +119,7 @@ def _build_lifespan(container: Container) -> Lifespan[FastAPI]:
         finally:
             # try/finally: the clients are released even when the lifespan scope is cancelled
             # or an exception is thrown into it, not only on a clean shutdown.
-            await container.aclose()
+            await aclose_container(container)
 
     return lifespan
 
@@ -155,7 +155,7 @@ def _add_cors(app: FastAPI, env: Environment) -> None:
 def create_app(
     env: Environment | None = None,
     *,
-    container: Container | None = None,
+    container: VoiceAIContainer | None = None,
     modules: Sequence[ModuleDef] | None = None,
 ) -> FastAPI:
     """Build the API application.
@@ -163,15 +163,14 @@ def create_app(
     Args:
         env: Explicit configuration; `None` uses the cached process environment.
         container: A pre-built container (tests inject fakes this way); `None` builds one.
-        modules: Explicit module definitions; `None` uses the project registry, imported
-            lazily inside the call so `core` never depends on `modules` at import time.
+        modules: Explicit module definitions; `None` uses the project registry.
 
     Returns:
         A configured `FastAPI` app whose `state.container` is the composition root.
     """
     environment = env if env is not None else get_environment()
     configure_logging(environment.log_level)
-    resolved = container if container is not None else build_container(environment, modules=modules)
+    resolved = container if container is not None else build_container(environment)
     app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=_build_lifespan(resolved))
     setattr(app.state, CONTAINER_STATE_ATTR, resolved)
     app.add_middleware(RequestIdMiddleware)
@@ -180,6 +179,16 @@ def create_app(
     # headers a browser needs to read them.
     _add_cors(app, environment)
     register_exception_handlers(app)
-    for module in resolve_modules(modules):
+
+    modules_to_load: Sequence[ModuleDef]
+    if modules is None:
+        from voiceai.modules import ALL_MODULES
+
+        modules_to_load = ALL_MODULES
+    else:
+        modules_to_load = modules
+
+    for module in modules_to_load:
         app.include_router(module.router, prefix=API_PREFIX)
+
     return app

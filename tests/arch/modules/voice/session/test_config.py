@@ -185,7 +185,7 @@ def test_completion_prompt_defaults_then_appends_the_json_suffix():
     # Custom prompts replace the default base but get the same suffix.
     custom = _parse(_task(SIMPLE_AGENT, {"hangup_after_LLMCall": True, "call_cancellation_prompt": "be brief"}))
     assert custom.check_for_completion_prompt.startswith("be brief")
-    assert cfg.check_for_completion_prompt.endswith(custom.check_for_completion_prompt[len("be brief"):])
+    assert cfg.check_for_completion_prompt.endswith(custom.check_for_completion_prompt[len("be brief") :])
 
 
 def test_graph_agent_parse_nodes_and_nested_llm_config():
@@ -343,9 +343,7 @@ def _assert_parity(cfg, tm):
     assert tm.kwargs["process_interim_results"] == cfg.process_interim_results
     # llm_config: composition stamps buffer_size into the simple-agent dict in place.
     tm_llm_config = None if tm.llm_config is None else {k: v for k, v in tm.llm_config.items() if k != "buffer_size"}
-    cfg_llm_config = (
-        None if cfg.llm_config is None else {k: v for k, v in cfg.llm_config.items() if k != "buffer_size"}
-    )
+    cfg_llm_config = None if cfg.llm_config is None else {k: v for k, v in cfg.llm_config.items() if k != "buffer_size"}
     assert tm_llm_config == cfg_llm_config
     # llm_agent_config: absent on the instance exactly when the parse answered None.
     assert getattr(tm, "llm_agent_config", None) == (cfg.llm_agent_config or None)

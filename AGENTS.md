@@ -71,8 +71,8 @@ secrets pass through `redact_secrets` before logging.
 
 **Rule 4 — Core module.** `voiceai/core/` owns process wiring: `environment.py` (every env var
 is declared, typed, and defaulted here — `os.getenv` anywhere else is a violation),
-`container.py` (DI), `redis.py`, `db.py`, `app_factory.py`. Config flows env-file →
-`Environment` → container → constructors.
+`container.py` (Dependency Injector DeclarativeContainer), `redis.py`, `db.py`, `app_factory.py`. Config flows env-file →
+`Environment` → container → injected dependencies.
 
 **Rule 5 — Database submodule.** `voiceai/database/` owns `base.py` — the `BaseFields` model
 every persisted document/table inherits (`id`, `created_at`, `updated_at`, `created_by`,
@@ -102,11 +102,7 @@ logging + re-raising or converting to an `AppError`; no commented-out code; no d
 concatenation — parameterized/driver-native filters only; TODOs must carry a spec reference
 (`# TODO(spec-0004): ...`).
 
-**Rule 9 — Dependency injection.** Services receive repositories/logger/clients through their
-constructors; repositories receive db/redis clients the same way. The only composition points
-are `core/container.py::build_container` and each module's `register(container)`. Controllers
-resolve services via the container dependency — never construct them, never import a global
-singleton. Tests inject fakes through the same constructors.
+**Rule 9 — Dependency injection.** We use `dependency_injector.containers.DeclarativeContainer` for DI. Services receive repositories/logger/clients through their constructors (wired via the container); repositories receive db/redis clients the same way. The single composition point is the `Container` in `core/container.py`. Controllers use `@inject` and `Provide` to resolve dependencies. Never manually construct dependencies in controllers, and never import a global singleton directly. Tests override container providers to inject fakes.
 
 **Rule 10 — Tests per module.** `tests/arch/` mirrors the package tree; every module ships
 unit tests (service/repository/static_methods with DI fakes) plus controller tests through the

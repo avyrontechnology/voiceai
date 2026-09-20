@@ -39,6 +39,8 @@ urllib3 = ">=2.7.0"
 uvicorn = "==0.22.0"
 websockets = "==15.0.1"
 
+dependency-injector = ">=4.41.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

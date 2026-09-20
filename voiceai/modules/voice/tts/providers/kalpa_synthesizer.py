@@ -77,21 +77,22 @@ _VOICE_IDS = {}  # (host, lowercased display name) -> voice id
 
 class KalpaSynthesizer(StreamSynthesizer):
     """Kalpa TTS provider: streaming WSS plus one-shot HTTP."""
+
     def __init__(
         self,
-        voice: Any=None,
-        voice_id: Any=None,
-        model: Any=KALPA_DEFAULT_MODEL,
-        temperature: Any=None,
-        acoustic_temperature: Any=None,
-        max_new_tokens: Any=None,
-        audio_quality: Any=None,
-        chunk_length_schedule: Any=None,
-        sampling_rate: Any="24000",
-        stream: Any=False,
-        buffer_size: Any=400,
-        caching: Any=True,
-        synthesizer_key: Any=None,
+        voice: Any = None,
+        voice_id: Any = None,
+        model: Any = KALPA_DEFAULT_MODEL,
+        temperature: Any = None,
+        acoustic_temperature: Any = None,
+        max_new_tokens: Any = None,
+        audio_quality: Any = None,
+        chunk_length_schedule: Any = None,
+        sampling_rate: Any = "24000",
+        stream: Any = False,
+        buffer_size: Any = 400,
+        caching: Any = True,
+        synthesizer_key: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -503,7 +504,7 @@ class KalpaSynthesizer(StreamSynthesizer):
             piece = ""
         return "".join(self._turn_chunks) if replay else piece
 
-    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any=False) -> None:
+    async def sender(self, text: Any, sequence_id: Any, end_of_llm_stream: Any = False) -> None:
         """Stream text frames to the provider websocket."""
         try:
             # The epoch was stamped at push time (see _on_push): an interruption bumps it
