@@ -36,6 +36,29 @@ TRUNK_TIMEOUT_S = float(os.getenv("TALKO_TRUNK_TIMEOUT_S", "20"))
 DIAL_CONCURRENCY = int(os.getenv("TALKO_DIAL_CONCURRENCY", "3"))
 
 
+def _trunk_url(explicit: Optional[str] = None) -> str:
+    """Trunk base URL resolved at call time, not import time.
+
+    The engine imports this module before ``load_dotenv()`` runs, so the
+    module-level ``TRUNK_URL`` snapshot misses ``.env`` values for local
+    runs; compose injects env before import but operators can also change it
+    without rebuilding. Precedence: per-request value > env > import default.
+    NOTE: inside the compose network this must be ``http://talko-app:8004``
+    (``localhost`` there is the engine container itself, where nothing
+    listens — every dial fails instantly with "All connection attempts
+    failed"). ``localhost:8004`` is only correct for host-local runs.
+    """
+    return (explicit or os.getenv("TALKO_TRUNK_URL") or TRUNK_URL).rstrip("/")
+
+
+def _trunk_timeout_s() -> float:
+    """Per-dial HTTP timeout resolved at call time (same late-env reason)."""
+    try:
+        return float(os.getenv("TALKO_TRUNK_TIMEOUT_S", str(TRUNK_TIMEOUT_S)))
+    except ValueError:
+        return TRUNK_TIMEOUT_S
+
+
 def _trunk_headers() -> Dict[str, str]:
     """The trunk's dial endpoint requires X-API-Key once TELEPHONY_API_KEY is configured there.
 
@@ -118,8 +141,11 @@ async def dial_via_talko(
 ) -> Execution:
     """Dial one real call through the Talko trunk. Never raises for trunk errors."""
     api_key, caller_did, api_base = await resolve_talko_partner_credentials(
-        store, partner_id=partner_id, explicit_key=talko_api_key,
-        explicit_did=from_number, explicit_base=talko_api_base_url,
+        store,
+        partner_id=partner_id,
+        explicit_key=talko_api_key,
+        explicit_did=from_number,
+        explicit_base=talko_api_base_url,
     )
     validate_recipient_number(to_number)
     execution = Execution(
@@ -144,7 +170,7 @@ async def dial_via_talko(
         body["talko_api_base_url"] = api_base
     if variables:
         body["variables"] = dict(variables)
-    url = "{}/talko/call".format((trunk_url or TRUNK_URL).rstrip("/"))
+    url = "{}/talko/call".format(_trunk_url(trunk_url))
     try:
         # Only pass headers when a key is configured: keeps the call shape stable for callers
         # (and test doubles) that predate the trunk API key.
@@ -152,7 +178,7 @@ async def dial_via_talko(
         headers = _trunk_headers()
         if headers:
             request_kwargs["headers"] = headers
-        async with httpx.AsyncClient(timeout=TRUNK_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=_trunk_timeout_s()) as client:
             resp = await client.post(url, **request_kwargs)
         if resp.status_code >= 400:
             raise RuntimeError("trunk rejected dial: {}".format(resp.text[:300]))
@@ -176,9 +202,9 @@ async def dial_via_talko(
         execution.summary = "Dialed via Talko trunk; live on agent {}.".format(agent_id)
         execution.extracted_data = {"trunk": "talko", "trunk_response": trunk_payload}
     except Exception as e:
-        logger.error("Talko dial failed to_number={}: {}".format(to_number, e))
+        logger.error("Talko dial failed trunk=%s to_number=%s: %s", url, to_number, e)
         execution.status = ExecutionStatus.FAILED
-        execution.summary = "Talko dial failed: {}".format(e)
+        execution.summary = "Talko dial failed (trunk {}): {}".format(url, e)
         execution.hangup_code = "failed"
         execution.ended_at = utcnow()
     await store.save_execution(execution)

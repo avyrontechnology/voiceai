@@ -107,16 +107,15 @@ active_websockets: List[WebSocket] = []
 
 async def _load_all_agent_records() -> list:
     """(agent_id, record) pairs for the welcome prewarm; best-effort, never raises."""
+    from voiceai.platform.agent_records import fetch_agent_pairs
+
     records = []
     try:
-        keys = await redis_client.keys("*")
+        pairs = await fetch_agent_pairs(redis_client)
     except Exception:
         return records
-    for key in keys or []:
-        if ":" in key:
-            continue
+    for key, raw in pairs:
         try:
-            raw = await redis_client.get(key)
             record = json.loads(raw) if raw else None
             if isinstance(record, dict):
                 records.append((key, record))
@@ -213,11 +212,15 @@ ErrorResponse = ErrorEnvelope
 
 
 class CreateAgentPayload(BaseModel):
-    agent_config: AgentModel = Field(..., description="The main agent configuration including tools, tasks, and settings.")
+    agent_config: AgentModel = Field(
+        ..., description="The main agent configuration including tools, tasks, and settings."
+    )
     # Values are usually strings (system_prompt, welcome_message) but may be
     # nested blocks such as task_1.multilingual_prompts, which the engine
     # reads at runtime for language switching.
-    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(None, description="Optional prompts mapped by intent/context.")
+    agent_prompts: Optional[Dict[str, Dict[str, Any]]] = Field(
+        None, description="Optional prompts mapped by intent/context."
+    )
 
 
 class AgentCreatedResponse(BaseModel):
@@ -304,7 +307,9 @@ async def load_agent_record(agent_id: str) -> dict:
     try:
         record = json.loads(raw)
     except (TypeError, ValueError) as exc:
-        raise StorageError(f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc) from exc
+        raise StorageError(
+            f"stored config for agent {agent_id} is not valid JSON", details={"agent_id": agent_id}, cause=exc
+        ) from exc
     if not isinstance(record, dict):
         raise StorageError(f"stored config for agent {agent_id} is not an object", details={"agent_id": agent_id})
     if len(_AGENT_RECORD_CACHE) >= _AGENT_RECORD_CACHE_MAX:
@@ -394,7 +399,9 @@ async def health():
             raise
         logger.warning("health: redis ping failed: %s", summarize_exception(exc))
     platform_ok = getattr(app.state, "platform_store", None) is not None
-    return HealthResponse(ok=redis_ok, redis=redis_ok, platform=platform_ok, stream_secret_configured=stream_secret_configured())
+    return HealthResponse(
+        ok=redis_ok, redis=redis_ok, platform=platform_ok, stream_secret_configured=stream_secret_configured()
+    )
 
 
 @app.get(
@@ -450,7 +457,9 @@ async def create_agent(agent_data: CreateAgentPayload, _auth: Principal = Depend
             logger.info("welcome pre-rendered | agent=%s", agent_id)
     except Exception as exc:
         logger.warning("welcome pre-render skipped | agent=%s err=%s", agent_id, summarize_exception(exc))
-    logger.info("agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", [])))
+    logger.info(
+        "agent created | agent=%s name=%s tasks=%d", agent_id, record.get("agent_name"), len(record.get("tasks", []))
+    )
     return AgentCreatedResponse(agent_id=agent_id)
 
 
@@ -513,26 +522,17 @@ async def delete_agent(agent_id: str, _auth: Principal = Depends(require_scope("
 )
 async def get_all_agents(_auth: Principal = Depends(require_scope("agents:read"))):
     """Fetches all agents stored in Redis."""
-    from voiceai.platform.agent_records import collect_agent_records
+    from voiceai.platform.agent_records import collect_agent_records, fetch_agent_pairs
 
     try:
-        agent_keys = await redis_client.keys("*")
+        # One non-blocking SCAN + chunked MGET (a few round-trips total).
+        # The old KEYS * + sequential GET per key was ~48s against a remote
+        # Redis with ~1.5k keys; this is ~0.5s for the same data.
+        pairs = await fetch_agent_pairs(redis_client)
     except Exception as exc:
         if is_cancellation(exc):
             raise
         raise StorageError(f"agent store unavailable: {summarize_exception(exc)}", cause=exc) from exc
-    pairs = []
-    for key in agent_keys or []:
-        # Bare UUID keys are agent records; namespaced platform keys (data with colons,
-        # index sets) are skipped before GET — reading a set as a string raises WRONGTYPE.
-        if ":" in key:
-            continue
-        try:
-            pairs.append((key, await redis_client.get(key)))
-        except Exception as exc:
-            if is_cancellation(exc):
-                raise
-            logger.debug("skipping unreadable agent key %s: %s", key, summarize_exception(exc))
     return {"agents": collect_agent_records(pairs)}
 
 
@@ -572,11 +572,15 @@ async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str], ag
         if session_token:
             from voiceai.platform.auth import _principal_from_session
 
-            principal = await call_soft(_principal_from_session, store, session_token, name="ws session lookup", logger=logger)
+            principal = await call_soft(
+                _principal_from_session, store, session_token, name="ws session lookup", logger=logger
+            )
     if principal is not None:
         if principal.has_scope("calls:write"):
             return principal.auth_type
-        raise AuthenticationError("This account may not place calls (calls:write scope required)", details={"scope": "calls:write"})
+        raise AuthenticationError(
+            "This account may not place calls (calls:write scope required)", details={"scope": "calls:write"}
+        )
     if token and verify_stream_token(token, agent_id):
         return "stream-token"
 
@@ -585,7 +589,9 @@ async def _authorize_voice_socket(websocket: WebSocket, token: Optional[str], ag
         details["hint"] = "carrier calls need VOICE_STREAM_SECRET on the engine and the telephony servers"
     if store is None:
         details["platform"] = "platform store unavailable; only stream tokens can authenticate"
-    raise AuthenticationError("Voice socket requires a ws ticket, a session cookie, or a signed stream token", details=details)
+    raise AuthenticationError(
+        "Voice socket requires a ws ticket, a session cookie, or a signed stream token", details=details
+    )
 
 
 def _browser_leg_config(agent_config: dict) -> dict:
@@ -731,7 +737,9 @@ async def _lookup_inbound_did(agent_id: str) -> Optional[str]:
     return None
 
 
-async def _record_execution(agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]) -> None:
+async def _record_execution(
+    agent_id: str, assistant_manager: Optional[AssistantManager], task_outputs: List[Any]
+) -> None:
     """Best-effort execution log for the platform layer; never breaks the call path."""
     from voiceai.platform.engine_hook import _numbers_from_context, record_engine_execution
 
@@ -846,22 +854,42 @@ async def websocket_endpoint(
         # trunk context_data here). Web legs ignore them so browser rows stay number-free.
         # Record-only: never affects routing, prompts, or audio.
         call_context: Optional[Dict[str, Any]] = None
+        if not is_web_leg and peeked and isinstance(peeked.get("text"), str):
+            try:
+                packet = json.loads(peeked["text"])
+                if isinstance(packet, dict) and "context_data" in packet:
+                    call_context = packet["context_data"]
+            except Exception:
+                pass
+
         if not is_web_leg and (from_number or to_number):
-            call_context = {"recipient_data": {}}
-            if from_number:
+            if call_context is None:
+                call_context = {"recipient_data": {}}
+            if "recipient_data" not in call_context:
+                call_context["recipient_data"] = {}
+            if from_number and "from_number" not in call_context["recipient_data"]:
                 call_context["recipient_data"]["from_number"] = from_number
-            if to_number:
+            if to_number and "to_number" not in call_context["recipient_data"]:
                 call_context["recipient_data"]["to_number"] = to_number
         if call_context is not None:
             assistant_manager = AssistantManager(
-                agent_config, call_socket, agent_id, context_data=call_context, is_web_based_call=is_web_leg,
+                agent_config,
+                call_socket,
+                agent_id,
+                context_data=call_context,
+                is_web_based_call=is_web_leg,
                 platform_store=getattr(websocket.app.state, "platform_store", None),
             )
         else:
             # No carrier numbers: legacy call shape (keeps test doubles without
             # context_data working; stored config and audio path untouched).
-            assistant_manager = AssistantManager(agent_config, call_socket, agent_id, is_web_based_call=is_web_leg,
-                platform_store=getattr(websocket.app.state, "platform_store", None))
+            assistant_manager = AssistantManager(
+                agent_config,
+                call_socket,
+                agent_id,
+                is_web_based_call=is_web_leg,
+                platform_store=getattr(websocket.app.state, "platform_store", None),
+            )
         async for index, task_output in assistant_manager.run(local=True):
             task_outputs.append(task_output)
             keys = sorted(task_output.keys()) if isinstance(task_output, dict) else type(task_output).__name__
@@ -889,4 +917,6 @@ async def websocket_endpoint(
             )
             await close_with_error(websocket, error)
         _forget_socket(websocket)
-        await call_soft(_record_execution, agent_id, assistant_manager, task_outputs, name="execution logging", logger=logger)
+        await call_soft(
+            _record_execution, agent_id, assistant_manager, task_outputs, name="execution logging", logger=logger
+        )

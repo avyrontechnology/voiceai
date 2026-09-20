@@ -204,8 +204,9 @@ def _schedule_s2s_welcome_fill(*, agent_id: str, text: str, voice: str, rate: in
 
         if not _welcome_cache.is_welcome_preload_enabled():
             return
-        key = _welcome_cache.welcome_cache_key(agent_id=agent_id, text=text, voice=voice, model="", lang="",
-                                               rate=int(rate))
+        key = _welcome_cache.welcome_cache_key(
+            agent_id=agent_id, text=text, voice=voice, model="", lang="", rate=int(rate)
+        )
         if key in _S2S_WELCOME_FILL_INFLIGHT:
             return
         if _S2S_WELCOME_FILL_COOLDOWN_UNTIL.get(key, 0.0) > time.monotonic():
@@ -215,8 +216,7 @@ def _schedule_s2s_welcome_fill(*, agent_id: str, text: str, voice: str, rate: in
         except RuntimeError:
             return
         _S2S_WELCOME_FILL_INFLIGHT.add(key)
-        task = loop.create_task(
-            _fill_s2s_welcome(key=key, agent_id=agent_id, text=text, voice=voice, rate=int(rate)))
+        task = loop.create_task(_fill_s2s_welcome(key=key, agent_id=agent_id, text=text, voice=voice, rate=int(rate)))
         task.add_done_callback(lambda _t: _S2S_WELCOME_FILL_INFLIGHT.discard(key))
     except Exception as exc:
         logger.warning(f"S2S cached greeting fill scheduling skipped: {exc}")
@@ -1735,9 +1735,7 @@ class TaskManager(BaseManager):
                 self.kwargs["agent_welcome_message"] = update_prompt_with_context(
                     self.kwargs["agent_welcome_message"], self.context_data
                 )
-            if isinstance(getattr(self, "prompts", None), dict) and isinstance(
-                self.prompts.get("system_prompt"), str
-            ):
+            if isinstance(getattr(self, "prompts", None), dict) and isinstance(self.prompts.get("system_prompt"), str):
                 self.prompts["system_prompt"] = update_prompt_with_context(
                     self.prompts["system_prompt"], self.context_data
                 )
@@ -1888,9 +1886,7 @@ class TaskManager(BaseManager):
                 return None
         pcm = None
         try:
-            processor = getattr(synth, "_process_audio_data", None) or getattr(
-                synth, "_process_audio_chunk", None
-            )
+            processor = getattr(synth, "_process_audio_data", None) or getattr(synth, "_process_audio_chunk", None)
             pcm = processor(raw) if callable(processor) else None
         except Exception as e:
             logger.error(f"Welcome TTS post-processing failed: {e}")
@@ -2557,9 +2553,7 @@ class TaskManager(BaseManager):
         else:
             # `raise "<str>"` raised TypeError("exceptions must derive from BaseException"),
             # so the real cause (an unknown agent_type) never reached the log or the caller.
-            raise ConfigurationError(
-                f"Unknown agent type '{agent_type}'", path="tools_config.llm_agent.agent_type"
-            )
+            raise ConfigurationError(f"Unknown agent type '{agent_type}'", path="tools_config.llm_agent.agent_type")
         return llm_agent
 
     def __setup_s2s(self):
@@ -3927,10 +3921,7 @@ class TaskManager(BaseManager):
 
                 # If the requested language is already active, skip handoff and switch entirely
                 if language_label == self.language:
-                    logger.info(
-                        f"switch_language: '{language_label}' is already active, "
-                        "skipping handoff and switch"
-                    )
+                    logger.info(f"switch_language: '{language_label}' is already active, skipping handoff and switch")
                     function_response = f"Already speaking in {language_label}, no switch needed"
 
                     self.conversation_history.attach_tool_calls_to_turn(turn_id, resp["model_response"])
@@ -7687,9 +7678,7 @@ class TaskManager(BaseManager):
             # await self.handle_cancellation("Synthesizer task was cancelled outside loop.")
         except Exception as e:
             model = self._component_model("synthesizer")
-            classified = classify_exception(
-                e, component="synthesizer", provider=self.synthesizer_provider, model=model
-            )
+            classified = classify_exception(e, component="synthesizer", provider=self.synthesizer_provider, model=model)
             logger.error(
                 f"__listen_synthesizer failed outside loop | error_id={classified.error_id} "
                 f"code={classified.code.value} provider={self.synthesizer_provider} model={model}: "
@@ -8466,9 +8455,16 @@ class TaskManager(BaseManager):
                     self.context_data = {}
                 if not isinstance(self.context_data.get("recipient_data"), dict):
                     self.context_data["recipient_data"] = {}
-                incoming = (init_meta_data or {}).get("context_data") if isinstance(init_meta_data, dict) else None
-                if isinstance(incoming, dict):
-                    self.context_data["recipient_data"].update(incoming)
+                meta = init_meta_data if isinstance(init_meta_data, dict) else {}
+                # Init shape tolerance: the documented envelope is `context_data`,
+                # but ad-hoc clients send flat `variables` or `recipient_data`.
+                # All three merge into recipient_data (later wins: per-call
+                # variables override the envelope), so {placeholders} render on
+                # every leg instead of only context_data-shaped inits.
+                for key in ("context_data", "recipient_data", "variables"):
+                    incoming = meta.get(key)
+                    if isinstance(incoming, dict):
+                        self.context_data["recipient_data"].update(incoming)
                 logger.info(f"Context data updated - {self.context_data}")
 
                 self.prompts["system_prompt"] = update_prompt_with_context(
@@ -8561,9 +8557,7 @@ class TaskManager(BaseManager):
         if self.s2s_provider_name == S2SProvider.GEMINI_LIVE.value:
             # GeminiTranscriber and most docs use GEMINI_API_KEY; GeminiLLM reads
             # GOOGLE_API_KEY. Accept either so a key set for one path works for S2S.
-            api_key = (
-                self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            )
+            api_key = self.kwargs.get("s2s_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
                 raise ConfigurationError(
                     "No Gemini API key: set GEMINI_API_KEY or GOOGLE_API_KEY, or pass s2s_key.",
@@ -9699,10 +9693,7 @@ class TaskManager(BaseManager):
             # this, run() yields None and the socket handler crashes on it.
             _has_asr_tts = "transcriber" in self.tools and "synthesizer" in self.tools
             _is_text_only = (
-                self._is_conversation_task()
-                and not _has_asr_tts
-                and "s2s" not in self.tools
-                and "output" in self.tools
+                self._is_conversation_task() and not _has_asr_tts and "s2s" not in self.tools and "output" in self.tools
             )
             if self._is_conversation_task() and (_has_asr_tts or "s2s" in self.tools or _is_text_only):
                 if _has_asr_tts:

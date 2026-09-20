@@ -52,3 +52,35 @@ async def test_init_with_context_data_merges_and_sends_welcome():
     assert tm.first_message_task is not None
     await asyncio.wait_for(tm.first_message_task, timeout=5)
     tm._TaskManager__first_message.assert_awaited_once()
+
+
+async def test_init_with_variables_shape_merges_and_renders():
+    """Ad-hoc clients send dynamic vars as top-level `variables`, not `context_data`.
+
+    Regression: the handler only read `context_data`, so {placeholders} rendered
+    empty on every such call and the agent spoke with no contact data.
+    """
+    tm = _tm(context_data=None)
+    tm.prompts = {"system_prompt": "Fees for {student_name}: {outstanding}"}
+    tm.system_prompt = {"content": "Fees for {student_name}: {outstanding}"}
+    tm.kwargs = {"agent_welcome_message": "Namaste {parent_name}"}
+    await tm.handle_init_event(
+        {
+            "agent_id": "a",
+            "variables": {"student_name": "Aarav", "outstanding": 28500, "parent_name": "Mr. Sharma"},
+        }
+    )
+
+    assert tm.context_data["recipient_data"]["student_name"] == "Aarav"
+    assert tm.prompts["system_prompt"] == "Fees for Aarav: 28500"
+    assert tm.system_prompt["content"] == "Fees for Aarav: 28500"
+    assert tm.kwargs["agent_welcome_message"] == "Namaste Mr. Sharma"
+    tm.tools["output"].send_init_acknowledgement.assert_awaited_once()
+
+
+async def test_init_with_recipient_data_shape_merges():
+    """`recipient_data` at init top level merges like `context_data` (explicit wins)."""
+    tm = _tm(context_data={"recipient_data": {"a": 1}})
+    await tm.handle_init_event({"recipient_data": {"b": 2}, "context_data": {"b": 3, "c": 4}})
+
+    assert tm.context_data["recipient_data"] == {"a": 1, "b": 2, "c": 4}

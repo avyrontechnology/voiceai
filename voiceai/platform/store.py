@@ -5,7 +5,7 @@ RedisStore uses the same Redis as agent CRUD with `platform:v1:` key
 prefixes plus secondary index sets. Both expose the identical async API.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
@@ -40,6 +40,27 @@ from voiceai.platform.models import (
 logger = configure_logger(__name__)
 
 _KEY_PREFIX = "platform:v1"
+
+#: SCAN COUNT hint for key listings. COUNT is a per-call guideline, not a
+#: limit: without it Redis returns ~10 keys per round-trip, so listing a few
+#: hundred keys over a high-latency link costs dozens of sequential RTTs.
+_SCAN_COUNT_HINT = 1000
+
+#: Keys per MGET round-trip: keeps bulk fetches in a few round-trips without
+#: building oversized single responses as the table grows.
+_MGET_CHUNK_SIZE = 500
+
+
+def _build_execution_page(
+    raws: List[Dict[str, Any]], limit: int, offset: int, include_transcript: bool
+) -> List[Execution]:
+    """Validate only the requested page slice (never the whole table)."""
+    items: List[Execution] = []
+    for raw in raws[offset : offset + limit]:
+        if not include_transcript and raw.get("transcript"):
+            raw = {**raw, "transcript": []}
+        items.append(Execution(**raw))
+    return items
 
 
 def normalize_phone_digits(raw: str) -> str:
@@ -169,7 +190,11 @@ class MemoryStore:
         direction: Optional[str] = None,
         since: Any = None,
     ) -> List[Dict[str, Any]]:
-        raws = [r for r in self._all("executions") if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)]
+        raws = [
+            r
+            for r in self._all("executions")
+            if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)
+        ]
         raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
         return raws
 
@@ -195,13 +220,22 @@ class MemoryStore:
         include_transcript: bool = True,
     ) -> List[Execution]:
         raws = self._filtered_execution_raws(agent_id, batch_id, status, direction, since)
-        page = raws[offset : offset + limit]
-        items: List[Execution] = []
-        for raw in page:
-            if not include_transcript and raw.get("transcript"):
-                raw = {**raw, "transcript": []}
-            items.append(Execution(**raw))
-        return items
+        return _build_execution_page(raws, limit, offset, include_transcript)
+
+    async def list_executions_page(
+        self,
+        agent_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        direction: Optional[str] = None,
+        since: Any = None,
+        include_transcript: bool = True,
+    ) -> Tuple[List[Execution], int]:
+        """One page plus the total from a single filtered pass (no double scan)."""
+        raws = self._filtered_execution_raws(agent_id, batch_id, status, direction, since)
+        return _build_execution_page(raws, limit, offset, include_transcript), len(raws)
 
     async def aggregate_execution_stats(
         self,
@@ -582,11 +616,7 @@ class MemoryStore:
         return self._delete("sessions", token_hash)
 
     async def delete_user_sessions(self, user_id: str) -> int:
-        doomed = [
-            token_hash
-            for token_hash, raw in self._data["sessions"].items()
-            if raw.get("user_id") == user_id
-        ]
+        doomed = [token_hash for token_hash, raw in self._data["sessions"].items() if raw.get("user_id") == user_id]
         for token_hash in doomed:
             self._delete("sessions", token_hash)
         return len(doomed)
@@ -697,7 +727,11 @@ class RedisStore(MemoryStore):
         try:
             scan_iter = getattr(self._redis, "scan_iter", None)
             if callable(scan_iter):
-                result = scan_iter(match=pattern)
+                try:
+                    # COUNT is a hint, not a limit: fewer server round-trips per pass.
+                    result = scan_iter(match=pattern, count=_SCAN_COUNT_HINT)
+                except TypeError:
+                    result = scan_iter(match=pattern)
                 if inspect.isawaitable(result):
                     result = await result
                 if hasattr(result, "__aiter__"):
@@ -717,7 +751,7 @@ class RedisStore(MemoryStore):
         return [k.decode() if isinstance(k, bytes) else str(k) for k in (keys or [])]
 
     async def _mget_dicts(self, keys: List[str]) -> List[Dict[str, Any]]:
-        """One round-trip bulk fetch (MGET preferred, sequential fallback)."""
+        """Chunked bulk fetch (MGET preferred, sequential fallback)."""
         import json
 
         if not keys:
@@ -725,19 +759,20 @@ class RedisStore(MemoryStore):
         try:
             mget = getattr(self._redis, "mget", None)
             if callable(mget):
-                vals = await mget(keys)
                 out: List[Dict[str, Any]] = []
-                for val in vals or []:
-                    if not val:
-                        continue
-                    if isinstance(val, bytes):
-                        val = val.decode()
-                    try:
-                        parsed = json.loads(val)
-                    except Exception:
-                        continue
-                    if isinstance(parsed, dict):
-                        out.append(parsed)
+                for start in range(0, len(keys), _MGET_CHUNK_SIZE):
+                    vals = await mget(keys[start : start + _MGET_CHUNK_SIZE])
+                    for val in vals or []:
+                        if not val:
+                            continue
+                        if isinstance(val, bytes):
+                            val = val.decode()
+                        try:
+                            parsed = json.loads(val)
+                        except Exception:
+                            continue
+                        if isinstance(parsed, dict):
+                            out.append(parsed)
                 return out
         except Exception:
             pass
@@ -890,6 +925,20 @@ class RedisStore(MemoryStore):
         keys = [self._key("executions", eid) for eid in ids]
         return await self._mget_dicts(keys)
 
+    async def _filtered_sorted_execution_raws(
+        self,
+        agent_id: Any = None,
+        batch_id: Any = None,
+        status: Any = None,
+        direction: Any = None,
+        since: Any = None,
+    ) -> List[Dict[str, Any]]:
+        """One fetch + filter + newest-first sort shared by list/count/page."""
+        raws = await self._fetch_execution_raws(agent_id, batch_id)
+        raws = [r for r in raws if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)]
+        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        return raws
+
     async def count_executions(
         self,
         agent_id: Any = None,
@@ -898,8 +947,7 @@ class RedisStore(MemoryStore):
         direction: Any = None,
         since: Any = None,
     ) -> int:
-        raws = await self._fetch_execution_raws(agent_id, batch_id)
-        return sum(1 for r in raws if self._match_execution_raw(r, agent_id, batch_id, status, direction, since))
+        return len(await self._filtered_sorted_execution_raws(agent_id, batch_id, status, direction, since))
 
     async def list_executions(
         self,
@@ -912,16 +960,23 @@ class RedisStore(MemoryStore):
         since: Any = None,
         include_transcript: bool = True,
     ) -> List[Execution]:
-        raws = await self._fetch_execution_raws(agent_id, batch_id)
-        raws = [r for r in raws if self._match_execution_raw(r, agent_id, batch_id, status, direction, since)]
-        raws.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
-        page = raws[offset : offset + limit]
-        items: List[Execution] = []
-        for raw in page:
-            if not include_transcript and raw.get("transcript"):
-                raw = {**raw, "transcript": []}
-            items.append(Execution(**raw))
-        return items
+        raws = await self._filtered_sorted_execution_raws(agent_id, batch_id, status, direction, since)
+        return _build_execution_page(raws, limit, offset, include_transcript)
+
+    async def list_executions_page(
+        self,
+        agent_id: Any = None,
+        batch_id: Any = None,
+        status: Any = None,
+        limit: int = 50,
+        offset: int = 0,
+        direction: Any = None,
+        since: Any = None,
+        include_transcript: bool = True,
+    ) -> Tuple[List[Execution], int]:
+        """One page plus the total from a single fetch (routes must use this)."""
+        raws = await self._filtered_sorted_execution_raws(agent_id, batch_id, status, direction, since)
+        return _build_execution_page(raws, limit, offset, include_transcript), len(raws)
 
     async def aggregate_execution_stats(
         self,
@@ -947,7 +1002,13 @@ class RedisStore(MemoryStore):
             dur = raw.get("duration_s") or 0
             if isinstance(dur, (int, float)):
                 total_duration += float(dur)
-        return {"total": total, "by_status": by_status, "latencies": latencies, "total_duration": total_duration, "scanned": min(total, max_scan)}
+        return {
+            "total": total,
+            "by_status": by_status,
+            "latencies": latencies,
+            "total_duration": total_duration,
+            "scanned": min(total, max_scan),
+        }
 
     async def aggregate_latency_stats(
         self,

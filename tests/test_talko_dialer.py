@@ -50,7 +50,10 @@ async def test_dial_posts_agent_and_number(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     execution = await dial_via_talko(
-        store, agent_id="agent_1", to_number="+919812345678", from_number="91804",
+        store,
+        agent_id="agent_1",
+        to_number="+919812345678",
+        from_number="91804",
         trunk_url="http://trunk:8004",
     )
     assert execution.status == ExecutionStatus.IN_PROGRESS
@@ -70,7 +73,10 @@ async def test_dial_forwards_per_request_api_key(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     await dial_via_talko(
-        store, agent_id="a", to_number="+919812345678", talko_api_key="tkp_live_ui",
+        store,
+        agent_id="a",
+        to_number="+919812345678",
+        talko_api_key="tkp_live_ui",
     )
     assert FakeAsyncClient.posted[0]["json"]["talko_api_key"] == "tkp_live_ui"
 
@@ -99,13 +105,37 @@ async def test_dial_unreachable_marks_failed(monkeypatch):
     assert execution.status == ExecutionStatus.FAILED
 
 
+async def test_dial_reads_trunk_url_at_call_time(monkeypatch):
+    """Late env (docker .env loaded after import) must win over import-time default."""
+    _patch(monkeypatch)
+    monkeypatch.setenv("TALKO_TRUNK_URL", "http://late-trunk:8004")
+    store = MemoryStore()
+    await dial_via_talko(store, agent_id="a", to_number="+919812345678")
+    assert FakeAsyncClient.posted[0]["url"] == "http://late-trunk:8004/talko/call"
+
+
+async def test_dial_failure_summary_names_attempted_trunk(monkeypatch):
+    """Unreachable-trunk summary must name the URL (else 'All connection attempts failed' is unactionable)."""
+    _patch(monkeypatch)
+    FakeAsyncClient.raise_on_post = httpx.ConnectError("All connection attempts failed")
+    store = MemoryStore()
+    execution = await dial_via_talko(store, agent_id="a", to_number="+919812345678", trunk_url="http://trunk:8004")
+    assert execution.status == ExecutionStatus.FAILED
+    assert "All connection attempts failed" in (execution.summary or "")
+    assert "http://trunk:8004" in (execution.summary or "")
+
+
 async def test_run_batch_talko_dials_entries(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     batch = Batch(
-        batch_id="b1", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
+        batch_id="b1",
+        agent_id="agent_1",
+        name="t",
+        status=BatchStatus.DRAFT,
         entries=[BatchEntry(to_number="+919812345671"), BatchEntry(to_number="+919812345672")],
-        provider="talko", from_number="91804",
+        provider="talko",
+        from_number="91804",
     )
     await store.save_batch(batch)
     out = await run_batch(store, "b1")
@@ -118,7 +148,10 @@ async def test_run_batch_simulated_unchanged(monkeypatch):
     _patch(monkeypatch)
     store = MemoryStore()
     batch = Batch(
-        batch_id="b2", agent_id="agent_1", name="t", status=BatchStatus.DRAFT,
+        batch_id="b2",
+        agent_id="agent_1",
+        name="t",
+        status=BatchStatus.DRAFT,
         entries=[BatchEntry(to_number="+919812345671")],
     )
     await store.save_batch(batch)
