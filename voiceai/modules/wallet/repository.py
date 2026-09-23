@@ -6,6 +6,7 @@ from typing import Protocol
 
 from voiceai.common.pagination import PaginationParams
 from voiceai.database.repository import BaseRepository
+from voiceai.modules.wallet.constants import SINGLETON_WALLET_ID
 from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
 
 
@@ -52,15 +53,15 @@ class MongoWalletRepository:
 
     async def get_wallet(self) -> Wallet:
         """Get the singleton wallet instance, creating it if necessary."""
-        wallet = await self._wallet.get("singleton")
+        wallet = await self._wallet.get(SINGLETON_WALLET_ID)
         if not wallet:
-            wallet = Wallet(id="singleton")
+            wallet = Wallet(id=SINGLETON_WALLET_ID)
             await self._wallet.insert(wallet)
         return wallet
 
     async def save_wallet(self, wallet: Wallet) -> None:
         """Save the singleton wallet instance."""
-        wallet.id = "singleton"
+        wallet.id = SINGLETON_WALLET_ID
         await self._wallet.insert(wallet)
 
     async def add_ledger_entry(self, entry: LedgerEntry) -> None:

@@ -2,6 +2,7 @@
 
 import os
 import unicodedata
+from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -112,7 +113,7 @@ class PollySynthesizer(BaseSynthesizer):
     # generate / push — use base _generate_http_loop
     # ------------------------------------------------------------------
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Yield synthesized audio for a turn."""
         async for packet in self._generate_http_loop():
             yield packet

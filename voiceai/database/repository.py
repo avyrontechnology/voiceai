@@ -366,7 +366,8 @@ class MotorRepository(Generic[TModel]):
         if user_id is not None:
             mutation["updated_by"] = user_id
         outcome = await self._collection.update_one({"_id": item_id, "is_active": True}, {"$set": mutation})
-        return outcome.matched_count == 1
+        matched: int = outcome.matched_count
+        return matched == 1
 
     async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
         """Return the active document where `field` equals `value`, or `None`."""

@@ -59,7 +59,13 @@ if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives a
 #: nothing observable while the flag is off (the A1 precedent).
 
 
-MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router)
+MODULE: ModuleDef = ModuleDef(
+    name=MODULE_NAME,
+    router=router,
+    owner_squad="squad-voice",
+    slack_channel="#squad-voice",
+    runbook_path="voiceai/modules/voice/RUNBOOK.md",
+)
 
 __all__ = [
     "MODULE",

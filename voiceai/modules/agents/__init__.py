@@ -16,9 +16,16 @@ from voiceai.modules.agents.errors import (
     PromptStoreError,
 )
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
+from voiceai.modules.agents.runtime import BrainFactory, BrainPort, CachedAgentReader, run_judgments
 from voiceai.modules.agents.service import AgentService
 
-MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router)
+MODULE: ModuleDef = ModuleDef(
+    name=MODULE_NAME,
+    router=router,
+    owner_squad="squad-agents",
+    slack_channel="#squad-agents",
+    runbook_path="voiceai/modules/agents/RUNBOOK.md",
+)
 
 __all__ = [
     "MODULE",
@@ -28,6 +35,10 @@ __all__ = [
     "AgentService",
     "AgentSessionStorePort",
     "AgentsError",
+    "BrainFactory",
+    "BrainPort",
+    "CachedAgentReader",
     "LlmPort",
     "PromptStoreError",
+    "run_judgments",
 ]

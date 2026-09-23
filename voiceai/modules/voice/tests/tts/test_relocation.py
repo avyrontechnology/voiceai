@@ -66,8 +66,10 @@ def test_kalpa_lookup_sites_are_split_by_reader():
     import aiohttp
     import websockets
 
-    assert new_kalpa_http.aiohttp is aiohttp
-    assert new_kalpa.websockets is websockets
+    # getattr (not attribute access): the parity pin is the runtime re-export, and
+    # no_implicit_reexport bans static access to merely-imported names.
+    assert getattr(new_kalpa_http, "aiohttp") is aiohttp
+    assert getattr(new_kalpa, "websockets") is websockets
     assert new_kalpa.RESPONSE_IDLE_TIMEOUT == 10.0
 
 

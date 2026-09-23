@@ -4,7 +4,7 @@ import asyncio
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech import AudioStreamWaveFormat
@@ -33,15 +33,15 @@ class AzureTranscriber(BaseTranscriber):
         **kwargs: Any,  # noqa: E501 — verbatim legacy line (R8)
     ) -> None:
         super().__init__(input_queue)
-        self.transcription_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
         self.subscription_key = os.getenv("AZURE_SPEECH_KEY")
         self.service_region = os.getenv("AZURE_SPEECH_REGION")
-        self.push_stream = None
-        self.recognizer = None
+        self.push_stream: Any = None  # why: azure SDK push stream crosses the seam untyped
+        self.recognizer: Any = None  # why: azure SDK recognizer crosses the seam untyped
         self.transcriber_output_queue = output_queue
         self.audio_submitted = False
-        self.audio_submission_time = None
-        self.send_audio_to_transcriber_task = None
+        self.audio_submission_time: float | None = None
+        self.send_audio_to_transcriber_task: asyncio.Task[None] | None = None
         self.recognition_language = language
         self.audio_provider = telephony_provider
         self.channels = 1
@@ -50,18 +50,18 @@ class AzureTranscriber(BaseTranscriber):
         self.bits_per_sample = 16
         self.run_id = kwargs.get("run_id", "")
         self.duration = 0
-        self.start_time = None
-        self.end_time = None
+        self.start_time: float | None = None
+        self.end_time: float | None = None
 
-        self.audio_frame_timestamps = []
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []
         self.num_frames = 0
         self.audio_frame_duration = 0.0
 
-        self.current_turn_interim_details = []
-        self.current_turn_start_time = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self.current_turn_start_time: float | None = None
         self.current_turn_id = None
-        self.speech_start_time = None
-        self._turn_start_epoch_ms = None
+        self.speech_start_time: float | None = None
+        self._turn_start_epoch_ms: float | None = None
         self.turn_counter = 0
 
         if self.audio_provider in TelephonyProvider.telephony_values():
@@ -159,7 +159,8 @@ class AzureTranscriber(BaseTranscriber):
                         push_stream.write(ws_data_packet.get("data"))
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
-            logger.error(f"Error occurred in send_audio_to_transcriber - {e} at {exc_tb.tb_lineno}")
+            tb_line = exc_tb.tb_lineno if exc_tb is not None else "?"
+            logger.error(f"Error occurred in send_audio_to_transcriber - {e} at {tb_line}")
 
     def _release_previous_connection(self) -> None:
         """Stop the superseded recognizer and drop it here, off the event loop."""
@@ -288,15 +289,16 @@ class AzureTranscriber(BaseTranscriber):
 
             data = {"type": "interim_transcript_received", "content": evt.result.text.strip()}
             try:
+                latency_meta = cast("dict[str, Any]", self.meta_info)
                 if (
-                    "transcriber_start_time" in self.meta_info
-                    and "transcriber_first_result_latency" not in self.meta_info
+                    "transcriber_start_time" in latency_meta
+                    and "transcriber_first_result_latency" not in latency_meta
                 ):
-                    self.meta_info["transcriber_first_result_latency"] = (
-                        time.perf_counter() - self.meta_info["transcriber_start_time"]
+                    latency_meta["transcriber_first_result_latency"] = (
+                        time.perf_counter() - latency_meta["transcriber_start_time"]
                     )
                     if latency_ms is not None:
-                        self.meta_info["transcriber_latency"] = latency_ms / 1000
+                        latency_meta["transcriber_latency"] = latency_ms / 1000
             except Exception:  # noqa: S110 — verbatim best-effort (R8)
                 pass
             await self.transcriber_output_queue.put(create_ws_data_packet(data, self.meta_info))
@@ -331,7 +333,8 @@ class AzureTranscriber(BaseTranscriber):
 
             try:
                 if not self.current_turn_id:
-                    self.current_turn_id = self.meta_info.get("turn_id") or self.meta_info.get("request_id")
+                    turn_meta = cast("dict[str, Any]", self.meta_info)
+                    self.current_turn_id = turn_meta.get("turn_id") or turn_meta.get("request_id")
 
                 first_interim_to_final_ms, last_interim_to_final_ms = self.calculate_interim_to_final_latencies(
                     self.current_turn_interim_details
@@ -359,12 +362,13 @@ class AzureTranscriber(BaseTranscriber):
 
             data = {"type": "transcript", "content": evt.result.text.strip()}
             try:
-                if "transcriber_start_time" in self.meta_info:
-                    self.meta_info["transcriber_total_stream_duration"] = (
-                        time.perf_counter() - self.meta_info["transcriber_start_time"]
+                transcript_meta = cast("dict[str, Any]", self.meta_info)
+                if "transcriber_start_time" in transcript_meta:
+                    transcript_meta["transcriber_total_stream_duration"] = (
+                        time.perf_counter() - transcript_meta["transcriber_start_time"]
                     )
                     if latency_ms is not None:
-                        self.meta_info["transcriber_latency"] = latency_ms / 1000
+                        transcript_meta["transcriber_latency"] = latency_ms / 1000
             except Exception:  # noqa: S110 — verbatim best-effort (R8)
                 pass
             await self.transcriber_output_queue.put(create_ws_data_packet(data, self.meta_info))
@@ -387,7 +391,7 @@ class AzureTranscriber(BaseTranscriber):
         self.end_time = time.time()
         if self.meta_info is not None and self.start_time is not None:
             self.meta_info["transcriber_duration"] = self.end_time - self.start_time
-        meta = dict(self.meta_info or {})
+        meta: dict[str, Any] = dict(self.meta_info or {})
         if self.connection_error:
             meta["connection_error"] = self.connection_error
         await self.transcriber_output_queue.put(create_ws_data_packet("transcriber_connection_closed", meta))
@@ -427,7 +431,7 @@ class AzureTranscriber(BaseTranscriber):
                 self.end_time = time.time()
             logger.info("Connections to azure have been successfully closed")
             logger.info(
-                f"Time duration as per azure - {self.duration} | Time duration as per self calculation - {self.end_time - self.start_time}"  # noqa: E501 — verbatim legacy line (R8)
+                f"Time duration as per azure - {self.duration} | Time duration as per self calculation - {self.end_time - cast('float', self.start_time)}"  # noqa: E501 — verbatim legacy line (R8)
             )
         except Exception as e:
             logger.error(f"Error occurred while cleaning up - {e}")

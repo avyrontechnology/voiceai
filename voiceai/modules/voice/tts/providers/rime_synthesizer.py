@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -59,7 +60,7 @@ class RimeSynthesizer(StreamSynthesizer):
         if self.model == "arcana":
             self.stream = False
 
-        self.context_id = None
+        self.context_id: str | None = None
         self.audio_data = b""
 
         if caching:
@@ -153,7 +154,7 @@ class RimeSynthesizer(StreamSynthesizer):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         not_connected_since = None
         while True:

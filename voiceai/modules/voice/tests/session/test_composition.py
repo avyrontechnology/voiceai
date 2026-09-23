@@ -10,6 +10,7 @@ InterruptionManager reconfigure, and a live ``from_components`` build.
 """
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 from voiceai.agent_manager.task_manager import TaskManager
@@ -65,7 +66,7 @@ def _args(**overrides):
         },
         "task_config": {},
     }
-    base = {
+    base: dict[str, Any] = {
         "assistant_name": "agent",
         "task_id": 0,
         "task": task,

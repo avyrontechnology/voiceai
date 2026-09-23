@@ -30,6 +30,7 @@ import json
 import os
 import time
 from collections import deque
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -72,7 +73,7 @@ AUDIO_QUALITIES = {"low", "medium", "high"}
 # on the connect path. The catalog is global (never key-scoped), so (host, name) is the
 # whole key; failures are never cached, so a typo keeps failing loudly and a voice added to
 # the catalog later is picked up without a restart.
-_VOICE_IDS = {}  # (host, lowercased display name) -> voice id
+_VOICE_IDS: dict[tuple[str, str], str] = {}  # (host, lowercased display name) -> voice id
 
 
 class KalpaSynthesizer(StreamSynthesizer):
@@ -149,7 +150,7 @@ class KalpaSynthesizer(StreamSynthesizer):
         # when an earlier sender suspends mid-await (slot wait, reconnect).
         self._send_lock = asyncio.Lock()
         self._turn_seq = None  # sequence that owns the open (un-flushed) utterance
-        self._turn_chunks = []  # wire fragments already sent for it (reconnect replay)
+        self._turn_chunks: list[str] = []  # wire fragments already sent for it (reconnect replay)
         self._turn_chars = 0
         self._turn_truncated = False
         self._turn_dead = False  # utterance abandoned mid-stream; drop its stragglers
@@ -169,7 +170,7 @@ class KalpaSynthesizer(StreamSynthesizer):
         # before the barge-in but first scheduled after it must still count as
         # pre-interruption work.
         self._interrupt_gen = 0
-        self._sender_epochs = deque()
+        self._sender_epochs: deque[int] = deque()
         # THE SLOT: one utterance occupies the connection from its first sendText until its
         # settle. _slot_seq names the owning sequence; _slot_abandoned marks a barge-in on
         # it (its completion then settles silently). Freed ONLY by _settle_slot() (and the
@@ -620,7 +621,7 @@ class KalpaSynthesizer(StreamSynthesizer):
         self._wire_serves_slot = False
         return lost
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         not_connected_since = None
         ws = None

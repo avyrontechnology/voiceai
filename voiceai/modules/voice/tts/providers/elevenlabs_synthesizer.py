@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -68,7 +69,9 @@ class ElevenlabsBase(StreamSynthesizer):
 
         self.elevenlabs_host = os.getenv("ELEVENLABS_API_HOST", "api.elevenlabs.io")
         # Set from the x-trace-id response header on connect; both sockets log against it.
-        self.ws_trace_id = None
+        self.ws_trace_id: str | None = None
+        # Provider endpoint root, assigned by the concrete synthesizer __init__s below.
+        self.api_url: str
         if self.use_mulaw:
             self.wire_format = "ulaw_8000"
             self.wire_pcm_rate = None
@@ -157,13 +160,13 @@ class ElevenlabsSynthesizer(ElevenlabsBase):
         # One context per turn: closed at end_of_llm_stream and on interruption, so each
         # turn gets a fresh context_id. Closing frees the slot, staying well under
         # ElevenLabs' 5-concurrent-context cap.
-        self.context_id = None
-        self.context_ids_to_ignore = set()
-        self._eos_context_id = None  # context the last end-of-stream was emitted for
-        self.current_turn_context_id = None  # survives close_context, unlike context_id
+        self.context_id: str | None = None
+        self.context_ids_to_ignore: set[str] = set()
+        self._eos_context_id: str | None = None  # context the last end-of-stream was emitted for
+        self.current_turn_context_id: str | None = None  # survives close_context, unlike context_id
         self.ws_send_time = None
         self.current_turn_ttfb = None
-        self.eos_accum_context_id = None  # context whose spoken chars are being accumulated
+        self.eos_accum_context_id: str | None = None  # context whose spoken chars are being accumulated
         self.eos_accum_text = ""  # spoken-so-far for that context (end-of-stream match)
 
     def _on_push(self, meta_info: Any, text: Any) -> None:
@@ -238,7 +241,7 @@ class ElevenlabsSynthesizer(ElevenlabsBase):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Yields (audio_chunk, text_spoken) tuples, or (b'\\x00', '') for end-of-stream."""
         audio_chunk_count = 0
         last_recv_time = None
@@ -377,8 +380,12 @@ class ElevenlabsSynthesizer(ElevenlabsBase):
             websocket = await asyncio.wait_for(
                 websockets.connect(self.ws_url, ssl=get_ssl_context(self.ws_url)), timeout=10.0
             )
-            if hasattr(websocket, "response") and hasattr(websocket.response, "headers"):
-                self.ws_trace_id = websocket.response.headers.get("x-trace-id")
+            # getattr (not hasattr): mypy cannot narrow the optional handshake
+            # response; a missing-headers response skips the trace log line.
+            v1_response = getattr(websocket, "response", None)
+            v1_headers = getattr(v1_response, "headers", None) if v1_response is not None else None
+            if v1_headers is not None:
+                self.ws_trace_id = v1_headers.get("x-trace-id")
                 logger.info(f"Elevenlabs WebSocket connected trace_id={self.ws_trace_id}")
             bos_message = {
                 "text": " ",
@@ -440,12 +447,12 @@ class ElevenlabsV3Synthesizer(ElevenlabsBase):
         self.temperature = min(STABILITY_PRESETS, key=lambda preset: abs(preset - stability))
         self._new_turn_pending = True
         self._interrupted = False
+        self._keep_alive_task: asyncio.Task[None] | None = None
+        self._reconnect_task: asyncio.Task[None] | None = None
         # last_text_sent stays true between turns, so it cannot say whether a turn is still
         # open. This does, and keeps a dropped socket from ending an already-ended turn twice.
         self._turn_eos_emitted = True
         self._connect_lock = asyncio.Lock()
-        self._keep_alive_task = None
-        self._reconnect_task = None
         self._last_send_time = time.perf_counter()
 
     def get_sleep_time(self) -> Any:
@@ -464,8 +471,10 @@ class ElevenlabsV3Synthesizer(ElevenlabsBase):
                 ),
                 timeout=10.0,
             )
-            if hasattr(websocket, "response") and hasattr(websocket.response, "headers"):
-                self.ws_trace_id = websocket.response.headers.get("x-trace-id")
+            v3_response = getattr(websocket, "response", None)
+            v3_headers = getattr(v3_response, "headers", None) if v3_response is not None else None
+            if v3_headers is not None:
+                self.ws_trace_id = v3_headers.get("x-trace-id")
                 logger.info(f"Elevenlabs v3 WebSocket connected trace_id={self.ws_trace_id}")
             # First message only. stability is the sole setting v3 honours.
             await websocket.send(
@@ -649,7 +658,7 @@ class ElevenlabsV3Synthesizer(ElevenlabsBase):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Yields (audio_chunk, text_spoken) tuples, or (b'\\x00', '') for end-of-stream."""
         audio_chunk_count = 0
         not_connected_since = None

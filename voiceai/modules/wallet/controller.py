@@ -12,6 +12,12 @@ from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.auth import AuthService, ensure_permitted
 from voiceai.modules.auth.constants import SESSION_COOKIE
 from voiceai.modules.auth.models.principal import Principal
+from voiceai.modules.wallet.constants import (
+    TEMPLATES_ROUTE_PREFIX,
+    TEMPLATES_TAG,
+    WALLET_ROUTE_PREFIX,
+    WALLET_TAG,
+)
 from voiceai.modules.wallet.models import Wallet
 from voiceai.modules.wallet.schemas import WalletContract
 from voiceai.modules.wallet.service import WalletService
@@ -25,8 +31,8 @@ Template = WalletContract.Template
 # `response_model` therefore documents (and freezes, via schema tests) the `data`
 # shape in OpenAPI rather than serialising at runtime (the T1 auth/health pattern).
 
-wallet_router = APIRouter(prefix="/wallet", tags=["Wallet"])
-templates_router = APIRouter(prefix="/templates", tags=["Templates"])
+wallet_router = APIRouter(prefix=WALLET_ROUTE_PREFIX, tags=[WALLET_TAG])
+templates_router = APIRouter(prefix=TEMPLATES_ROUTE_PREFIX, tags=[TEMPLATES_TAG])
 
 router = APIRouter()
 # NOTE: includes stay AFTER every handler below — `include_router` snapshots the

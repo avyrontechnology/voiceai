@@ -9,7 +9,8 @@ import os
 import time
 import traceback
 import wave
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import aiohttp
 import numpy as np
@@ -97,40 +98,40 @@ class SarvamTranscriber(BaseTranscriber):
         self.api_host = os.getenv("SARVAM_HOST", "api.sarvam.ai")
 
         self.transcriber_output_queue = output_queue
-        self.transcription_task = None
-        self.sender_task = None
-        self.heartbeat_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
 
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
-        self.connection_time = None
+        self.connection_start_time: float | None = None
+        self.connection_time: float | None = None
         self.audio_frame_duration = 0.0
         self.audio_cursor = 0.0
 
         self.final_transcript = ""
-        self.websocket_connection = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.meta_info = {}
-        self.connection_error = None
+        self.meta_info: dict[str, Any] = {}
+        self.connection_error: str | None = None
 
-        self.current_turn_start_time = None
-        self.current_turn_id = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: str | None = None
         self.turn_latencies = []
-        self._turn_start_epoch_ms = None
-        self.first_result_latency_ms = None
-        self.total_stream_duration_ms = None
-        self.last_vocal_frame_timestamp = None
+        self._turn_start_epoch_ms: float | None = None
+        self.first_result_latency_ms: float | None = None
+        self.total_stream_duration_ms: float | None = None
+        self.last_vocal_frame_timestamp: float | None = None
         self.turn_counter = 0
-        self.turn_first_result_latency = None
+        self.turn_first_result_latency: float | None = None
 
         self.curr_message = ""
         self.finalized_transcript = ""
         self.interruption_signalled = False
 
-        self.api_url = None
-        self.ws_url = None
+        self.api_url: str
+        self.ws_url: str
         self._set_endpoints()
 
         self._configure_audio_params()
@@ -286,7 +287,7 @@ class SarvamTranscriber(BaseTranscriber):
         # HTTP batching sender
         buffer_flush_interval_sec = 2.5
         last_flush_time = time.time()
-        audio_buffer = []
+        audio_buffer: list[bytes] = []
         consecutive_errors = 0
 
         try:
@@ -366,7 +367,7 @@ class SarvamTranscriber(BaseTranscriber):
         except asyncio.CancelledError:
             pass
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """Consume responses into transcript packets."""
         try:
             async for message in ws:
@@ -523,11 +524,12 @@ class SarvamTranscriber(BaseTranscriber):
 
     async def sarvam_connect(self, retries: int = 3, timeout: float = 10.0) -> ClientConnection:
         """Open the Sarvam websocket session."""
-        additional_headers = {
-            "api-subscription-key": self.api_key,
-        }
+        # cast: a missing key reaches connect as None and fails there, exactly as today.
+        additional_headers = cast(
+            "dict[str, str]", {"api-subscription-key": self.api_key}
+        )
         attempt = 0
-        last_err = None
+        last_err: Exception | None = None
         while attempt < retries:
             try:
                 logger.info(f"Attempting to connect to Sarvam websocket: {self.ws_url}")
@@ -654,7 +656,7 @@ class SarvamTranscriber(BaseTranscriber):
                 self.connection_error = str(e)
                 await self.toggle_connection()
                 try:
-                    meta = dict(self.meta_info or {})
+                    meta: dict[str, Any] = dict(self.meta_info or {})
                     meta["connection_error"] = self.connection_error
                     await self.push_to_transcriber_queue(create_ws_data_packet("transcriber_connection_closed", meta))
                 except Exception:

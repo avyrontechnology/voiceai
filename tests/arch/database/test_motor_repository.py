@@ -60,7 +60,7 @@ class _Collection:
 
     def __init__(self, documents: list[dict[str, Any]] | None = None) -> None:
         self._documents: dict[Any, dict[str, Any]] = {d["_id"]: d for d in (documents or [])}
-        self.calls: list[tuple[str, Any]] = []
+        self.calls: list[tuple[Any, ...]] = []  # why: recorded driver calls vary in arity (2-4 items)
 
     async def replace_one(self, selector: Any, document: Any, upsert: Any = False) -> Any:
         """Record a replace; mimic matched semantics (active filter counts)."""

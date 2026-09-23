@@ -268,3 +268,151 @@ def test_voice_imports_only_agents_public_surface() -> None:
                         if name == "agents"
                     )
     assert not violations, VIOLATION_SEPARATOR.join(violations)
+
+
+#: Spec 0010 debt allowlist: cross-module deep imports that predate the general
+#: surface check. Each entry is (relative file, target package, imported name).
+#: New code must use the target's ``__all__`` surface instead; entries are removed
+#: (not added to) as the owning spec fixes them.
+KNOWN_DEEP_IMPORT_DEBT: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("voiceai/modules/voice/controller.py", "voiceai.modules.auth.constants", "SESSION_COOKIE"),
+        ("voiceai/modules/voice/controller.py", "voiceai.modules.auth.models.principal", "Principal"),
+        ("voiceai/modules/wallet/controller.py", "voiceai.modules.auth.constants", "SESSION_COOKIE"),
+        ("voiceai/modules/wallet/controller.py", "voiceai.modules.auth.models.principal", "Principal"),
+    }
+)
+
+#: Web/driver packages a service file must never import (AGENTS.md §3).
+SERVICE_BANNED_PREFIXES: tuple[str, ...] = ("fastapi", "starlette")
+
+#: Project packages a ``common`` file must never import (AGENTS.md §3).
+COMMON_BANNED_PREFIXES: tuple[str, ...] = ("voiceai.core", "voiceai.database", "voiceai.modules")
+
+
+def _module_exported_names(package: str) -> frozenset[str]:
+    """Extract ``__all__`` literal names from a module package ``__init__`` AST.
+
+    Args:
+        package: Dotted package, e.g. ``voiceai.modules.auth``.
+
+    Returns:
+        Literal string entries of ``__all__``; empty when the init is missing.
+    """
+    init = REPO_ROOT / Path(*package.split(".")) / "__init__.py"
+    if not init.is_file():
+        return frozenset()
+    names: set[str] = set()
+    for node in _parse(init).body:
+        if not _is_dunder_all_stmt(node):
+            continue
+        value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) else None
+        if isinstance(value, (ast.List, ast.Tuple)):
+            names.update(
+                element.value
+                for element in value.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            )
+    return frozenset(names)
+
+
+def _own_module(path: Path) -> str:
+    """Return the feature-module name owning a file under ``voiceai/modules/``."""
+    return path.relative_to(MODULES_ROOT).parts[0]
+
+
+def _is_other_module_target(target: str, own: str) -> str | None:
+    """Return the other-module package when ``target`` dives into a sibling module."""
+    prefix = MODULES_PACKAGE + "."
+    if not target.startswith(prefix):
+        return None
+    rest = target[len(prefix):]
+    other = rest.split(".")[0]
+    if other == own or other == "tests":
+        return None
+    return MODULES_PACKAGE + "." + other
+
+
+def test_controllers_import_no_repository_or_sibling_internals() -> None:
+    """Controllers stay thin: no repositories/drivers, sibling use via ``__all__`` (spec 0010)."""
+    violations: list[str] = []
+    for path in _python_files(MODULES_ROOT):
+        if path.name != "controller.py" or "tests" in path.parts or _is_adapter_file(path):
+            continue
+        own = _own_module(path)
+        relative = path.relative_to(REPO_ROOT)
+        for node in ast.walk(_parse(path)):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if ".repository" in alias.name or ".adapters" in alias.name:
+                        violations.append(f"{relative}:{node.lineno} controller imports '{alias.name}'")
+                    other = _is_other_module_target(alias.name, own)
+                    if other is not None:
+                        violations.append(f"{relative}:{node.lineno} controller imports sibling '{alias.name}'")
+            elif isinstance(node, ast.ImportFrom):
+                base, names = _resolve_import_from(path, node)
+                if ".repository" in base or ".adapters" in base:
+                    violations.append(f"{relative}:{node.lineno} controller imports '{base}'")
+                    continue
+                other = _is_other_module_target(base, own)
+                if other is None:
+                    continue
+                exported = _module_exported_names(other)
+                for imported in names:
+                    if imported == STAR_IMPORT or imported not in exported:
+                        key = (str(relative), base, imported)
+                        if key not in KNOWN_DEEP_IMPORT_DEBT:
+                            violations.append(
+                                f"{relative}:{node.lineno} '{imported}' is not in {other}.__all__"
+                            )
+    assert not violations, VIOLATION_SEPARATOR.join(violations)
+
+
+def test_services_import_no_web_layer() -> None:
+    """Services hold business logic: no FastAPI/Starlette/controller imports (spec 0010)."""
+    violations: list[str] = []
+    for path in _python_files(MODULES_ROOT):
+        if path.name != "service.py" or "tests" in path.parts or _is_adapter_file(path):
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        for lineno, target in _import_targets(path, _parse(path)):
+            if any(target == banned or target.startswith(banned + ".") for banned in SERVICE_BANNED_PREFIXES):
+                violations.append(f"{relative}:{lineno} service imports web layer '{target}'")
+            if ".controller" in target:
+                violations.append(f"{relative}:{lineno} service imports controller '{target}'")
+    assert not violations, VIOLATION_SEPARATOR.join(violations)
+
+
+def test_repositories_import_no_service_or_sibling_modules() -> None:
+    """Repositories touch drivers: no services/controllers/sibling modules (spec 0010)."""
+    violations: list[str] = []
+    for path in _python_files(MODULES_ROOT):
+        if path.name != "repository.py" or "tests" in path.parts or _is_adapter_file(path):
+            continue
+        own = _own_module(path)
+        relative = path.relative_to(REPO_ROOT)
+        for lineno, target in _import_targets(path, _parse(path)):
+            if ".service" in target or ".controller" in target:
+                violations.append(f"{relative}:{lineno} repository imports '{target}'")
+                continue
+            other = _is_other_module_target(target, own)
+            if other is not None:
+                violations.append(f"{relative}:{lineno} repository imports sibling '{target}'")
+    assert not violations, VIOLATION_SEPARATOR.join(violations)
+
+
+def test_common_imports_no_project_packages() -> None:
+    """``common`` depends on stdlib + pydantic only (fastapi in responses.py — spec 0010)."""
+    violations: list[str] = []
+    for path in _python_files(VOICEAI_ROOT / "common"):
+        relative = path.relative_to(REPO_ROOT)
+        for lineno, target in _import_targets(path, _parse(path)):
+            if target in {"fastapi", "fastapi.encoders", "fastapi.exceptions", "fastapi.responses"} or target.startswith(
+                ("fastapi.",)
+            ):
+                if path.name != "responses.py":
+                    violations.append(f"{relative}:{lineno} only responses.py may import fastapi")
+                continue
+            if any(target == banned or target.startswith(banned + ".") for banned in COMMON_BANNED_PREFIXES):
+                violations.append(f"{relative}:{lineno} common imports project package '{target}'")
+    assert not violations, VIOLATION_SEPARATOR.join(violations)

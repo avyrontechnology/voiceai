@@ -61,8 +61,8 @@ class TranscriberPool:
         output_queue: Any,
         active_label: Any,
         multilingual_config: Any,
-        lid_provider: str = None,
-        lid_config: dict = None,
+        lid_provider: str | None = None,
+        lid_config: dict[str, Any] | None = None,
         on_lid_switch: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         """
@@ -91,8 +91,8 @@ class TranscriberPool:
         if active_label not in self.transcribers:
             raise ValueError(f"active_label '{active_label}' not in transcribers: {list(self.transcribers.keys())}")
         self.active_label = active_label
-        self._router_task = None
-        self._keepalive_task = None
+        self._router_task: asyncio.Task[None] | None = None
+        self._keepalive_task: asyncio.Task[None] | None = None
         self._multilingual_config = multilingual_config
         # Serializes switch() — it has an await (reconnecting a dropped standby)
         # between reading and writing active_label, so concurrent switches (e.g.
@@ -103,7 +103,7 @@ class TranscriberPool:
         # ── Unbiased detector (LID tap) state ──────────────────────────────
         self._lid_provider_name = lid_provider
         self._lid_config = lid_config or {}
-        self._lid: object | None = None  # LIDProvider instance
+        self._lid: Any = None  # why: untyped LID backend (factory returns SarvamLID/SonioxLID)
         self._lid_feed_error_logged = False
         self._detector_health_recorded = False
         self._lid_task: asyncio.Task | None = None

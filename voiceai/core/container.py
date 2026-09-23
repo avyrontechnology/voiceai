@@ -157,11 +157,15 @@ def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
         ensure_extraction_model_configured,
         generate_extraction_text,
     )
+    from voiceai.modules.agents.runtime.compiled import CachedAgentReader
     from voiceai.modules.agents.service import AgentService
 
+    # Spec 0012: call-setup reads (definition + prompts, per call) hit the
+    # read-through cache; writes invalidate. Unit tests bypass it with fakes.
+    cached = CachedAgentReader(definitions=definitions, prompt_store=prompt_store)
     return AgentService(
-        definitions=definitions,
-        prompt_store=prompt_store,
+        definitions=cached,
+        prompt_store=cached,
         extraction_llm=generate_extraction_text,
         require_extraction_model=ensure_extraction_model_configured,
         extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,

@@ -18,6 +18,7 @@ import copy
 import json
 import time
 from collections import deque
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import websockets
@@ -52,19 +53,20 @@ class StreamSynthesizer(BaseSynthesizer):
         self.provider_name = provider_name
 
         # WebSocket state
-        self.websocket = None
-        self.sender_task = None
+        self.websocket: Any = None  # why: provider WS objects vary (aiohttp/websockets natives)
+        self.sender_task: asyncio.Task[None] | None = None
         self.conversation_ended = False
-        self.connection_error = None
+        self.connection_error: str | None = None
 
         # Text / meta_info queue (sender pushes, generate pops)
-        self.text_queue = deque()
-        self.meta_info = None
+        self.text_queue: deque[dict[str, Any]] = deque()
+        self.meta_info: dict[str, Any] | None = None
         self.current_text = ""
         self.last_text_sent = False
 
         # Turn-level latency tracking
-        self.current_turn_start_time = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_ttfb: float | None = None
         self.current_turn_id = None
         self.current_sequence_id = None
         # Canned speech (handoff, goodbye, ...) has no turn_id; the category is the only
@@ -72,14 +74,14 @@ class StreamSynthesizer(BaseSynthesizer):
         self.current_message_category = None
         self.current_tts_start_ms = None
         self.current_turn_ttfb = None
-        self.ws_send_time = None
+        self.ws_send_time: float | None = None
         self.current_sequence_chars = 0
 
     # ------------------------------------------------------------------
     # Subclass hooks (override these)
     # ------------------------------------------------------------------
 
-    async def establish_connection(self) -> None:
+    async def establish_connection(self) -> Any:
         """Connect to the provider WebSocket. Return the websocket object or None."""
         raise NotImplementedError
 
@@ -87,7 +89,7 @@ class StreamSynthesizer(BaseSynthesizer):
         """Send *text* to the WebSocket. Called as an asyncio task."""
         raise NotImplementedError
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Async generator yielding raw audio bytes. Yield b'\\x00' for end-of-stream."""
         raise NotImplementedError
         yield  # pragma: no cover — make this a generator
@@ -226,7 +228,7 @@ class StreamSynthesizer(BaseSynthesizer):
     # generate()  — the main audio-producing async generator
     # ------------------------------------------------------------------
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Yield synthesized audio for a turn."""
         try:
             if self.stream:
@@ -239,7 +241,7 @@ class StreamSynthesizer(BaseSynthesizer):
             logger.error(f"Error in {self.provider_name} generate: {e}", exc_info=True)
             raise
 
-    async def _generate_ws_loop(self) -> None:
+    async def _generate_ws_loop(self) -> AsyncGenerator[Any, None]:
         """Core WebSocket streaming loop. Rarely needs overriding."""
         async for raw_item in self.receiver():
             if self.connection_error:
@@ -295,7 +297,9 @@ class StreamSynthesizer(BaseSynthesizer):
         try:
             if self.current_turn_ttfb is None and self.ws_send_time is not None:
                 self.current_turn_ttfb = time.perf_counter() - self.ws_send_time
-                self.meta_info["synthesizer_latency"] = self.current_turn_ttfb
+                meta_info = self.meta_info
+                if meta_info is not None:
+                    meta_info["synthesizer_latency"] = self.current_turn_ttfb
         except Exception:  # noqa: S110 — verbatim best-effort (R8)
             pass
 

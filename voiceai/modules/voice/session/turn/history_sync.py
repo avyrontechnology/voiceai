@@ -178,7 +178,10 @@ class HistorySession(Protocol):
     def _TaskManager__language_directive(self, label: str) -> str: ...  # noqa: D102
     def _TaskManager__process_output_loop(self) -> Any: ...  # noqa: D102
     def _drop_all_staged_assistant_history(self, reason: str, keep_sequence_ids: Any = ...) -> None: ...  # noqa: D102
-    def _stamp_llm_latency_dict(self, latency_dict: dict, meta_info: dict, *args: Any) -> None: ...  # noqa: D102
+    def _commit_staged_assistant_history(self, sequence_id: Any) -> Any: ...  # noqa: D102
+    def _stamp_llm_latency_dict(  # noqa: D102
+        self, latency_dict: dict, meta_info: dict, *args: Any, response_text: Any = ...
+    ) -> None: ...
     def regen_settle_armed(self) -> bool: ...  # noqa: D102
     def _turn_audio_flushed_set(self) -> None: ...  # noqa: D102
 
@@ -269,7 +272,7 @@ def normalized_transcript_text(text: Any) -> str:
 
 def prepare_precise_transcript_messages(messages: list) -> list:
     """Collapse overlapping cumulative user re-emissions for the precise transcript."""
-    cleaned = []
+    cleaned: list[Any] = []
     for message in copy.deepcopy(messages):
         role = message.get("role")
         content = message.get("content")

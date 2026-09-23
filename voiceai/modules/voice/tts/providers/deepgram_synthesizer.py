@@ -5,6 +5,7 @@ import json
 import os
 import time
 import traceback
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -146,7 +147,7 @@ class DeepgramSynthesizer(StreamSynthesizer):
         except Exception as e:
             logger.error(f"Unexpected error in Deepgram sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         audio_chunk_count = 0
         not_connected_since = None
@@ -228,7 +229,7 @@ class DeepgramSynthesizer(StreamSynthesizer):
         except asyncio.TimeoutError:
             logger.error("Timeout while connecting to Deepgram TTS WebSocket")
             return None
-        except websockets.exceptions.InvalidStatusCode as e:
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore[attr-defined]  # alias exists at runtime; websockets 15 stubs omit it (spec 0014)
             if e.status_code == 401:
                 logger.error("Deepgram authentication failed: Invalid API key")
             elif e.status_code == 403:

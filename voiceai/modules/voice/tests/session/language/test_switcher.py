@@ -136,7 +136,7 @@ def test_switch_audio_gap_config_beats_env_and_zero_is_honored(monkeypatch):
     zeroed = SimpleNamespace(task_config={"tools_config": {"language_switch_audio_gap_s": 0}})
     assert switcher.switch_audio_gap_s(zeroed) == 0  # 0 is a configured value, not "absent"
     tm = TaskManager.__new__(TaskManager)
-    tm.task_config = {"tools_config": {}}
+    tm.task_config = {"tools_config": {}}  # type: ignore[attr-defined]  # set by composition on the untyped runtime
     assert getattr(tm, "_TaskManager__switch_audio_gap_s")() == LANGUAGE_SWITCH_AUDIO_GAP_S  # noqa: B009
     monkeypatch.setenv("LANGUAGE_SWITCH_AUDIO_GAP_S", "0.4")
     assert getattr(tm, "_TaskManager__switch_audio_gap_s")() == 0.4  # noqa: B009
@@ -146,7 +146,7 @@ def test_record_lid_event_through_the_delegator_appends_the_stamped_record():
     pool = MagicMock(spec=TranscriberPool)
     pool.lid_detection_events = []
     tm = TaskManager.__new__(TaskManager)
-    tm.tools = {"transcriber": pool}
+    tm.tools = {"transcriber": pool}  # type: ignore[attr-defined]  # set by composition on the untyped runtime
     before = time.time()
     getattr(tm, "_TaskManager__record_lid_event")({"type": "playback_gate", "outcome": "decided"})  # noqa: B009
     assert len(pool.lid_detection_events) == 1

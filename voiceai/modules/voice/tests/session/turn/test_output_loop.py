@@ -147,7 +147,7 @@ async def test_process_output_loop_delegator_injects_the_session(monkeypatch):
     moved = AsyncMock(return_value=None)
     monkeypatch.setattr(output_loop, "process_output_loop", moved)
     tm = TaskManager.__new__(TaskManager)
-    await tm._TaskManager__process_output_loop()
+    await tm._TaskManager__process_output_loop()  # type: ignore[attr-defined]  # parity pin on the verbatim delegator
     moved.assert_awaited_once_with(tm)
 
 

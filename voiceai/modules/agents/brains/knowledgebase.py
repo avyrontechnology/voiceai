@@ -12,6 +12,7 @@ composition path until spec 0004 passes the URL explicitly.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import time
@@ -43,6 +44,8 @@ from voiceai.modules.agents.constants import (
     MESSAGE_ROLE_KEY,
     MODULE_NAME,
     NEGATIVE_ANSWER,
+    RAG_CACHE_MAX_ENTRIES,
+    RAG_CACHE_TTL_KEY,
     SYSTEM_ROLE,
     USER_ROLE,
     VOICEMAIL_USER_MESSAGE_TEMPLATE,
@@ -181,6 +184,11 @@ class KnowledgeBaseAgent(BaseAgent):
         # side-channel until composition passes the URL explicitly.
         env_rag_server_url: str = os.getenv(ENV_RAG_SERVER_URL, DEFAULT_RAG_SERVER_URL)
         self.rag_server_url: str = rag_server_url or env_rag_server_url
+        # Opt-in retrieval cache (spec 0012): per-instance, bounded, TTL. Empty until
+        # a successful retrieval stores; entries hold deep copies both ways.
+        self._retrieval_cache: dict[
+            tuple[str, int, tuple[str, ...]], tuple[float, list[dict[str, Any]], dict[str, Any]]
+        ] = {}
 
         logger.info(f"KnowledgeBaseAgent initialized with RAG collections: {self.rag_config.get(_COLLECTIONS_KEY, [])}")
 
@@ -251,6 +259,81 @@ class KnowledgeBaseAgent(BaseAgent):
             _SIMILARITY_TOP_K_KEY: rag_config.get(_SIMILARITY_TOP_K_KEY, _DEFAULT_SIMILARITY_TOP_K),
             _USED_SOURCES_KEY: used_sources,
         }
+
+    def _retrieval_cache_ttl(self) -> float:
+        """Return the configured retrieval-cache TTL, 0 when the cache is off.
+
+        Reads the RAW rag config (the initialized view keeps only collections,
+        top-k, and sources). Non-dict configs disable the cache — construction
+        already rejects those before this is ever consulted.
+
+        Returns:
+            Seconds an entry stays valid; ``0`` (absent/non-positive/unparseable)
+            disables the cache entirely — every existing test and prod flow.
+        """
+        raw = self.config.get(_RAG_CONFIG_KEY, {})
+        if not isinstance(raw, dict):
+            return 0.0
+        try:
+            return max(0.0, float(raw.get(RAG_CACHE_TTL_KEY, 0) or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _retrieval_cache_lookup(
+        self, query: str, top_k: int, collections: list[str]
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+        """Serve a fresh cached retrieval, or `None` on miss/expiry/disabled.
+
+        A hit replays the stored messages+metadata verbatim (shape-identical to a
+        miss; latency fields are replayed stale — the documented caching tradeoff).
+        Deep copies flow both ways so engine mutation can never corrupt an entry.
+
+        Args:
+            query: The latest user turn driving the retrieval.
+            top_k: The similarity cutoff in effect.
+            collections: The collections searched, in order.
+
+        Returns:
+            ``(messages, metadata)`` on a live hit, else ``None``.
+        """
+        if self._retrieval_cache_ttl() <= 0:
+            return None
+        cached = self._retrieval_cache.get((query, top_k, tuple(collections)))
+        if cached is None or cached[0] <= time.monotonic():
+            return None
+        _, messages, metadata = cached
+        return copy.deepcopy(messages), copy.deepcopy(metadata)
+
+    def _retrieval_cache_store(
+        self,
+        query: str,
+        top_k: int,
+        collections: list[str],
+        messages: list[dict[str, Any]],
+        metadata: dict[str, Any],
+    ) -> None:
+        """Store a successful retrieval, evicting oldest-first past the bound.
+
+        No-op when the cache is disabled. Only the success path stores — errors,
+        empty results, and the legacy `used_sources=None` quirk never populate.
+
+        Args:
+            query: The latest user turn driving the retrieval.
+            top_k: The similarity cutoff in effect.
+            collections: The collections searched, in order.
+            messages: Enhanced messages to replay on hits.
+            metadata: Retrieval metadata to replay on hits.
+        """
+        ttl = self._retrieval_cache_ttl()
+        if ttl <= 0:
+            return
+        if len(self._retrieval_cache) >= RAG_CACHE_MAX_ENTRIES:
+            self._retrieval_cache.pop(next(iter(self._retrieval_cache)))
+        self._retrieval_cache[(query, top_k, tuple(collections))] = (
+            time.monotonic() + ttl,
+            copy.deepcopy(messages),
+            copy.deepcopy(metadata),
+        )
 
     async def check_for_completion(
         self,
@@ -344,6 +427,11 @@ class KnowledgeBaseAgent(BaseAgent):
             client = await RAGServiceClientSingleton.get_client(self.rag_server_url)
 
             latest_message = messages[-1][MESSAGE_CONTENT_KEY] if messages else ""
+            top_k = self.rag_config.get(_SIMILARITY_TOP_K_KEY, _DEFAULT_SIMILARITY_TOP_K)
+            collections = self.rag_config[_COLLECTIONS_KEY]
+            cached = self._retrieval_cache_lookup(latest_message, top_k, collections)
+            if cached is not None:
+                return cached
 
             rag_response = await client.query_for_conversation(
                 query=latest_message,
@@ -439,12 +527,14 @@ Use this information naturally when it helps answer the user's questions. Don't 
             if len(final_messages) > max_messages:
                 final_messages = [final_messages[0]] + final_messages[-(max_messages - 1) :]
 
-            return final_messages, {
+            result_metadata: dict[str, Any] = {
                 _STATUS_KEY: _STATUS_SUCCESS,
                 _RETRIEVED_SOURCES_KEY: retrieved_sources,
                 _CONTEXTS_KEY: retrieved_contexts,
                 _LATENCY_KEY: rag_latency_data,
             }
+            self._retrieval_cache_store(latest_message, top_k, collections, final_messages, result_metadata)
+            return final_messages, result_metadata
 
         except asyncio.TimeoutError:
             logger.error("RAG service timeout")

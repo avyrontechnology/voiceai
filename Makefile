@@ -61,5 +61,5 @@ cov:
 fmt:
 	$(RUFF) format $(ARCH_DIRS) $(ARCH_TESTS)
 
-check: lint lint-arch type test
+check: lint lint-arch type test sec
 	@echo "check: all gates green"

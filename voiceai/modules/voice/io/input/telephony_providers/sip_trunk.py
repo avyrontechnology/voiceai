@@ -119,7 +119,7 @@ class SipTrunkInputHandler(TelephonyInputHandler):
         self.connection_id = None
         self.ptime = 20
         self._pending_stream_sid = None  # promoted to stream_sid on first audio frame
-        self._dtmf_timer_task = None  # inter-digit timeout for DTMF accumulation
+        self._dtmf_timer_task: asyncio.Task[None] | None = None  # inter-digit timeout for DTMF accumulation
         self._queue_drained = asyncio.Event()  # set by Asterisk's QUEUE_DRAINED event
 
         input_config = self._get_input_config()

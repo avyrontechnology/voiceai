@@ -1,6 +1,7 @@
 """Synthesizer pool: multi-voice fan-out with active-label routing (spec 0004, B12b)."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from voiceai.common.logger import get_logger
@@ -41,9 +42,9 @@ class SynthesizerPool:
         if active_label not in self.synthesizers:
             raise ValueError(f"active_label '{active_label}' not in synthesizers: {list(self.synthesizers.keys())}")
         self.active_label = active_label
-        self._output_queue = asyncio.Queue()
-        self._gen_task = None  # current _run_generate task
-        self._monitor_tasks = {}  # label -> monitor task
+        self._output_queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._gen_task: asyncio.Task[None] | None = None  # current _run_generate task
+        self._monitor_tasks: dict[Any, asyncio.Task[None]] = {}  # label -> monitor task
         self._multilingual_config = multilingual_config
         self._switch_lock = asyncio.Lock()
 
@@ -132,7 +133,7 @@ class SynthesizerPool:
         except Exception as e:
             logger.error(f"SynthesizerPool: error in _run_generate for '{label}': {e}", exc_info=True)
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Async generator that yields audio packets from the active synthesizer.
 
         Returns (stops iteration) when a _SWITCH_SENTINEL is encountered,

@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -103,7 +104,7 @@ class SmallestSynthesizer(StreamSynthesizer):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         not_connected_since = None
         while True:

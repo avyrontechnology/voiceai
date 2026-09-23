@@ -131,10 +131,13 @@ def process_http_audio(self: KalpaHttpSession, audio: Any) -> bytes:
         # handler's b64encode and mutes the session. b"\x00" just ends the turn.
         return b"\x00"
     if self.use_mulaw:
-        return audio_to_mulaw8k(audio, rate_hint=self.native_sample_rate, format_hint="wav")
+        mulaw: bytes = audio_to_mulaw8k(audio, rate_hint=self.native_sample_rate, format_hint="wav")
+        return mulaw
     if self.target_sample_rate != self.native_sample_rate:
-        return resample(audio, self.target_sample_rate, format="wav")
-    return audio
+        resampled: bytes = resample(audio, self.target_sample_rate, format="wav")
+        return resampled
+    final: bytes = audio
+    return final
 
 
 def get_http_audio_format(self: KalpaHttpSession) -> str:

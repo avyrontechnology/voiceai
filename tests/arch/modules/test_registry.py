@@ -21,3 +21,11 @@ def test_module_def_is_frozen() -> None:
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         module.name = "renamed"  # type: ignore[misc]  # the point: assignment must raise
+
+
+def test_registry_entries_carry_ownership() -> None:
+    """Every entry names its squad and runbook (spec 0010, docs/OWNERSHIP.md mirrors this)."""
+    for module in ALL_MODULES:
+        assert module.owner_squad, f"{module.name}: owner_squad is empty"
+        assert module.runbook_path, f"{module.name}: runbook_path is empty"
+        assert module.runbook_path.startswith("voiceai/modules/"), module.runbook_path

@@ -53,7 +53,7 @@ import asyncio
 import random
 import time
 import uuid
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from voiceai.common.logger import get_logger
 from voiceai.enums import HangupReason, TelephonyProvider
@@ -429,7 +429,7 @@ def enter_hangup_state(self: LifecycleSession) -> None:
     self.interruption_manager.on_user_speech_ended(update_utterance_time=False)
 
 
-def should_ignore_transcriber_input(self: LifecycleSession) -> bool:
+def should_ignore_transcriber_input(self: Any) -> bool:  # why: both session facades share one live session
     """True while a hangup, end_call actuation or transfer is underway.
 
     Verbatim ``TaskManager._should_ignore_transcriber_input`` (original tm 4356-4357).
@@ -440,7 +440,8 @@ def should_ignore_transcriber_input(self: LifecycleSession) -> bool:
     Returns:
         Whether ``_listen_transcriber`` must drop user speech right now.
     """
-    return self.hangup_triggered or self._end_call_in_progress or self.has_transfer
+    # cast (not bool()): the or-chain value flows back verbatim, as legacy did.
+    return cast("bool", self.hangup_triggered or self._end_call_in_progress or self.has_transfer)
 
 
 async def process_call_hangup(self: LifecycleSession) -> None:

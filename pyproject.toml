@@ -96,6 +96,20 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_untyped_decorators = false
 
+# Spec 0011 gate scoping: these four trees are verbatim strangler moves of untyped
+# legacy engine code (not greenfield). Annotating the God-object facades is a
+# dedicated engine spec (AGENTS.md §8) — until then the type gate ignores them so
+# `make check` stays green and all NEW code stays strict. Precedent:
+# [tool.coverage.run] omit scopes the same class of code for the same reason.
+# Burn-down: remove one entry per tree as its files get annotated (spec 0011;
+# voice.io.* paid down in spec 0013, voice.tts.* in spec 0014,
+# voice.session.* in spec 0016).
+[[tool.mypy.overrides]]
+module = [
+    "voiceai.modules.voice.asr.*",
+]
+ignore_errors = true
+
 [tool.commitizen]
 name = "cz_conventional_commits"
 version_provider = "pep621"

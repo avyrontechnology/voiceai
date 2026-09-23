@@ -35,16 +35,17 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
         self.input_handler = input_handler
         self.bytes_per_second = self.sampling_rate * 2  # mono L16
         self._response_bytes = 0
-        self._response_first_send = None
-        self._pending_marks = []
-        self._finish_task = None
-        self._finish_marks = []
+        self._response_first_send: float | None = None
+        self._pending_marks: list[Any] = []  # why: carrier mark ids, opaque strings in practice
+        self._finish_task: asyncio.Task[None] | None = None
+        self._finish_marks: list[Any] = []  # why: carrier mark ids, opaque strings in practice
+        self.stream_sid = None
         self.stream_sid = None
         # in-band marks (Twilio semantics): final mark's echo ends the turn (+settle); estimator stays as fallback
         self.playback_settle_s = float(os.getenv("WEBCALL_PLAYBACK_SETTLE_S", "0.15"))
         # once echoes are confirmed, the estimator gets this grace so the real echo wins the race
         self.estimator_grace_s = float(os.getenv("WEBCALL_ESTIMATOR_GRACE_S", "1.5"))
-        self._final_mark_id = None
+        self._final_mark_id: Any = None  # why: carrier mark ids, opaque strings in practice
         self.marks_echoed = False  # first echo = module supports marks (observability)
         if input_handler is not None:
             input_handler.on_mark_played = self.on_mark_played
@@ -169,6 +170,8 @@ class FreeSwitchOutputHandler(DefaultOutputHandler):
         try:
             meta_info = packet.get("meta_info") or {}
             audio = packet.get("data") if meta_info.get("type") == "audio" else None
+            if audio is None:
+                audio = b""  # no-audio finals still flow below; falsy audio takes the same path
             # finality can also arrive on a no-audio packet — don't drop it (mirrors sip_trunk)
             is_final = bool(
                 (meta_info.get("end_of_llm_stream") and meta_info.get("end_of_synthesizer_stream"))

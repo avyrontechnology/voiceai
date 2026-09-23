@@ -35,7 +35,7 @@ class DefaultInputHandler:
         self.queues = queues
         self.websocket = websocket
         self.input_types = input_types
-        self.websocket_listen_task = None
+        self.websocket_listen_task: asyncio.Task[None] | None = None
         self.running = True
         # set here because these handlers mint a stream id on demand; telephony clears it
         self.stream_sid_ready = asyncio.Event()
@@ -44,22 +44,22 @@ class DefaultInputHandler:
         self.queue = queue
         self.conversation_recording = conversation_recording
         self.is_welcome_message_played = is_welcome_message_played
-        self.welcome_message_played_ts = None
+        self.welcome_message_played_ts: float | None = None
         # This variable stores the response which has been heard by the user
         self.response_heard_by_user = ""
-        self.response_heard_by_turn = {}
+        self.response_heard_by_turn: dict[Any, str] = {}
         self.last_heard_turn_id = None
-        self.response_heard_by_response = {}
+        self.response_heard_by_response: dict[Any, str] = {}
         self.last_heard_response_uid = None
         self._is_audio_being_played_to_user = False
         self.observable_variables = observable_variables
         self.mark_event_meta_data = mark_event_meta_data
         self.audio_chunks_received = 0
         self.update_start_ts = time.time()
-        self.io_provider = "default"
+        self.io_provider: str | None = "default"
         self.is_dtmf_active = False
         self.dtmf_digits = ""
-        self.plivo_latency_samples = []
+        self.plivo_latency_samples: list[float] = []
         self.calculated_plivo_latency = 0.25
         self.max_latency_samples = 10
         # Tracks the sequence_id and wall-clock time of the most recently fully-played

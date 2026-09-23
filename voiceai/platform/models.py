@@ -585,6 +585,10 @@ class VectorStoreConfig(BaseModel):
     reranker_model_type: str = "minilm-l6-v2"
     candidate_count: int = 20
     final_count: int = 5
+    #: Retrieval-cache TTL (seconds) for the knowledge brain (spec 0012): 0 keeps
+    #: retrieval uncached (legacy behavior). Round-trips the vector-config PUT so
+    #: UI saves never silently drop it.
+    cache_ttl_s: float = 0.0
     updated_at: datetime = Field(default_factory=utcnow)
 
 

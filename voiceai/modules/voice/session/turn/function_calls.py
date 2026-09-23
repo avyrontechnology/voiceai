@@ -135,6 +135,12 @@ class FunctionCallsSession(Protocol):
     # --- legacy session methods the bodies call back into ---
     def _enter_hangup_state(self) -> None: ...  # noqa: D102
     async def wait_for_current_message(self) -> Any: ...  # noqa: D102
+    # --- turn/tool-call state the bodies read/write (legacy session surface) ---
+    hangup_detail: Any  # why: hangup record crosses the seam
+    call_hangup_message_config: Any  # why: hangup message config crosses the seam
+    _end_call_in_progress: Any  # why: flag crosses the seam untyped
+    _turn_audio_flushed: Any  # why: legacy threading event crosses the seam
+    _turn_msg_map: Any  # why: turn message map is an open structure
     async def process_call_hangup(self) -> Any: ...  # noqa: D102
     def _spawn_followup_meta_info(self, meta_info: Any) -> Any: ...  # noqa: D102
     def fire_pre_call_webhook(self, *args: Any, **kwargs: Any) -> Any: ...  # noqa: D102
@@ -488,7 +494,7 @@ async def execute_function_call(
     if called_fun.startswith("check_availability_of_slots") and (
         not get_res_values or (len(get_res_values) == 1 and len(get_res_values[0]) == 0)
     ):
-        set_response_prompt = []
+        set_response_prompt: Any = []
     elif called_fun.startswith("book_appointment") and "id" not in get_res_keys:
         if get_res_values and get_res_values[0] == "no_available_users_found_error":
             function_response = "Sorry, the host isn't available at this time. Are you available at any other time?"

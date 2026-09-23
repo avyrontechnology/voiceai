@@ -4,6 +4,7 @@ import asyncio
 import io
 import re
 import uuid
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 from pydub import AudioSegment
@@ -35,11 +36,12 @@ class BaseSynthesizer:
         """
         self.stream = stream
         self.buffer_size = buffer_size
-        self.internal_queue = asyncio.Queue()
+        self.internal_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.task_manager_instance = task_manager_instance
         self.sequence_gate = sequence_gate
-        self.connection_time = None
-        self.turn_latencies = []
+        # Provider telemetry clocks vary (int ms vs float seconds) — the union is the truth.
+        self.connection_time: int | float | None = None
+        self.turn_latencies: list[dict[str, Any]] = []
         self.first_chunk_generated = False
         self.synthesized_characters = 0
         self.model = "default"
@@ -118,9 +120,10 @@ class BaseSynthesizer:
         """Flush the synthesizer stream."""
         pass
 
-    async def generate(self) -> None:
-        """Yield synthesized audio for a turn."""
-        pass
+    async def generate(self) -> AsyncGenerator[Any, None]:
+        """Yield synthesized audio for a turn (base no-op; providers override)."""
+        return
+        yield  # pragma: no cover - makes this an async generator like every override
 
     async def synthesize(self, text: Any) -> None:
         """Render text to audio bytes (one-shot)."""
@@ -163,7 +166,7 @@ class BaseSynthesizer:
     # HTTP generate loop (used by HTTP-only synths and dual-mode synths)
     # ------------------------------------------------------------------
 
-    async def _generate_http(self, text: Any) -> None:
+    async def _generate_http(self, text: Any) -> Any:
         """Provider-specific HTTP TTS call. Return raw audio bytes."""
         raise NotImplementedError
 
@@ -175,7 +178,7 @@ class BaseSynthesizer:
         """Output format string for HTTP mode (e.g. 'wav', 'mulaw')."""
         return "wav"
 
-    async def _generate_http_loop(self) -> None:
+    async def _generate_http_loop(self) -> AsyncGenerator[Any, None]:
         """Standard HTTP (non-streaming) generate loop with caching support."""
         while True:
             message = await self.internal_queue.get()
@@ -224,7 +227,7 @@ class BaseSynthesizer:
     # Text utilities
     # ------------------------------------------------------------------
 
-    def text_chunker(self, text: Any) -> None:
+    def text_chunker(self, text: Any) -> Iterator[str]:
         """Split text into chunks, ensuring to not break sentences."""
         splitters = (".", ",", "?", "!", ";", ":", "—", "-", "(", ")", "[", "]", "}", " ")
 

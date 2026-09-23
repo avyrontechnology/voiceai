@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from voiceai.common.ids import new_id
 from voiceai.common.logger import get_logger
-from voiceai.modules.wallet.errors import TemplateNotFoundError
-from voiceai.modules.wallet.models import (
-    LedgerEntry,
-    StoredTemplate,
-    Wallet,
-)
+from voiceai.modules.wallet.constants import IMPORT_LOG, TOPUP_LOG
+from voiceai.modules.wallet.exceptions import ensure_template_found
+from voiceai.modules.wallet.helpers import import_payload
+from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
 from voiceai.modules.wallet.repository import WalletRepository
 from voiceai.modules.wallet.schemas import WalletContract
+from voiceai.modules.wallet.static_methods import render_template, summarize_template
+from voiceai.modules.wallet.utils import new_ledger_entry
 
 TopUpRequest = WalletContract.TopUpRequest
 Template = WalletContract.Template
@@ -39,11 +38,9 @@ class WalletService:
         wallet.touch()
         await self._repository.save_wallet(wallet)
 
-        entry = LedgerEntry(
-            id=new_id("led"), type="topup", amount_credits=payload.amount_credits, reason=payload.reason
-        )
+        entry = new_ledger_entry("topup", payload.amount_credits, payload.reason)
         await self._repository.add_ledger_entry(entry)
-        logger.info("Topped up wallet by %s credits (entry %s)", payload.amount_credits, entry.id)
+        logger.info(TOPUP_LOG, payload.amount_credits, entry.id)
         return wallet
 
     async def list_ledger(self, limit: int = 50, entry_type: str | None = None) -> list[LedgerEntry]:
@@ -52,35 +49,20 @@ class WalletService:
 
     @staticmethod
     def _summarize(stored: StoredTemplate) -> TemplateSummary:
-        """Project a stored row into the list-safe summary shape."""
-        return TemplateSummary(
-            template_id=stored.template_id,
-            name=stored.name,
-            industry=stored.industry,
-            description=stored.description,
-            languages=list(stored.languages),
-        )
+        """Project a stored row into the list-safe summary shape (delegates to static_methods)."""
+        return summarize_template(stored)
 
     async def list_templates(self) -> list[TemplateSummary]:
         """List summary of all stored seed templates."""
-        return [self._summarize(stored) for stored in await self._repository.list_templates()]
+        return [summarize_template(stored) for stored in await self._repository.list_templates()]
 
     async def get_template(self, template_id: str) -> Template:
         """Get full template by ID."""
-        stored = await self._repository.get_template(template_id)
-        if stored is None:
-            raise TemplateNotFoundError(template_id)
-        return Template(
-            template_id=stored.template_id,
-            name=stored.name,
-            industry=stored.industry,
-            description=stored.description,
-            languages=list(stored.languages),
-            agent_payload=dict(stored.agent_payload),
-        )
+        stored = ensure_template_found(await self._repository.get_template(template_id), template_id)
+        return render_template(stored)
 
     async def import_template(self, template_id: str) -> dict[str, Any]:  # why: agent payloads are free-form JSON
         """Import a template (returns agent payload)."""
         template = await self.get_template(template_id)
-        logger.info("Template %s imported", template_id)
-        return {"agent_payload": template.agent_payload}
+        logger.info(IMPORT_LOG, template_id)
+        return import_payload(template.agent_payload)

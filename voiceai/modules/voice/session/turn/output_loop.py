@@ -144,6 +144,7 @@ class OutputSession(Protocol):
     synthesizer_model: Any  # why: model is str or None by provider
     synthesizer_characters: int
     yield_chunks: bool
+    turn_based_conversation: bool
     assistant_name: str
     assistant_id: Any  # why: assistant id is str or None
     is_local: bool

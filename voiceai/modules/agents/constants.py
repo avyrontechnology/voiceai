@@ -108,6 +108,14 @@ AGENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 # `AgentModel.agent_type` defaults to "other" — a top-level label, not a dispatch key.
 DEFAULT_AGENT_TYPE: Final[str] = "other"
+#: Engine-dispatch kinds the conversation-brain factory builds (spec 0015): the
+#: task-level `llm_agent.agent_type` values `__get_agent_object` switches on.
+#: `multiagent`/`llm_agent_graph` flow through separate builders, never the factory.
+ENGINE_KINDS: Final[tuple[str, ...]] = (
+    AGENT_TYPE_SIMPLE_LLM,
+    AGENT_TYPE_GRAPH,
+    AGENT_TYPE_KNOWLEDGEBASE,
+)
 
 # --- Error messages (client-visible; the 404 text matches the legacy detail) ------------
 AGENT_NOT_FOUND_MESSAGE: Final[str] = "Agent not found"
@@ -284,3 +292,15 @@ MODEL_REASONING_EFFORT_MAP: Final[dict[str, list[ReasoningEffort]]] = {
         ReasoningEffort.XHIGH,
     ],
 }
+
+# --- Runtime performance (spec 0012: enterprise hot-path budgets) -------------------------
+#: Read-through TTL for CachedAgentReader (call-setup definition+prompt reads).
+RUNTIME_CACHE_TTL_S: Final[float] = 60.0
+#: Max concurrent extraction-LLM generations during agent seeding (service fan-out).
+MAX_EXTRACTION_CONCURRENCY: Final[int] = 4
+#: Per-judgment timeout for the concurrent judgment runner (turn liveness).
+JUDGMENT_TIMEOUT_S: Final[float] = 8.0
+#: Max entries of the opt-in per-agent RAG retrieval cache (KB brain).
+RAG_CACHE_MAX_ENTRIES: Final[int] = 32
+#: Rag-config key enabling the retrieval cache; 0/absent keeps it off (default).
+RAG_CACHE_TTL_KEY: Final[str] = "cache_ttl_s"

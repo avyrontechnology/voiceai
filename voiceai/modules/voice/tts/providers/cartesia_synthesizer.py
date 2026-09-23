@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -58,11 +59,11 @@ class CartesiaSynthesizer(StreamSynthesizer):
         self.api_url = f"https://{self.cartesia_host}/tts/bytes"
 
         # Context tracking for interruption
-        self.context_id = None
+        self.context_id: str | None = None
         self.turn_id = 0
         self.sequence_id = 0
-        self.context_ids_to_ignore = set()
-        self.ws_request_id = None
+        self.context_ids_to_ignore: set[str] = set()
+        self.ws_request_id: str | None = None
         # end_of_llm_stream sent on the current context → the next push must open a fresh one.
         self.context_finalized = False
 
@@ -190,7 +191,7 @@ class CartesiaSynthesizer(StreamSynthesizer):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         not_connected_since = None
         while True:
@@ -249,8 +250,13 @@ class CartesiaSynthesizer(StreamSynthesizer):
             )
             if not self.connection_time:
                 self.connection_time = round((time.perf_counter() - start_time) * 1000)
-            if hasattr(websocket, "response") and hasattr(websocket.response, "headers"):
-                self.ws_request_id = websocket.response.headers.get("x-request-id")
+            # getattr (not hasattr): mypy cannot narrow the optional handshake
+            # response, and a missing-headers response must log the fallback line,
+            # not crash on attribute access.
+            response = getattr(websocket, "response", None)
+            headers = getattr(response, "headers", None) if response is not None else None
+            if headers is not None:
+                self.ws_request_id = headers.get("x-request-id")
                 logger.info(
                     f"Cartesia WebSocket connected request_id={self.ws_request_id} connection_time={self.connection_time}ms"  # noqa: E501 — verbatim legacy line (R8)
                 )

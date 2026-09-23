@@ -78,6 +78,7 @@ ENVIRON_FLAGGED_FILES = frozenset(
         "voiceai/modules/agents/brains/graph/routing.py",
         "voiceai/modules/agents/brains/knowledgebase.py",
         "voiceai/modules/agents/brains/simple.py",
+        "voiceai/modules/agents/runtime/factory.py",
         "voiceai/modules/voice/asr/pool.py",
         "voiceai/modules/voice/asr/providers/assemblyai_transcriber.py",
         "voiceai/modules/voice/asr/providers/azure_transcriber.py",

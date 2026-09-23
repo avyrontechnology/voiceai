@@ -5,6 +5,21 @@ repos:
       - id: requirements-txt-fixer
         files: ^requirements\.txt$
 
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      # Mirrors `make lint lint-arch`: repo-minimal select everywhere, strict
+      # ARCH_SELECT on the new-architecture sources (spec 0000, CI == local).
+      - id: ruff
+        args: ["check", "."]
+      - id: ruff
+        name: ruff-arch
+        args: ["check", "--select", "E,W,F,I,B,UP,S,ANN,D1", "--ignore", "ANN401,D107",
+               "voiceai/common", "voiceai/core", "voiceai/database", "voiceai/modules"]
+      - id: ruff-format
+        args: ["format", "--diff", "voiceai/common", "voiceai/core", "voiceai/database", "voiceai/modules",
+               "tests/arch"]
+
   - repo: https://github.com/PyCQA/bandit
     rev: 1.9.4
     hooks:

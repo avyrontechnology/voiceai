@@ -2,6 +2,7 @@
 
 import io
 import os
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from dotenv import load_dotenv
@@ -70,7 +71,7 @@ class OPENAISynthesizer(BaseSynthesizer):
     # generate / push — use base _generate_http_loop
     # ------------------------------------------------------------------
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Yield synthesized audio for a turn."""
         async for packet in self._generate_http_loop():
             yield packet

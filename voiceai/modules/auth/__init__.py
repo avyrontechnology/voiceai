@@ -28,7 +28,13 @@ from voiceai.modules.auth.exceptions import (
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
 
-MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router)
+MODULE: ModuleDef = ModuleDef(
+    name=MODULE_NAME,
+    router=router,
+    owner_squad="squad-identity",
+    slack_channel="#squad-identity",
+    runbook_path="voiceai/modules/auth/RUNBOOK.md",
+)
 
 __all__ = [
     "MODULE",

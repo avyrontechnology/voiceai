@@ -3,7 +3,11 @@
 from voiceai.common.errors import NotFoundError
 
 
-class TemplateNotFoundError(NotFoundError):
+class WalletError(NotFoundError):
+    """Base error for the wallet module (404 family; raised across layer boundaries)."""
+
+
+class TemplateNotFoundError(WalletError):
     """Raised when a requested template is not found."""
 
     def __init__(self, template_id: str) -> None:

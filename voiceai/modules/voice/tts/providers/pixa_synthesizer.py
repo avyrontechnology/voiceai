@@ -9,6 +9,7 @@ import time
 import traceback
 import uuid
 from collections import deque
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiohttp
@@ -59,16 +60,16 @@ class PixaSynthesizer(BaseSynthesizer):
         self.use_mulaw = True  # For telephony compatibility
         self.first_chunk_generated = False
         self.last_text_sent = False
-        self.text_queue = deque()
-        self.meta_info = None
+        self.text_queue: deque[dict[str, Any]] = deque()
+        self.meta_info: dict[str, Any] | None = None
         self.caching = False
         self.synthesized_characters = 0
-        self.context_id = None
-        self.sender_task = None
-        self.context_ids_to_ignore = set()
+        self.context_id: str | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.context_ids_to_ignore: set[str] = set()
         self.conversation_ended = False
-        self.connection_error = None
-        self.current_turn_start_time = None
+        self.connection_error: str | None = None
+        self.current_turn_start_time: float | None = None
         self.current_turn_id = None
         self.current_sequence_id = None
         self.current_tts_start_ms = None
@@ -179,7 +180,7 @@ class PixaSynthesizer(BaseSynthesizer):
         except Exception as e:
             logger.error(f"Unexpected error in sender: {e}")
 
-    async def receiver(self) -> None:
+    async def receiver(self) -> AsyncGenerator[Any, None]:
         """Consume provider audio frames into the playout queue."""
         not_connected_since = None
         while True:
@@ -277,7 +278,7 @@ class PixaSynthesizer(BaseSynthesizer):
         """Return the synthesized character count."""
         return self.synthesized_characters
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Yield synthesized audio for a turn."""
         try:
             async for message in self.receiver():

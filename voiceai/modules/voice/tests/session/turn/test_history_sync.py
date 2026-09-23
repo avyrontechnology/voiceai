@@ -115,7 +115,7 @@ async def test_cleanup_downstream_delegator_injects_the_session(monkeypatch):
     moved = AsyncMock(return_value=None)
     monkeypatch.setattr(history_sync, "cleanup_downstream_tasks", moved)
     tm = TaskManager.__new__(TaskManager)
-    await tm._TaskManager__cleanup_downstream_tasks()
+    await tm._TaskManager__cleanup_downstream_tasks()  # type: ignore[attr-defined]  # parity pin on the verbatim delegator
     moved.assert_awaited_once_with(tm)
 
 

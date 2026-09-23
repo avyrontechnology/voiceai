@@ -22,14 +22,14 @@ class BaseTranscriber:
         self.connection_on = True
         self.callee_speaking = False
         self.caller_speaking = False
-        self.meta_info = None
+        self.meta_info: dict[str, Any] | None = None
         self.transcription_start_time = 0
         self.last_vocal_frame_time = None
-        self.previous_request_id = None
-        self.current_request_id = None
-        self.connection_time = None
-        self.turn_latencies = []
-        self.connection_error = None
+        self.previous_request_id: str | None = None
+        self.current_request_id: str | None = None
+        self.connection_time: float | None = None
+        self.turn_latencies: list[dict[str, Any]] = []
+        self.connection_error: str | None = None
         self.is_transcript_sent_for_processing = False
 
     def _upsert_turn_latency(self, entry: dict) -> None:

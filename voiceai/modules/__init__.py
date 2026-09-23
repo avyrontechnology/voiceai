@@ -14,13 +14,23 @@ class ModuleDef:
     Keeping this a frozen record (no behaviour) is what lets ``core`` depend on the module
     registry without depending on any module's internals (AGENTS.md §3).
 
+    Ownership is registry data (spec 0000, team decision: no CODEOWNERS files):
+    every entry names its squad, contact channel, and runbook so 100 engineers
+    can find the owner without tribal knowledge.
+
     Attributes:
         name: Stable identifier used in logs and registry lookups.
         router: Router the app factory mounts under the API prefix.
+        owner_squad: Owning squad, e.g. ``squad-voice``.
+        slack_channel: Contact channel, e.g. ``#squad-voice``.
+        runbook_path: Repo-relative path to the module runbook.
     """
 
     name: str
     router: APIRouter
+    owner_squad: str = ""
+    slack_channel: str = ""
+    runbook_path: str = ""
 
 
 # Imported below the definition on purpose: each module builds its ``MODULE`` from ``ModuleDef``,

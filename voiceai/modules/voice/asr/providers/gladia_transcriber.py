@@ -6,7 +6,8 @@ import json
 import os
 import time
 import traceback
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import aiohttp
 import websockets
@@ -49,8 +50,8 @@ class GladiaTranscriber(BaseTranscriber):
         maximum_duration_without_endpointing: int = 5,
         speech_threshold: float = 0.6,
         code_switching: bool = False,
-        keywords: str = None,  # Custom vocabulary keywords (comma-separated)
-        model: str = None,  # Optional model for future Gladia models
+        keywords: str | None = None,  # Custom vocabulary keywords (comma-separated)
+        model: str | None = None,  # Optional model for future Gladia models
         **kwargs: Any,
     ) -> None:
         super().__init__(input_queue)
@@ -94,17 +95,17 @@ class GladiaTranscriber(BaseTranscriber):
         self.gladia_ws_url: str | None = None
 
         # Tasks
-        self.transcription_task = None
-        self.sender_task = None
-        self.heartbeat_task = None
-        self.utterance_timeout_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
         # Audio tracking
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
-        self.audio_frame_timestamps = []  # List of (frame_start, frame_end, send_timestamp)
+        self.connection_start_time: float | None = None
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []
         self.audio_cursor = 0.0
 
         # Transcript state management
@@ -114,19 +115,19 @@ class GladiaTranscriber(BaseTranscriber):
 
         # Turn tracking
         self.turn_counter = 0
-        self.current_turn_start_time = None
-        self.current_turn_id = None
-        self.current_turn_interim_details = []
-        self.speech_start_time = None
-        self.speech_end_time = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: int | None = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self.speech_start_time: float | None = None
+        self.speech_end_time: float | None = None
 
         # Latency tracking
-        self.first_result_latency_ms = None
-        self.total_stream_duration_ms = None
+        self.first_result_latency_ms: float | None = None
+        self.total_stream_duration_ms: float | None = None
         self.last_vocal_frame_timestamp = None
 
         # Timeout monitoring (like Deepgram)
-        self.last_interim_time = None
+        self.last_interim_time: float | None = None
         self.interim_timeout = kwargs.get("interim_timeout", 5.0)
 
         # Dashboard connection flag
@@ -184,7 +185,7 @@ class GladiaTranscriber(BaseTranscriber):
         else:
             languages_list = [self.language] if self.language else []
 
-        payload = {
+        payload: dict[str, Any] = {
             "encoding": self.encoding,
             "sample_rate": self.sample_rate,
             "bit_depth": self.bit_depth,
@@ -249,7 +250,7 @@ class GladiaTranscriber(BaseTranscriber):
         Two-step process: create session, then connect to WebSocket.
         """
         attempt = 0
-        last_err = None
+        last_err: Exception | None = None
 
         while attempt < retries:
             try:
@@ -497,15 +498,16 @@ class GladiaTranscriber(BaseTranscriber):
 
                 # Initialize on first audio packet
                 if not self.audio_submitted:
-                    self.meta_info = ws_data_packet.get("meta_info", {}) or {}
+                    self.meta_info = cast("dict[str, Any]", ws_data_packet.get("meta_info", {}) or {})
                     self.audio_submitted = True
                     self.audio_submission_time = time.time()
                     self.current_request_id = self.generate_request_id()
-                    self.meta_info["request_id"] = self.current_request_id
+                    cast("dict[str, Any]", self.meta_info)["request_id"] = self.current_request_id
                     try:
                         if not self.current_turn_start_time:
                             self.current_turn_start_time = timestamp_ms()
-                            self.current_turn_id = self.meta_info.get("turn_id") or self.meta_info.get("request_id")
+                            turn_meta = cast("dict[str, Any]", self.meta_info)
+                            self.current_turn_id = turn_meta.get("turn_id") or turn_meta.get("request_id")
                     except Exception:  # noqa: S110 — verbatim best-effort (R8)
                         pass
 
@@ -550,11 +552,14 @@ class GladiaTranscriber(BaseTranscriber):
             logger.error(f"Error in sender_stream: {e}")
             raise
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """Receive and process messages from Gladia WebSocket."""
         async for msg in ws:
             try:
                 data = json.loads(msg) if isinstance(msg, str) else msg
+                if not isinstance(data, dict):
+                    logger.debug("Gladia receiver: skipping non-dict frame")
+                    continue
 
                 if self.connection_start_time is None:
                     self.connection_start_time = time.time() - (self.num_frames * self.audio_frame_duration)
@@ -584,9 +589,10 @@ class GladiaTranscriber(BaseTranscriber):
                         if self.first_result_latency_ms is None and self.audio_submission_time:
                             first_latency_seconds = now_timestamp - self.audio_submission_time
                             self.first_result_latency_ms = round(first_latency_seconds * 1000)
-                            self.meta_info["transcriber_first_result_latency"] = first_latency_seconds
-                            self.meta_info["transcriber_latency"] = first_latency_seconds
-                            self.meta_info["first_result_latency_ms"] = self.first_result_latency_ms
+                            latency_meta = cast("dict[str, Any]", self.meta_info)
+                            latency_meta["transcriber_first_result_latency"] = first_latency_seconds
+                            latency_meta["transcriber_latency"] = first_latency_seconds
+                            latency_meta["first_result_latency_ms"] = self.first_result_latency_ms
 
                         # Track interim details
                         interim_detail = {
@@ -607,8 +613,9 @@ class GladiaTranscriber(BaseTranscriber):
                             # Calculate total duration
                             if self.current_turn_start_time:
                                 total_stream_duration = time.time() - (self.current_turn_start_time / 1000)
-                                self.meta_info["transcriber_total_stream_duration"] = total_stream_duration
-                                self.meta_info["transcriber_latency"] = total_stream_duration
+                                duration_meta = cast("dict[str, Any]", self.meta_info)
+                                duration_meta["transcriber_total_stream_duration"] = total_stream_duration
+                                duration_meta["transcriber_latency"] = total_stream_duration
 
                             # Build turn latencies
                             try:
@@ -675,7 +682,7 @@ class GladiaTranscriber(BaseTranscriber):
                     # Session complete
                     logger.info("Gladia session completed")
                     duration = data.get("data", {}).get("duration", 0)
-                    self.meta_info["transcriber_duration"] = duration
+                    cast("dict[str, Any]", self.meta_info)["transcriber_duration"] = duration
                     yield create_ws_data_packet("transcriber_connection_closed", self.meta_info)
                     return
 

@@ -1203,6 +1203,14 @@ class TaskManager(BaseManager):
 
     def __get_agent_object(self, llm, agent_type, assistant_config=None):
         self.agent_type = agent_type
+        # Spec 0015: an injected BrainFactory (prod, via the `brain_factory` task
+        # kwarg from adapters/manager) builds through the shared assembly; receiving
+        # an injected object is not an import (AGENTS.md §3.1 bridge 3), so this
+        # legacy file gains no imports. Sessions without the kwarg (tests, harnesses)
+        # run the verbatim branches below — see test_brain_factory_equivalence.
+        factory = self.kwargs.get("brain_factory")
+        if factory is not None:
+            return factory.build(agent_type, llm, self)
         if agent_type == "simple_llm_agent":
             llm_agent = StreamingContextualAgent(llm)
         elif agent_type == "graph_agent":

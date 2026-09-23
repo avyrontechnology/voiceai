@@ -167,11 +167,11 @@ def seed_call_state(self: Any, args: CallArgs) -> None:  # why: the live session
     self.routing_latencies = {"turn_latencies": []}
     self.stream_sid_ts = None
     self.welcome_message_duration_ms = None
-    self.transcriber_error_events: list[dict] = []
-    self.blocked_audio_events: list[dict] = []
-    self._blocked_sequences: set = set()  # dedup: only record first block per sequence
-    self._sent_audio_sequences: set = set()
-    self._committed_assistant_sequences: set = set()
+    self.transcriber_error_events = []
+    self.blocked_audio_events = []
+    self._blocked_sequences = set()  # dedup: only record first block per sequence
+    self._sent_audio_sequences = set()
+    self._committed_assistant_sequences = set()
 
     self.task_config = args.task
 
@@ -249,9 +249,9 @@ def adopt_call_config(self: Any, args: CallArgs) -> CallConfig:  # why: the live
     self.hangup_triggered_at = None
     self.hangup_decision_at = None
     self._hangup_processing = False
-    self.dtmf_events: list[dict] = []
-    self.non_fatal_llm_error_events: list[dict] = []
-    self._agent_end_timestamps: dict = {}
+    self.dtmf_events = []
+    self.non_fatal_llm_error_events = []
+    self._agent_end_timestamps = {}
     self.hangup_message_queued = False
     self._end_of_conversation_in_progress = False
     self._end_call_in_progress = False
@@ -373,11 +373,11 @@ def wire_tasks_and_history(self: Any, args: CallArgs) -> None:  # why: the live 
     # turn (browser legs only) — voice-only calls never visit the typed-chat
     # llm queue, so draining only there stranded them until the next typed
     # message flushed the whole backlog at once.
-    self._pending_chat_forward: list = []
+    self._pending_chat_forward = []
     # Recently forwarded transcript lines (bounded): eager speculative turns and
     # the confirming real turn stage identical text — without this the panel
     # would show every reply twice.
-    self._forwarded_chat_texts: list = []
+    self._forwarded_chat_texts = []
 
 
 def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> None:
@@ -437,7 +437,7 @@ def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> No
     self.function_tool_api_call_details = []
     # Records every language switch — manual tool call (legacy) or LLM-driven
     # (triggered_by="lid_llm") — used post-call for precision / latency analysis.
-    self.language_switch_events: list[dict] = []
+    self.language_switch_events = []
     # Debounce for overlapped finals: one regen per merged utterance, not per fragment.
     self.regen_settle_task = None
     self.regen_settle_payload = None
@@ -463,7 +463,7 @@ def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> No
     # In-flight speculative follow-up generation;
     # single slot is safe because decisions are serialized by language_switch_lock.
     self._spec_followup_task = None
-    self.transfer_call_events: list[dict] = []
+    self.transfer_call_events = []
     self.hangup_task = None
 
     self.conversation_config = None

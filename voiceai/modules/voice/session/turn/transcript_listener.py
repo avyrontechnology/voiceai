@@ -68,7 +68,7 @@ import asyncio
 import json
 import time
 import traceback
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import websockets
 
@@ -212,10 +212,59 @@ class ListenerSession(Protocol):
     async def _TaskManager__process_output_loop(self) -> Any: ...  # noqa: D102
     async def _TaskManager__process_end_of_conversation(self, web_call_timeout: bool = ...) -> Any: ...  # noqa: D102
 
+    # --- history / queues / pipeline state the listener reads ---
+    history: Any  # why: legacy history object crosses the seam
+    queues: Any  # why: legacy queue topology crosses the seam
+    pipelines: Any  # why: sequence-to-pipeline map is an open structure
+    call_sid: Any  # why: telephony ids are str or None
+    stream_sid: Any  # why: telephony ids are str or None
+    input_parameters: Any  # why: followup input parameters are caller-shaped
+    webhook_response: Any  # why: webhook payload is free-form JSON
+    summarized_data: Any  # why: summarization output is an open structure
+    extracted_data: Any  # why: extraction output is an open structure
+    llm_config: Any  # why: composed llm config crosses the seam untyped
+    llm_latencies: Any  # why: latency ledger crosses the seam
+    transcriber_error_events: Any  # why: error ledger crosses the seam
+    transcriber_duration: Any  # why: timing accumulator crosses the seam
+    time_since_last_spoken_human_word: Any  # why: timing value crosses the seam
+    incremental_delay: Any  # why: tuning value crosses the seam
+    number_of_words_for_interruption: Any  # why: tuning value crosses the seam
+    discard_pre_welcome_utterance: Any  # why: flag crosses the seam untyped
+    conversation_start_init_ts: Any  # why: timing value crosses the seam
+    hangup_detail: Any  # why: hangup record crosses the seam
+    output_task: Any  # why: asyncio tasks are untyped on the legacy session
+    synthesizer_tasks: Any  # why: asyncio task set crosses the seam untyped
+    _pending_assistant_history: Any  # why: staged history crosses the seam
+    _synthesis_awaiting_first_audio: Any  # why: flag crosses the seam untyped
+    _end_of_conversation_in_progress: Any  # why: flag crosses the seam untyped
+    _error_logged: Any  # why: flag crosses the seam untyped
+    _component_error: Any  # why: error record crosses the seam
+    _component_model: Any  # why: component record crosses the seam
+
+    # --- legacy session callables reached as attributes (Any is callable) ---
+    _set_call_details: Any  # why: legacy callable reached through the facade
+    _extract_sequence_and_meta: Any  # why: legacy callable reached through the facade
+    _is_extraction_task: Any  # why: legacy callable reached through the facade
+    _is_summarization_task: Any  # why: legacy callable reached through the facade
+    _is_conversation_task: Any  # why: legacy callable reached through the facade
+    _get_next_step: Any  # why: legacy callable reached through the facade
+    _is_browser_leg: Any  # why: legacy callable reached through the facade
+    _drain_pending_chat_forward: Any  # why: legacy callable reached through the facade
+    _forward_browser_text: Any  # why: legacy callable reached through the facade
+    _maybe_update_tts_language: Any  # why: legacy callable reached through the facade
+    _spawn_language_switch_decision: Any  # why: legacy callable reached through the facade
+    _should_ignore_transcriber_input: Any  # why: legacy callable reached through the facade
+    _log_transcriber_connection_error: Any  # why: legacy callable reached through the facade
+    _report_provider_health: Any  # why: legacy callable reached through the facade
+    _report_component_health: Any  # why: legacy callable reached through the facade
+    _end_call_on_component_error: Any  # why: legacy callable reached through the facade
+    _drop_staged_assistant_history: Any  # why: legacy callable reached through the facade
+    process_transcriber_request: Any  # why: legacy callable reached through the facade
+
 
 def extract_sequence_and_meta(
     self: ListenerSession, message: dict
-) -> tuple[Any, dict]:  # why: sequence id is int or None  # noqa: E501 — verbatim legacy line (R8)
+) -> tuple[Any, Any | None]:  # why: meta_info is absent without a packet  # noqa: E501 — verbatim legacy line (R8)
     """Split a queue packet into its response sequence and meta_info."""
     sequence, meta_info = None, None
     if isinstance(message, dict) and "meta_info" in message:
@@ -227,20 +276,22 @@ def extract_sequence_and_meta(
 
 def is_extraction_task(self: ListenerSession) -> bool:
     """True when this task extracts structured data (followup flow)."""
-    return self.task_config["task_type"] == "extraction"
+    # cast (not bool()): the comparison value flows back verbatim, as legacy did.
+    return cast("bool", self.task_config["task_type"] == "extraction")
 
 
 def is_summarization_task(self: ListenerSession) -> bool:
     """True when this task summarizes (followup flow)."""
-    return self.task_config["task_type"] == "summarization"
+    return cast("bool", self.task_config["task_type"] == "summarization")
 
 
 def is_conversation_task(self: ListenerSession) -> bool:
     """True for the normal conversation task type."""
-    return self.task_config["task_type"] == "conversation"
+    return cast("bool", self.task_config["task_type"] == "conversation")
 
 
-def get_next_step(self: ListenerSession, sequence: Any, origin: str) -> str:  # why: sequence id is int or None
+# why: errors answer None (legacy fallthrough).
+def get_next_step(self: ListenerSession, sequence: Any, origin: str) -> str | None:
     """Resolve the next pipeline step for a sequence."""
     try:
         return next(
@@ -253,6 +304,7 @@ def get_next_step(self: ListenerSession, sequence: Any, origin: str) -> str:  # 
         )
     except Exception as e:
         logger.error(f"Error getting next step: {e}")
+        return None
 
 
 def set_call_details(self: ListenerSession, message: dict) -> None:
@@ -491,11 +543,11 @@ def regen_settle_armed(self: ListenerSession) -> bool:
 
 def regen_settle_can_fire(self: ListenerSession) -> bool:
     """False for excluded transcribers: no final can land inside the window, so waiting only costs."""
-    transcriber = self.tools.get("transcriber")
+    transcriber: Any = self.tools.get("transcriber")
     # B2: the pool answers the capability itself (ActiveTranscriberProbePort);
     # bare single transcribers keep the historical name-prefix check below.
     if hasattr(transcriber, "supports_regen_settle"):
-        return transcriber.supports_regen_settle()
+        return cast("bool", transcriber.supports_regen_settle())
     active = (
         transcriber.transcribers.get(transcriber.active_label, transcriber)
         if hasattr(transcriber, "transcribers")
@@ -899,7 +951,7 @@ async def listen_transcriber(self: ListenerSession) -> None:
                     logger.info(f"EagerEndOfTurn received (confidence={eot_confidence}): {eager_transcript}")
 
                     # B2: the pool answers eager_eot_threshold itself (ActiveTranscriberProbePort).
-                    transcriber = self.tools.get("transcriber")
+                    transcriber: Any = self.tools.get("transcriber")
                     eager_eot_threshold = getattr(transcriber, "eager_eot_threshold", None)
 
                     if not eager_eot_threshold:
@@ -1183,7 +1235,7 @@ async def process_http_transcription(self: ListenerSession, message: dict) -> No
 #################################################################
 def is_sequence_id_in_current_ids(self: ListenerSession, sequence_id: Any) -> bool:  # why: sequence id is int or None
     """Check if sequence_id is valid. Delegates to InterruptionManager."""
-    return self.interruption_manager.is_valid_sequence(sequence_id)
+    return cast("bool", self.interruption_manager.is_valid_sequence(sequence_id))
 
 
 async def send_first_message(self: ListenerSession, message: str) -> None:

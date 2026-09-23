@@ -14,7 +14,7 @@ client (defense in depth — production always wires the Mongo store since T3).
 
 from __future__ import annotations
 
-from asyncio import gather
+from asyncio import Semaphore, gather
 from collections.abc import Callable
 from logging import Logger
 from typing import Any, Final
@@ -31,6 +31,7 @@ from voiceai.modules.agents.constants import (
     ASSISTANT_STATUS_KEY,
     ASSISTANT_STATUS_SEEDING,
     ASSISTANT_STATUS_UPDATED,
+    MAX_EXTRACTION_CONCURRENCY,
     STATE_KEY,
     TASK_TYPE_EXTRACTION,
     TASKS_KEY,
@@ -134,6 +135,33 @@ class AgentService:
         ]
         return await self._extraction_llm(messages)
 
+    async def _generate_extraction_batch(self, jobs: list[tuple[int, str]]) -> list[tuple[int, str]]:
+        """Generate extraction prompts concurrently, order-preserving (spec 0012).
+
+        The collect-then-generate split keeps the legacy walk semantics (malformed
+        tasks raise during collection, guards fire in walk order) while N independent
+        generations overlap: wall-time drops from the sum to the slowest single task,
+        bounded by ``MAX_EXTRACTION_CONCURRENCY`` so a 50-task agent cannot stampede
+        the provider.
+
+        Args:
+            jobs: ``(task index, extraction details)`` pairs in walk order.
+
+        Returns:
+            ``(task index, generated text)`` pairs in the same order (`gather`
+            preserves input order, so assignment back by index is exact).
+        """
+        if not jobs:
+            return []
+        semaphore = Semaphore(MAX_EXTRACTION_CONCURRENCY)
+
+        async def _one(details: str) -> str:
+            async with semaphore:
+                return await self._generate_extraction_json(details)
+
+        generated = await gather(*(_one(details) for _, details in jobs))
+        return [(index, text) for (index, _), text in zip(jobs, generated, strict=True)]
+
     async def _agent_record_exists(self, store: AgentDefinitionPort, agent_id: str) -> bool:
         """Report whether any record — even an unparseable one — exists for `agent_id`.
 
@@ -220,15 +248,17 @@ class AgentService:
         self._logger.info(_LOG_CREATING_AGENT, agent_uuid)
         if len(data_for_db[TASKS_KEY]) > 0:
             self._logger.info(_LOG_EXTRACTION_SETUP)
+            jobs: list[tuple[int, str]] = []
             for index, task in enumerate(data_for_db[TASKS_KEY]):
                 if task[_TASK_TYPE_KEY] == TASK_TYPE_EXTRACTION:
                     # legacy-parity(spec-0002): create does NOT call the env-var guard and
                     # subscripts extraction_details directly, exactly as quickstart does.
                     details = data_for_db[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_DETAILS_KEY]
-                    extraction_prompt = await self._generate_extraction_json(details)
-                    data_for_db[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_JSON_KEY] = (
-                        extraction_prompt
-                    )
+                    jobs.append((index, details))
+            for index, extraction_prompt in await self._generate_extraction_batch(jobs):
+                data_for_db[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_JSON_KEY] = (
+                    extraction_prompt
+                )
         await gather(
             store.save_agent(agent_uuid, data_for_db),
             self._prompt_store.save_prompts(agent_uuid, prompts),
@@ -266,14 +296,16 @@ class AgentService:
         new_data = config.model_dump()
         new_data[ASSISTANT_STATUS_KEY] = ASSISTANT_STATUS_UPDATED  # legacy-parity(spec-0002)
         self._logger.info(_LOG_UPDATING_AGENT, agent_id)
+        jobs: list[tuple[int, str]] = []
         for index, task in enumerate(new_data.get(TASKS_KEY, [])):
             if task.get(_TASK_TYPE_KEY) == TASK_TYPE_EXTRACTION:
                 self._require_extraction_model()  # legacy-parity(spec-0002): UPDATE-only guard
                 details = task[_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY].get(
                     _EXTRACTION_DETAILS_KEY, _MISSING_EXTRACTION_DETAILS_DEFAULT
                 )
-                extraction_prompt = await self._generate_extraction_json(details)
-                new_data[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_JSON_KEY] = extraction_prompt
+                jobs.append((index, details))
+        for index, extraction_prompt in await self._generate_extraction_batch(jobs):
+            new_data[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_JSON_KEY] = extraction_prompt
         await gather(
             store.save_agent(agent_id, new_data),
             self._prompt_store.save_prompts(agent_id, prompts),

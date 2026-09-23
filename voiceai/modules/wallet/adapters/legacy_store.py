@@ -50,7 +50,15 @@ def _to_module_entry(entry: LegacyLedgerEntry) -> ModuleLedgerEntry:
 
 
 def _to_legacy_entry(entry: ModuleLedgerEntry) -> LegacyLedgerEntry:
-    """Shape a module ledger entry as the legacy store model."""
+    """Shape a module ledger entry as the legacy store model.
+
+    Raises:
+        ValueError: When the module entry has no id yet (transient, pre-insert).
+            The legacy model requires ``entry_id``; callers only ever translate
+            saved rows, so this guards a programming error, not a user one.
+    """
+    if entry.id is None:
+        raise ValueError("ModuleLedgerEntry.id is required for legacy translation")
     return LegacyLedgerEntry(
         entry_id=entry.id,
         type=entry.type,

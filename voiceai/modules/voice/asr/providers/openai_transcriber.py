@@ -7,6 +7,7 @@ import json
 import os
 import time
 import traceback
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import numpy as np
@@ -72,32 +73,32 @@ class OpenAITranscriber(BaseTranscriber):
         self.api_key = kwargs.get("transcriber_key", os.getenv(_default_key_env))
 
         self.transcriber_output_queue = output_queue
-        self.transcription_task = None
-        self.sender_task = None
-        self.heartbeat_task = None
-        self.utterance_timeout_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
-        self.connection_time = None
+        self.connection_start_time: float | None = None
+        self.connection_time: float | None = None
 
-        self.websocket_connection = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.connection_error = None
-        self.meta_info = {}
+        self.connection_error: str | None = None
+        self.meta_info: dict[str, Any] = {}
 
-        self.current_turn_id = None
-        self.current_turn_start_time = None
+        self.current_turn_id: str | None = None
+        self.current_turn_start_time: float | None = None
         self.turn_counter = 0
-        self.current_turn_interim_details = []
-        self._turn_start_epoch_ms = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self._turn_start_epoch_ms: float | None = None
         # Saved at commit time so the receiver can still identify the turn after
         # _reset_turn_state() clears current_turn_id (e.g. utterance timeout race).
         self._last_committed_turn_id: str | None = None
         # turn_id of the last entry written to turn_latencies, to keep those keys unique
-        self._last_latency_turn_id = None
+        self._last_latency_turn_id: str | None = None
 
         self._speech_active = False
         self._silence_start_time: float | None = None
@@ -376,7 +377,7 @@ class OpenAITranscriber(BaseTranscriber):
             logger.error(f"Error in OpenAI sender_stream: {e}")
             raise
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """Consume responses into transcript packets."""
         try:
             async for message in ws:
@@ -620,7 +621,7 @@ class OpenAITranscriber(BaseTranscriber):
             except (ValueError, ConnectionError) as e:
                 self.connection_error = str(e)
                 await self.toggle_connection()
-                meta = dict(self.meta_info or {})
+                meta: dict[str, Any] = dict(self.meta_info or {})
                 meta["connection_error"] = self.connection_error
                 await self.push_to_transcriber_queue(create_ws_data_packet("transcriber_connection_closed", meta))
                 return

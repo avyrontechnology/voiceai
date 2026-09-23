@@ -36,8 +36,8 @@ class TelephonyOutputHandler(DefaultOutputHandler):
         self.mark_event_meta_data = mark_event_meta_data
 
         self.stream_sid = None
-        self.current_request_id = None
-        self.rejected_request_ids = set()
+        self.current_request_id: str | None = None
+        self.rejected_request_ids: set[str] = set()
 
     async def _send_text(self, message: Any) -> None:
         """Guarded send_text: raises asyncio.TimeoutError instead of hanging on a dead socket."""
@@ -47,12 +47,12 @@ class TelephonyOutputHandler(DefaultOutputHandler):
         """Interrupt playback and reset the handler for barge-in."""
         pass
 
-    async def form_media_message(self, audio_data: Any, audio_format: Any) -> None:
-        """Build the media message for an audio frame."""
+    async def form_media_message(self, audio_data: Any, audio_format: Any) -> Any:
+        """Build the media message for an audio frame (base no-op; providers override)."""
         pass
 
-    async def form_mark_message(self, mark_id: Any) -> None:
-        """Build the mark-ack message for a played chunk."""
+    async def form_mark_message(self, mark_id: Any) -> Any:
+        """Build the mark-ack message for a played chunk (base no-op; providers override)."""
         pass
 
     async def set_stream_sid(self, stream_id: Any) -> None:
@@ -109,7 +109,7 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                             "response_uid": meta_info.get("response_uid"),
                             "response_group_uid": meta_info.get("response_group_uid"),
                         }
-                        mark_id = str(uuid.uuid4())
+                        mark_id: Any = str(uuid.uuid4())  # why: carriers echo opaque mark ids back
                         self.mark_event_meta_data.update_data(mark_id, pre_mark_event_meta_data)
                         if (
                             meta_info.get("message_category") == "agent_welcome_message"

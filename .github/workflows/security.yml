@@ -1,7 +1,13 @@
 name: Security
 
-# TEMPORARILY DISABLED — re-enable by restoring push/pull_request triggers.
+# Required check (spec 0000): mirrors `make sec` so CI == local.
 on:
+  pull_request: {}
+  push:
+    branches:
+      - revamp/**
+      - feat/**
+      - fix/**
   workflow_dispatch: {}
 
 permissions:
@@ -23,5 +29,6 @@ jobs:
 
       # Fails the build on medium+ severity, high-confidence findings (exec/eval/compile,
       # pickle, yaml.load, etc.). Low-severity style noise is intentionally not gated.
+      # Scope (ARCH_DIRS) matches `make sec` exactly.
       - name: Bandit SAST
-        run: bandit -r voiceai --severity-level medium --confidence-level high
+        run: bandit -r voiceai/common voiceai/core voiceai/database voiceai/modules --severity-level medium --confidence-level high

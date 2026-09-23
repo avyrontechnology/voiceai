@@ -8,6 +8,7 @@ session/invite/key/audit shapes and defaults. Timestamps ride
 
 import pytest
 
+from voiceai.common.datetime_utils import utc_now
 from voiceai.common.ids import new_id
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
@@ -72,12 +73,12 @@ def test_user_defaults_and_email_validation() -> None:
 
 def test_session_invite_key_and_audit_shapes() -> None:
     """Moved records keep their fields, kinds and defaults."""
-    session = SessionRecord(token_hash="t", user_id="u-1", expires_at="2030-01-01T00:00:00+00:00")
+    session = SessionRecord(token_hash="t", user_id="u-1", expires_at=utc_now())
     invite = Invite(
         invite_id=new_id("inv"),
         email="c@d.test",
         token_hash="t",
-        expires_at="2030-01-01T00:00:00+00:00",
+        expires_at=utc_now(),
     )
     key = ApiKey(key_id="k-1", name="ci", prefix="ak_")
     event = AuthEvent(event_id=new_id("evt"), type="login")

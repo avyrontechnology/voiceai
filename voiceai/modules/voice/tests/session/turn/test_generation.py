@@ -69,9 +69,11 @@ async def test_do_llm_generation_delegator_injects_the_session(monkeypatch):
     moved = AsyncMock(return_value=None)
     monkeypatch.setattr(generation, "do_llm_generation", moved)
     tm = TaskManager.__new__(TaskManager)
-    await tm._TaskManager__do_llm_generation([], {"sequence_id": 1}, "synthesizer")
+    await tm._TaskManager__do_llm_generation([], {"sequence_id": 1}, "synthesizer")  # type: ignore[attr-defined]  # parity pin on the verbatim delegator
     moved.assert_awaited_once()
-    assert moved.await_args.args[0] is tm
+    call = moved.await_args
+    assert call is not None
+    assert call.args[0] is tm
 
 
 async def test_handle_llm_output_delegator_injects_the_session(monkeypatch):
@@ -80,7 +82,9 @@ async def test_handle_llm_output_delegator_injects_the_session(monkeypatch):
     tm = TaskManager.__new__(TaskManager)
     await tm._handle_llm_output("synthesizer", "hi", False, {"sequence_id": 1})
     moved.assert_awaited_once()
-    assert moved.await_args.args[0] is tm
+    call = moved.await_args
+    assert call is not None
+    assert call.args[0] is tm
 
 
 async def test_process_conversation_task_delegator_injects_the_session(monkeypatch):

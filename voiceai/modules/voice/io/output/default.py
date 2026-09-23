@@ -43,7 +43,7 @@ class DefaultOutputHandler:
         self.is_web_based_call = is_web_based_call
         self.mark_event_meta_data = mark_event_meta_data
         self.sampling_rate = sampling_rate
-        self.welcome_message_sent_ts = None
+        self.welcome_message_sent_ts: float | None = None
         self._closed = False
 
     def _playout_duration(self, audio: Any, audio_format: Any) -> Any:
@@ -174,7 +174,7 @@ class DefaultOutputHandler:
                     mark_message = {"type": "mark", "name": mark_id}
                     await self.websocket.send_text(json.dumps(mark_message))
 
-                logger.info(f"Sending to the frontend {len(data)}")
+                logger.info(f"Sending to the frontend {len(data or '')}")
                 if (
                     packet["meta_info"].get("message_category") == "agent_welcome_message"
                     and not self.welcome_message_sent_ts

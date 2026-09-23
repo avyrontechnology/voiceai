@@ -33,7 +33,7 @@ from voiceai.modules.voice.schemas import VoiceContract
 CreateTalkoPartnerRequest = VoiceContract.CreateTalkoPartnerRequest
 PlaceCallRequest = VoiceContract.PlaceCallRequest
 UpdateTalkoPartnerRequest = VoiceContract.UpdateTalkoPartnerRequest
-from voiceai.modules.voice.ports.outbound import DialOutcome
+from voiceai.modules.voice.ports.outbound import DialOutcome, PartnerPreview
 from voiceai.modules.voice.repository import VoicePlaceCallRepository
 from voiceai.modules.voice.service import VoiceCallService
 
@@ -66,6 +66,10 @@ class _FakeOutbound:
         self.calls.append({"kind": "background", **kwargs})
         return DialOutcome(execution_id="exec-bg", status="queued", from_number=kwargs.get("from_number"))
 
+    async def fetch_partner_dids(self, *, talko_api_key: str, talko_api_base_url: str) -> PartnerPreview:
+        self.calls.append({"kind": "preview", "talko_api_key": talko_api_key, "talko_api_base_url": talko_api_base_url})
+        return PartnerPreview(partner_id="2", dids=["+917965263087"])
+
 
 def _repository() -> VoicePlaceCallRepository:
     """Real repository over throwaway in-memory generics."""
@@ -91,7 +95,7 @@ def _service(outbound: _FakeOutbound | None = None) -> tuple[VoiceCallService, _
 
 async def _partner(service: VoiceCallService, **overrides: Any) -> None:
     """Seed one partner record through the service."""
-    payload = {
+    payload: dict[str, Any] = {
         "partner_id": "2",
         "display_name": "Acme",
         "talko_api_key": "tkp_live_partner",

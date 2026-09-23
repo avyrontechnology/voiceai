@@ -4,7 +4,8 @@ import asyncio
 import queue
 import threading
 import time
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from google.cloud import speech_v1p1beta1 as speech
@@ -62,16 +63,16 @@ class GoogleTranscriber(BaseTranscriber):
         self.client = speech.SpeechClient()
 
         # Threading bridge for gRPC streaming
-        self._audio_q = queue.Queue()
+        self._audio_q: queue.Queue[Any] = queue.Queue()
         self._running = False
-        self._grpc_thread = None
+        self._grpc_thread: threading.Thread | None = None
 
         # Connection state management
-        self.connection_start_time = None
-        self.connection_time = None
-        self.websocket_connection = None
+        self.connection_start_time: float | None = None
+        self.connection_time: float | None = None
+        self.websocket_connection: Any = None  # why: no socket on the gRPC bridge; kept for seam parity
         self.connection_authenticated = False
-        self.transcription_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
 
         # Audio frame tracking
         self.audio_frame_duration = 0.0
@@ -85,22 +86,23 @@ class GoogleTranscriber(BaseTranscriber):
 
         # Turn latency tracking
         self.turn_latencies = []
-        self.current_turn_start_time = None
-        self.current_turn_id = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: int | None = None
         self.turn_counter = 0
-        self._turn_start_epoch_ms = None
+        self._turn_start_epoch_ms: float | None = None
 
         # Request tracking
-        self.meta_info = None
-        self._request_id = None
+        self.meta_info: dict[str, Any] | None = None
+        self._request_id: str | None = None
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
 
         # Event loop reference for thread-safe queue operations
         try:
-            self.loop = asyncio.get_event_loop()
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_event_loop()
         except Exception:
-            self.loop = None
+            loop = None
+        self.loop = loop
 
     def _enqueue_output(self, data: Any, meta: Any = None) -> None:
         """Thread-safe enqueue to transcriber_output_queue."""
@@ -164,7 +166,7 @@ class GoogleTranscriber(BaseTranscriber):
             logger.exception(f"Error starting GoogleTranscriber: {e}")
             self.connection_error = str(e)
             await self.toggle_connection()
-            meta = (self.meta_info or {}).copy()
+            meta: dict[str, Any] = (self.meta_info or {}).copy()
             meta["connection_error"] = self.connection_error
             await self.transcriber_output_queue.put(create_ws_data_packet("transcriber_connection_closed", meta))
 
@@ -239,7 +241,7 @@ class GoogleTranscriber(BaseTranscriber):
         except Exception:
             logger.exception("Error in _send_audio_to_transcriber")
 
-    def _audio_generator(self) -> None:
+    def _audio_generator(self) -> Iterator[Any]:
         """
         Blocking generator consumed by google client.streaming_recognize.
         Yields StreamingRecognizeRequest(audio_content=...).
@@ -266,7 +268,8 @@ class GoogleTranscriber(BaseTranscriber):
         """
         try:
             if self.current_turn_id and self.current_turn_start_time:
-                first_ms = int(round((self.meta_info.get("transcriber_first_result_latency", 0)) * 1000))
+                turn_meta = cast("dict[str, Any]", self.meta_info)
+                first_ms = int(round((turn_meta.get("transcriber_first_result_latency", 0)) * 1000))
                 total_s = (time.perf_counter() - self.current_turn_start_time) if self.current_turn_start_time else 0
                 entry = {
                     "turn_id": self.current_turn_id,
@@ -281,7 +284,7 @@ class GoogleTranscriber(BaseTranscriber):
                 self.turn_latencies.append(entry)
                 # also expose on meta_info for immediate consumption
                 try:
-                    self.meta_info["turn_latencies"] = self.turn_latencies
+                    cast("dict[str, Any]", self.meta_info)["turn_latencies"] = self.turn_latencies
                 except Exception:  # noqa: S110 — verbatim best-effort (R8)
                     pass
                 # reset turn tracking
@@ -334,7 +337,7 @@ class GoogleTranscriber(BaseTranscriber):
             requests = self._audio_generator()
 
             try:
-                responses = self.client.streaming_recognize(streaming_config, requests)
+                responses = self.client.streaming_recognize(streaming_config, requests)  # type: ignore[arg-type]  # stubs take one positional; the runtime API takes (config, requests) — verified by inspect (spec 0017)
                 self.connection_authenticated = True
 
                 # iterate responses synchronously
@@ -385,7 +388,7 @@ class GoogleTranscriber(BaseTranscriber):
                             self._enqueue_output(data, meta=self.meta_info)
 
                 # After streaming ends on Google side, send transcriber_connection_closed sentinel
-                closed_meta = (self.meta_info or {}).copy()
+                closed_meta: dict[str, Any] = (self.meta_info or {}).copy()
                 if "transcriber_total_stream_duration" not in closed_meta and "transcriber_start_time" in closed_meta:
                     try:
                         closed_meta["transcriber_total_stream_duration"] = (
@@ -410,7 +413,7 @@ class GoogleTranscriber(BaseTranscriber):
 
                 # Send error to output
                 self.connection_error = str(stream_error)
-                err_meta = (self.meta_info or {}).copy()
+                err_meta: dict[str, Any] = (self.meta_info or {}).copy()
                 err_meta["error"] = str(stream_error)
                 err_meta["error_type"] = "streaming_error"
                 err_meta["connection_error"] = self.connection_error

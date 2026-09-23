@@ -39,7 +39,9 @@ drawing from the canonical file set — `constants.py`, `models.py`, `errors.py`
 `static_methods.py` — creating the files it needs (an empty placeholder is noise, not
 compliance). Semantics:
 - a. `models.py` — module-level pydantic models only; persisted models inherit
-  `database.base.BaseFields`.
+  `database.base.BaseFields`. A `models/` package may replace the file once a module
+  owns more than three models (agents/auth precedent, spec 0000); the package root
+  re-exports the public models and the same rule applies inside.
 - b. `constants.py` — every module-level literal. **Nothing in the code is hard-coded**: any
   string/number used more than once, any route prefix, any collection name, any tunable comes
   from a constants file or the environment. (Type *annotations* are still mandatory — see

@@ -104,11 +104,13 @@ async def test_execute_function_call_delegator_injects_the_session(monkeypatch):
     moved = AsyncMock(return_value=None)
     monkeypatch.setattr(function_calls, "execute_function_call", moved)
     tm = TaskManager.__new__(TaskManager)
-    await tm._TaskManager__execute_function_call(
+    await tm._TaskManager__execute_function_call(  # type: ignore[attr-defined]  # parity pin on the verbatim delegator
         "url", "POST", "{}", None, None, {}, {"turn_id": 1}, "llm", "custom_tool"
     )
     moved.assert_awaited_once()
-    assert moved.await_args.args[0] is tm
+    call = moved.await_args
+    assert call is not None
+    assert call.args[0] is tm
 
 
 async def test_execute_transfer_webhook_delegator_injects_the_session(monkeypatch):

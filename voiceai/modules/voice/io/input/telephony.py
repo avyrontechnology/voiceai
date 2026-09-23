@@ -43,24 +43,24 @@ class TelephonyInputHandler(DefaultInputHandler):
             is_welcome_message_played=is_welcome_message_played,
             observable_variables=observable_variables,
         )
-        self._stream_sid = None
+        self._stream_sid: str | None = None
         self.stream_sid_ready.clear()
         self.call_sid = None
-        self.buffer = []
+        self.buffer: list[bytes] = []
         self.message_count = 0
         # self.mark_event_meta_data = mark_event_meta_data
         self.last_media_received = 0
-        self.io_provider = None
-        self.websocket_listen_task = None
+        self.io_provider: str | None = None
+        self.websocket_listen_task: asyncio.Task[None] | None = None
         self._ignored_frame_count = 0
 
     @property
-    def stream_sid(self) -> Any:
+    def stream_sid(self) -> str | None:
         """The stream SID."""
         return self._stream_sid
 
     @stream_sid.setter
-    def stream_sid(self, value: Any) -> None:
+    def stream_sid(self, value: str | None) -> None:
         """The stream SID."""
         self._stream_sid = value
         if value is not None:
@@ -134,13 +134,15 @@ class TelephonyInputHandler(DefaultInputHandler):
         a misrouted or start-less leg flowing; the warning makes the relay gap
         visible instead of a silent dead call.
         """
-        if self.stream_sid is None:
-            self.stream_sid = f"{self.io_provider or 'telephony'}-{uuid.uuid4().hex[:12]}"
+        stream_sid = self.stream_sid
+        if stream_sid is None:
+            stream_sid = f"{self.io_provider or 'telephony'}-{uuid.uuid4().hex[:12]}"
+            self.stream_sid = stream_sid
             logger.warning(
-                f"{self.io_provider} receiver minted synthetic stream_sid={self.stream_sid} "
+                f"{self.io_provider} receiver minted synthetic stream_sid={stream_sid} "
                 f"on first audio ({context}); carrier never sent a start event"
             )
-        return self.stream_sid
+        return stream_sid
 
     async def _handle_non_telephony_packet(self, packet: Any, raw_message: str) -> bool:
         """Rescue hook for JSON frames without an ``event`` key. Returns True if consumed.

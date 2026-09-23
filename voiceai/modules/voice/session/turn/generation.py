@@ -154,7 +154,9 @@ class GenerationSession(Protocol):
     # --- legacy session methods generation calls back into ---
     def _stage_assistant_history(self, meta_info: Any, content: Any) -> None: ...  # noqa: D102
     async def _synthesize(self, message: Any) -> Any: ...  # noqa: D102
-    def _stamp_llm_latency_dict(self, latency_dict: dict, meta_info: dict, *args: Any) -> None: ...  # noqa: D102
+    def _stamp_llm_latency_dict(  # noqa: D102
+        self, latency_dict: dict, meta_info: dict, *args: Any, response_text: Any = ...
+    ) -> None: ...
     def _inject_language_instruction(self, messages: list) -> list: ...  # noqa: D102
     def _is_browser_leg(self) -> bool: ...  # noqa: D102
     async def _drain_pending_chat_forward(self) -> None: ...  # noqa: D102
@@ -167,6 +169,20 @@ class GenerationSession(Protocol):
     def _TaskManager__is_graph_agent(self) -> bool: ...  # noqa: D102
     def _TaskManager__is_knowledgebase_agent(self) -> bool: ...  # noqa: D102
     def _TaskManager__process_stop_words(self, *args: Any, **kwargs: Any) -> Any: ...  # noqa: D102
+
+    # --- turn state generation reads/writes (legacy session surface) ---
+    task_config: Any  # why: legacy task config crosses the seam
+    rag_latencies: Any  # why: latency ledger crosses the seam
+    function_call_in_flight: Any  # why: flag crosses the seam untyped
+    repeat_after_silence_seconds: Any  # why: tuning value crosses the seam
+    _synthesis_awaiting_first_audio: Any  # why: flag crosses the seam untyped
+    _pending_chat_forward: Any  # why: queued chat payload crosses the seam
+
+    # --- legacy session callables reached as attributes (Any is callable) ---
+    _llm_stream_with_first_chunk_timeout: Any  # why: legacy callable reached through the facade
+    _handle_llm_output: Any  # why: legacy callable reached through the facade
+    _append_eager_llm_stub: Any  # why: legacy callable reached through the facade
+    process_call_hangup: Any  # why: legacy callable reached through the facade
 
 
 async def handle_llm_output(
@@ -343,8 +359,9 @@ def store_into_history(
         self.conversation_history.sync_interim(messages)
 
 
+# why: provider streams are heterogeneous (async generators, queues, test doubles).
 async def llm_stream_with_first_chunk_timeout(
-    self: GenerationSession, stream: object, meta_info: dict, timeout_s: float | None = None
+    self: GenerationSession, stream: Any, meta_info: dict, timeout_s: float | None = None
 ) -> object:
     """Yield an LLM stream but bound the wait for its first chunk.
 
@@ -355,7 +372,7 @@ async def llm_stream_with_first_chunk_timeout(
     caller falls through to its empty-turn handling). No blocking I/O.
     """
     limit: float = timeout_s if timeout_s is not None else LLM_FIRST_CHUNK_TIMEOUT_S
-    iterator = stream.__aiter__()  # type: ignore[union-attr]
+    iterator = stream.__aiter__()
     try:
         first = await asyncio.wait_for(iterator.__anext__(), timeout=limit)
     except (asyncio.TimeoutError, TimeoutError):
@@ -370,7 +387,7 @@ async def llm_stream_with_first_chunk_timeout(
         self.response_in_pipeline = False
         self._synthesis_awaiting_first_audio = False
         try:
-            await stream.aclose()  # type: ignore[union-attr]
+            await stream.aclose()
         except Exception:  # noqa: S110 — verbatim best-effort close (R8)
             pass
         return
@@ -827,7 +844,7 @@ def append_eager_llm_stub(self: GenerationSession, meta_info: dict) -> None:
     so a hung/cancelled/interrupted turn still appears in progression. __do_llm_generation
     upserts by sequence_id on completion, replacing this stub. Used by BOTH the normal turn
     path and the language-switch follow-up, so switched turns are stamped identically."""
-    _t_s = self.tools.get("transcriber")
+    _t_s: Any = self.tools.get("transcriber")
     if hasattr(_t_s, "transcribers") and hasattr(_t_s, "active_label"):
         _t_s = _t_s.transcribers.get(_t_s.active_label, _t_s)
     start = meta_info.get("llm_start_time")

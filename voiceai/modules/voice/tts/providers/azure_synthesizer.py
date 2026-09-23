@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 import xml.sax.saxutils as sax
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import azure.cognitiveservices.speech as speechsdk
@@ -146,7 +147,7 @@ class AzureSynthesizer(BaseSynthesizer):
     # generate / push
     # ------------------------------------------------------------------
 
-    async def generate(self) -> None:
+    async def generate(self) -> AsyncGenerator[Any, None]:
         """Yield synthesized audio for a turn."""
         try:
             while True:
@@ -179,7 +180,7 @@ class AzureSynthesizer(BaseSynthesizer):
                     logger.error(f"Check subscription key and region configuration - Region: {self.region}")
                     continue
 
-                chunk_queue = asyncio.Queue()
+                chunk_queue: asyncio.Queue[Any] = asyncio.Queue()
                 done_event = asyncio.Event()
                 start_time = time.perf_counter()
 
