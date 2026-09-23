@@ -20,12 +20,13 @@ spec 0002 behavior invariant and must round-trip byte-identical.
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Final, cast
 
-from voiceai.modules.agents.constants import PROMPT_FILE_KEY_TEMPLATE
+from voiceai.modules.agents.constants import CONVERSATION_DETAILS_FILE_NAME, PROMPT_FILE_KEY_TEMPLATE
 
-__all__ = ["read_conversation_details", "write_conversation_details"]
+__all__ = ["delete_conversation_details", "read_conversation_details", "write_conversation_details"]
 
 #: Dotted path of the legacy prompt-IO module. Resolved dynamically at call time — never a
 #: static import statement — for two reasons: a static legacy import outside ``adapters/``
@@ -80,3 +81,24 @@ async def write_conversation_details(agent_id: str, prompts: dict[str, Any] | No
     helpers = _legacy_prompt_io()
     file_key = PROMPT_FILE_KEY_TEMPLATE.format(agent_id=agent_id)
     await helpers.store_file(file_key=file_key, file_data=prompts, local=True)
+
+
+async def delete_conversation_details(agent_id: str) -> bool:
+    """Remove an agent's prompt file, reporting whether one existed.
+
+    Mirrors the loader's path construction (`<PREPROCESS_DIR>/<agent_id>/...`) through
+    the live ``PREPROCESS_DIR`` attribute — never a static legacy import (AGENTS.md
+    §3.1) — so the monkeypatch target keeps intercepting.
+
+    Args:
+        agent_id: The bare-UUID agent id whose prompts to remove.
+
+    Returns:
+        ``True`` when a file was removed.
+    """
+    helpers = _legacy_prompt_io()
+    path = Path(str(helpers.PREPROCESS_DIR)) / agent_id / CONVERSATION_DETAILS_FILE_NAME
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True

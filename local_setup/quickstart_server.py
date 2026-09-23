@@ -29,19 +29,13 @@ from voiceai.models import *
 from voiceai.modules import auth as auth_module
 from voiceai.modules.agents import AgentNotFoundError, AgentService
 from voiceai.modules.voice import VoiceCallService
-from voiceai.modules.voice.models import (
-    ConnectTalkoPartnerRequest as _ConnectTalkoPartnerRequest,
-    CreateTalkoPartnerRequest as _CreateTalkoPartnerRequest,
-)
-from voiceai.modules.voice.models import (
-    PlaceCallRequest as _PlaceCallRequest,
-)
-from voiceai.modules.voice.models import (
-    TalkoPartnerListResponse as _TalkoPartnerListResponse,
-)
-from voiceai.modules.voice.models import (
-    UpdateTalkoPartnerRequest as _UpdateTalkoPartnerRequest,
-)
+from voiceai.modules.voice.schemas import VoiceContract as _VoiceContract
+
+_ConnectTalkoPartnerRequest = _VoiceContract.ConnectTalkoPartnerRequest
+_CreateTalkoPartnerRequest = _VoiceContract.CreateTalkoPartnerRequest
+_PlaceCallRequest = _VoiceContract.PlaceCallRequest
+_TalkoPartnerListResponse = _VoiceContract.TalkoPartnerListResponse
+_UpdateTalkoPartnerRequest = _VoiceContract.UpdateTalkoPartnerRequest
 from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
 
 load_dotenv()
@@ -100,6 +94,14 @@ class _AgentRedisSeam:
 # container's redis entry so the repository resolves it like production wiring.
 _agents_container = build_container()
 _agents_container.redis_client.override(providers.Object(_AgentRedisSeam()))
+# T3 greenfield: the container's agent providers moved to Mongo, but quickstart keeps
+# serving the legacy Redis/file seam until the T7 cutover — pin the legacy adapters
+# explicitly so legacy routes and their tests observe zero behavior change.
+from voiceai.modules.agents.repository import FilePromptStore as _LegacyPromptStore
+from voiceai.modules.agents.repository import RedisAgentRepository as _LegacyAgentRepository
+
+_agents_container.agent_definitions.override(providers.Object(_LegacyAgentRepository(_AgentRedisSeam())))
+_agents_container.agent_session_store.override(providers.Object(_LegacyPromptStore()))
 agent_service: AgentService = _agents_container.agent_service()
 
 # Spec 0004 (B4): the live-call WS handler below is a thin delegate into the voice

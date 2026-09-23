@@ -9,7 +9,8 @@ from voiceai.core.environment import (
     load_environment,
     reset_environment,
 )
-from voiceai.core.redis import create_redis, ping_redis
+from voiceai.core.redis import create_redis, create_redis_cache, ping_redis
+from voiceai.core.resilience import TaskRegistry
 
 __all__ = [
     "VoiceAIContainer",
@@ -19,10 +20,12 @@ __all__ = [
     "InMemoryDatabase",
     "MotorDatabase",
     "RequestIdMiddleware",
+    "TaskRegistry",
     "build_container",
     "create_app",
     "create_db",
     "create_redis",
+    "create_redis_cache",
     "get_environment",
     "load_environment",
     "ping_redis",

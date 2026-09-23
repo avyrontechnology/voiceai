@@ -2,13 +2,14 @@
 
 `AgentService` owns the CRUD-and-prompts flows the quickstart server serves today, behavior
 preserved verbatim: `assistant_status` "seeding"/"updated" injection, extraction_json
-generation (now behind `LlmPort`), the falsy-prompts-to-`None` normalization, and the
-prompt-file orphan on DELETE. No HTTP types appear in any signature (rule 1e); the
-controller translates module errors into statuses.
+generation (now behind `LlmPort`) and the falsy-prompts-to-`None` normalization. T3 ends
+the prompt-file orphan on DELETE: prompts die prompts-first, so no delete strands a
+payload. No HTTP types appear in any signature (rule 1e); the controller translates
+module errors into statuses.
 
-The definition store may be absent: with `REDIS_URL` empty the container's redis client is
-`None`, no repository exists, and every method raises `DependencyUnavailableError` (503)
-instead of crashing on a missing client.
+The definition store may be absent: when the container builds no repository, every
+method raises `DependencyUnavailableError` (503) instead of crashing on a missing
+client (defense in depth — production always wires the Mongo store since T3).
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from voiceai.modules.agents.constants import (
     TASK_TYPE_EXTRACTION,
     TASKS_KEY,
 )
-from voiceai.modules.agents.errors import AgentNotFoundError
+from voiceai.modules.agents.errors import AgentNotFoundError, PromptStoreError
 from voiceai.modules.agents.exceptions import ensure_agent_exists
 from voiceai.modules.agents.models import AgentModel
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
@@ -102,14 +103,14 @@ class AgentService:
         self._logger = logger
 
     def _require_definitions(self) -> AgentDefinitionPort:
-        """Return the definition store, or raise because redis is unconfigured.
+        """Return the definition store, or raise because none was injected.
 
         Returns:
             The injected `AgentDefinitionPort`.
 
         Raises:
-            DependencyUnavailableError: When no store exists (`REDIS_URL` empty ⇒ the
-                container's redis client is `None` and no repository was built).
+            DependencyUnavailableError: When no store exists (the container always
+                wires one since T3; `None` only arrives from hand-built services).
         """
         if self._definitions is None:
             raise DependencyUnavailableError(_DEFINITION_STORE_UNAVAILABLE_MESSAGE)
@@ -280,10 +281,12 @@ class AgentService:
         return {AGENT_ID_KEY: agent_id, STATE_KEY: AGENT_STATE_UPDATED}
 
     async def delete_agent(self, agent_id: str) -> dict[str, Any]:  # why: quickstart wire shape is a raw dict
-        """Delete an agent's definition; the prompt file is deliberately left behind.
+        """Delete an agent's definition together with its prompt payload.
 
-        # legacy-parity(spec-0002): the prompt-file orphan on DELETE is a behavior invariant
-        (see the repository's `delete_agent`); nothing here touches the prompt store.
+        Prompts-first ordering (T3): the payload dies before the definition, so a
+        failed definition delete leaves a retryable state instead of an orphan —
+        the legacy orphan-on-DELETE quirk is retired. A prompts-store failure is
+        logged and still aborts before the definition is touched.
 
         Args:
             agent_id: The bare-UUID agent id to delete.
@@ -297,6 +300,10 @@ class AgentService:
             DependencyUnavailableError: When the definition store is unconfigured.
         """
         store = self._require_definitions()
+        try:
+            await self._prompt_store.delete_prompts(agent_id)
+        except Exception as exc:
+            raise PromptStoreError("Prompt payload deletion failed", cause=exc) from exc
         if not await store.delete_agent(agent_id):
             raise AgentNotFoundError(AGENT_NOT_FOUND_MESSAGE, details={AGENT_ID_KEY: agent_id})
         return {AGENT_ID_KEY: agent_id, STATE_KEY: AGENT_STATE_DELETED}

@@ -2,12 +2,15 @@
 PY ?= .venv/bin/python
 RUFF ?= .venv/bin/ruff
 ARCH_DIRS = voiceai/common voiceai/core voiceai/database voiceai/modules
-ARCH_TESTS = tests/arch
-# Strict lint profile for the new architecture only; legacy keeps the repo-level config.
+# T1: module tests live beside their modules; `make test` runs both trees.
+ARCH_TESTS = tests/arch voiceai/modules
+# Strict lint profile for new-architecture SOURCES only; tests (both trees) keep the
+# repo-level config — docstring/typing strictness on tests is noise (talko parity).
 # ANN401 stays off (Any needs an inline "# why:" per AGENTS.md rule 6, not a lint war);
 # D107 off (__init__ docstrings add nothing over the class docstring).
 ARCH_SELECT = E,W,F,I,B,UP,S,ANN,D1
 ARCH_IGNORE = ANN401,D107
+ARCH_EXCLUDE = "*/tests/*"
 
 .PHONY: setup check lint lint-arch type test test-all sec fmt cov
 
@@ -19,7 +22,7 @@ lint:
 	$(RUFF) check .
 
 lint-arch:
-	$(RUFF) check --select $(ARCH_SELECT) --ignore $(ARCH_IGNORE) $(ARCH_DIRS)
+	$(RUFF) check --select $(ARCH_SELECT) --ignore $(ARCH_IGNORE) --extend-exclude $(ARCH_EXCLUDE) $(ARCH_DIRS)
 
 type:
 	$(PY) -m mypy $(ARCH_DIRS) tests/arch

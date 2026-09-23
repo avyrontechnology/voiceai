@@ -18,6 +18,11 @@ RUN apt-get update && \
 
 EXPOSE 5001 8001 8002
 
+# Greenfield liveness: the thin entry serves every module, so the probe hits the
+# dependency-free `/api/v1/health/live` (T7 cutover flipped the entry here).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:5001/api/v1/health/live || exit 1
+
 WORKDIR /voiceai
 
 # docker/pyproject.toml + docker/poetry.lock mirror requirements.txt and are
@@ -37,4 +42,4 @@ COPY . ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps .
 
-CMD ["uvicorn", "quickstart_server:app", "--host", "0.0.0.0", "--port", "5001", "--app-dir", "local_setup"]
+CMD ["uvicorn", "voiceai.app:app", "--host", "0.0.0.0", "--port", "5001"]

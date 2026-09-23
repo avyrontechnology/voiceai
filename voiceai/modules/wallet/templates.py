@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from voiceai.modules.wallet.models import Template
+from voiceai.modules.wallet.schemas import WalletContract
+
+Template = WalletContract.Template
 
 
 def _payload(
@@ -20,15 +22,26 @@ def _payload(
                 "task_type": "conversation",
                 "toolchain": {"execution": "parallel", "pipelines": [["transcriber", "llm", "synthesizer"]]},
                 "tools_config": {
-                    "input": {"format": "wav", "provider": "simulated"},
-                    "output": {"format": "wav", "provider": "simulated"},
+                    "input": {"format": "wav", "provider": "default"},
+                    "output": {"format": "wav", "provider": "default"},
                     "transcriber": {"provider": "deepgram", "language": language, "stream": True},
                     "llm_agent": {
                         "agent_type": "simple_llm_agent",
                         "agent_flow_type": "streaming",
                         "llm_config": {"provider": "openai", "model": "gpt-4o-mini"},
                     },
-                    "synthesizer": {"provider": "elevenlabs", "stream": True, "audio_format": "wav"},
+                    "synthesizer": {
+                        "provider": "elevenlabs",
+                        "provider_config": {
+                            # Stock Rachel voice: the create contract requires a voice id,
+                            # nested under provider_config where the engine reads it.
+                            "voice": "Rachel",
+                            "voice_id": "21m00Tcm4TlvDq8ikWAM",
+                            "model": "eleven_multilingual_v2",
+                        },
+                        "stream": True,
+                        "audio_format": "wav",
+                    },
                 },
                 "task_config": {"check_if_user_online": True, "hangup_after_silence": 20},
             }

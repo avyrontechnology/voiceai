@@ -14,7 +14,7 @@ import redis.asyncio as redis_asyncio
 from voiceai.common.logger import get_logger
 from voiceai.core.environment import Environment
 
-__all__ = ["create_redis", "ping_redis"]
+__all__ = ["create_redis", "create_redis_cache", "ping_redis"]
 
 #: Connect/read timeout for every redis call, in seconds. A hung cache must fail fast and let
 #: the caller degrade, never hold a request open.
@@ -36,8 +36,38 @@ def create_redis(env: Environment) -> redis_asyncio.Redis | None:
     """
     if not env.redis_url:
         return None
+    return _client_from_url(env.redis_url)
+
+
+def create_redis_cache(env: Environment) -> redis_asyncio.Redis | None:
+    """Create the TTL-ephemera cache client (revocation denylist, throttle, locks).
+
+    Reads `redis_cache_url_effective` (isolated URL, legacy `REDIS_URL` fallback).
+
+    Args:
+        env: The process configuration.
+
+    Returns:
+        A configured client, or `None` when no cache URL is set — callers read the
+        store directly instead.
+    """
+    url = env.redis_cache_url_effective
+    if not url:
+        return None
+    return _client_from_url(url)
+
+
+def _client_from_url(url: str) -> redis_asyncio.Redis:
+    """Build one async client with the mandatory fail-fast timeouts.
+
+    Args:
+        url: A non-empty Redis URL (`redis://` or `rediss://`).
+
+    Returns:
+        The configured client (opens no socket until first use).
+    """
     client: redis_asyncio.Redis = redis_asyncio.from_url(
-        env.redis_url,
+        url,
         decode_responses=True,
         socket_connect_timeout=REDIS_TIMEOUT_SECONDS,
         socket_timeout=REDIS_TIMEOUT_SECONDS,

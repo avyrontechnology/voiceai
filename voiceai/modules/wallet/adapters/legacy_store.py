@@ -1,5 +1,9 @@
 """Legacy-store wallet seam (strangler bridge 1, AGENTS.md §3.1).
 
+.. deprecated:: T5 keeps this for quickstart (which pins it explicitly) and the
+    frozen platform router until the T7 cutover deletes all three. New code uses
+    the container's backend-selected `WalletService` over `MongoWalletRepository`.
+
 Binds the module `WalletService` to a legacy platform store (`MemoryStore` in
 tests, `RedisStore` in quickstart/prod) so the migrated wallet/templates routes
 keep reading the same ledger the legacy platform seam serves. The legacy models
@@ -12,8 +16,10 @@ backend-selected service and this file deletes with it.
 from __future__ import annotations
 
 from voiceai.modules.wallet.models import LedgerEntry as ModuleLedgerEntry
+from voiceai.modules.wallet.models import StoredTemplate as ModuleStoredTemplate
 from voiceai.modules.wallet.models import Wallet as ModuleWallet
 from voiceai.modules.wallet.service import WalletService
+from voiceai.modules.wallet.templates import TEMPLATES as SEED_TEMPLATES
 from voiceai.platform.models import LedgerEntry as LegacyLedgerEntry
 from voiceai.platform.models import Wallet as LegacyWallet
 from voiceai.platform.store import MemoryStore, RedisStore
@@ -79,9 +85,28 @@ class LegacyStoreWalletRepository:
 
     async def list_ledger(self, limit: int = 50, entry_type: str | None = None) -> list[ModuleLedgerEntry]:
         """List ledger entries from the legacy store, optionally filtered by type."""
+        return [_to_module_entry(entry) for entry in await self._store.list_ledger(limit=limit, entry_type=entry_type)]
+
+    async def list_templates(self) -> list[ModuleStoredTemplate]:
+        """List the seed catalog (frozen legacy behavior: templates live in code here)."""
         return [
-            _to_module_entry(entry) for entry in await self._store.list_ledger(limit=limit, entry_type=entry_type)
+            ModuleStoredTemplate(
+                template_id=t.template_id,
+                name=t.name,
+                industry=t.industry,
+                description=t.description,
+                languages=list(t.languages),
+                agent_payload=dict(t.agent_payload),
+            )
+            for t in SEED_TEMPLATES
         ]
+
+    async def get_template(self, template_id: str) -> ModuleStoredTemplate | None:
+        """Return the seed template with this id, or `None`."""
+        for row in await self.list_templates():
+            if row.template_id == template_id:
+                return row
+        return None
 
 
 def build_legacy_wallet_service(store: LegacyStore) -> WalletService:

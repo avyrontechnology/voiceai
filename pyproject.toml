@@ -27,7 +27,9 @@ dev = ["pip-tools", "pre-commit", "pytest", "pytest-asyncio", "pytest-cov", "ruf
 # Coroutine tests need no @pytest.mark.asyncio decorator.
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["tests"]
+# T1: module tests live beside their modules (talko parity:
+# voiceai/modules/*/tests/); both trees collect under one invocation.
+testpaths = ["tests", "voiceai"]
 pythonpath = ["."]
 addopts = "--strict-markers"
 
@@ -44,6 +46,10 @@ omit = [
 
 [tool.setuptools]
 package-dir = {"voiceai" = "voiceai"}
+
+# T1: colocated tests (voiceai.*.tests) and testing helpers never ship in the wheel.
+[tool.setuptools.packages.find]
+exclude = ["*.tests", "*.tests.*", "*.testing", "*.testing.*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -84,7 +90,8 @@ warn_unused_configs = true
 # Tests are type-CHECKED (spec 0001 pins protocol-conformance annotations) but test defs
 # themselves need no annotations; fixtures/parametrize stay ergonomic. tests/ has no
 # __init__.py, so mypy resolves these modules under the tests/ root as arch.*.
-module = "arch.*"
+# T1: colocated module tests (voiceai.*.tests.*) share the exemption — same rationale.
+module = ["arch.*", "voiceai.*.tests", "voiceai.*.tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_untyped_decorators = false

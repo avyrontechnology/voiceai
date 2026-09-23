@@ -210,6 +210,8 @@ def test_non_adapter_module_files_import_no_legacy() -> None:
     for path in _python_files(MODULES_ROOT):
         if _is_adapter_file(path):
             continue  # §3.1 bridge 1: adapters are the sanctioned legacy import point
+        if "tests" in path.parts:
+            continue  # colocated suites wire legacy doubles for compat pins; shipped code must not
         for lineno, target in _import_targets(path, _parse(path)):
             if _is_legacy(target) and not _is_transitional(target):
                 relative = path.relative_to(REPO_ROOT)

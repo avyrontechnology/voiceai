@@ -8,6 +8,16 @@ services:
       - "5001:5001"
     env_file:
       - .env
+    # Greenfield liveness (T7): the thin entry serves every module; the probe
+    # touches no dependency, so orchestrators never restart a healthy process
+    # over someone else's outage.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/api/v1/health/live || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
     volumes:
       - ./agent_data:/voiceai/agent_data
       - $HOME/.aws/credentials:/root/.aws/credentials:ro

@@ -36,14 +36,21 @@ from voiceai.modules.voice.constants import (
     WS_CLOSE_DARK,
     WS_CLOSE_UNKNOWN_AGENT,
 )
-from voiceai.modules.voice.models import (
-    ConnectTalkoPartnerRequest,
-    CreateTalkoPartnerRequest,
-    PlaceCallRequest,
-    TalkoPartnerListResponse,
-    UpdateTalkoPartnerRequest,
-)
+from voiceai.modules.voice.models import PlacedCall
+from voiceai.modules.voice.schemas import VoiceContract
 from voiceai.modules.voice.service import VoiceCallService
+
+PlaceCallRequest = VoiceContract.PlaceCallRequest
+ConnectTalkoPartnerRequest = VoiceContract.ConnectTalkoPartnerRequest
+CreateTalkoPartnerRequest = VoiceContract.CreateTalkoPartnerRequest
+UpdateTalkoPartnerRequest = VoiceContract.UpdateTalkoPartnerRequest
+TalkoPartnerListResponse = VoiceContract.TalkoPartnerListResponse
+TalkoPartnerPreview = VoiceContract.TalkoPartnerPreview
+TalkoPartnerView = VoiceContract.TalkoPartnerView
+
+# NOTE: handlers return `JSONResponse` envelopes, which FastAPI serves verbatim —
+# `response_model` therefore documents (and freezes, via schema tests) the `data`
+# shape in OpenAPI rather than serialising at runtime (the T1 auth/health pattern).
 
 __all__ = ["router"]
 
@@ -52,14 +59,14 @@ router = APIRouter(tags=[MODULE_NAME])
 
 ServiceDep = Annotated[VoiceCallService, Depends(Provide[VoiceAIContainer.voice_call_service])]
 EnvironmentDep = Annotated[Environment, Depends(Provide[VoiceAIContainer.environment])]
+# why: bridge 4 forbids even typing imports of agents submodules (layer-contract
+# test); the runtime object is the AgentDefinitionPort the container wires.
 AgentDefinitionsDep = Annotated[Any, Depends(Provide[VoiceAIContainer.agent_definitions])]
 AuthServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_service])]
 
 
 async def _require_scope(request: Request, auth: AuthService, scope: str) -> Principal:
-    principal = await auth.authenticate(
-        request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", "")
-    )
+    principal = await auth.authenticate(request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", ""))
     ensure_permitted(principal.has_scope(scope), f"Requires {scope} scope")
     return principal
 
@@ -82,11 +89,17 @@ async def voice_chat(
     if not agent_config:
         await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
         return
-    await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
-    await websocket.close()
+    try:
+        await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass  # the run or the client already closed the socket; a second close only spams logs
 
 
-@router.post(PLACE_CALL_PATH, status_code=202)
+
+@router.post(PLACE_CALL_PATH, status_code=202, response_model=PlacedCall)
 @inject
 async def place_call(
     payload: PlaceCallRequest,
@@ -94,8 +107,9 @@ async def place_call(
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "calls:write")
     """Place one outbound call (spec 0008)."""
+    await _require_scope(request, auth, "calls:write")
+
     try:
         placed = await service.place_call(payload=payload)
     except AppError as exc:
@@ -103,7 +117,7 @@ async def place_call(
     return success_response(placed.model_dump(mode="json"), status_code=202)
 
 
-@router.post(PARTNERS_PATH, status_code=201)
+@router.post(PARTNERS_PATH, status_code=201, response_model=TalkoPartnerView)
 @inject
 async def create_talko_partner(
     payload: CreateTalkoPartnerRequest,
@@ -111,8 +125,9 @@ async def create_talko_partner(
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "platform:write")
     """Store one partner credential record (spec 0008)."""
+    await _require_scope(request, auth, "platform:write")
+
     try:
         view = await service.create_partner(payload=payload)
     except AppError as exc:
@@ -120,15 +135,16 @@ async def create_talko_partner(
     return success_response(view.model_dump(mode="json"), status_code=201)
 
 
-@router.get(PARTNERS_PATH)
+@router.get(PARTNERS_PATH, response_model=TalkoPartnerListResponse)
 @inject
 async def list_talko_partners(
     request: Request,
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "platform:read")
     """List partner records without secrets (spec 0008)."""
+    await _require_scope(request, auth, "platform:read")
+
     try:
         views = await service.list_partners()
     except AppError as exc:
@@ -136,7 +152,7 @@ async def list_talko_partners(
     return success_response(TalkoPartnerListResponse(partners=views).model_dump(mode="json"))
 
 
-@router.get(PARTNER_ITEM_PATH)
+@router.get(PARTNER_ITEM_PATH, response_model=TalkoPartnerView)
 @inject
 async def get_talko_partner(
     partner_id: str,
@@ -144,8 +160,9 @@ async def get_talko_partner(
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "platform:read")
     """Read one partner record without its secret (spec 0008)."""
+    await _require_scope(request, auth, "platform:read")
+
     try:
         view = await service.get_partner(partner_id=partner_id)
     except AppError as exc:
@@ -153,7 +170,7 @@ async def get_talko_partner(
     return success_response(view.model_dump(mode="json"))
 
 
-@router.put(PARTNER_ITEM_PATH)
+@router.put(PARTNER_ITEM_PATH, response_model=TalkoPartnerView)
 @inject
 async def update_talko_partner(
     partner_id: str,
@@ -162,8 +179,9 @@ async def update_talko_partner(
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "platform:write")
     """Patch one partner record; empty key keeps the secret (spec 0008)."""
+    await _require_scope(request, auth, "platform:write")
+
     try:
         view = await service.update_partner(partner_id=partner_id, payload=payload)
     except AppError as exc:
@@ -179,8 +197,9 @@ async def delete_talko_partner(
     auth: AuthServiceDep,
     service: ServiceDep,
 ) -> JSONResponse:
-    await _require_scope(request, auth, "platform:write")
     """Soft-delete one partner record (spec 0008)."""
+    await _require_scope(request, auth, "platform:write")
+
     try:
         await service.delete_partner(partner_id=partner_id)
     except AppError as exc:
@@ -188,7 +207,7 @@ async def delete_talko_partner(
     return success_response({"deleted": True})
 
 
-@router.post(PARTNERS_PREVIEW_PATH)
+@router.post(PARTNERS_PREVIEW_PATH, response_model=TalkoPartnerPreview)
 @inject
 async def preview_talko_partner(
     payload: ConnectTalkoPartnerRequest,
@@ -205,7 +224,7 @@ async def preview_talko_partner(
     return success_response(preview.model_dump(mode="json"))
 
 
-@router.post(PARTNERS_CONNECT_PATH, status_code=201)
+@router.post(PARTNERS_CONNECT_PATH, status_code=201, response_model=TalkoPartnerView)
 @inject
 async def connect_talko_partner(
     payload: ConnectTalkoPartnerRequest,
@@ -222,7 +241,7 @@ async def connect_talko_partner(
     return success_response(view.model_dump(mode="json"), status_code=201)
 
 
-@router.post(PARTNER_REFRESH_PATH)
+@router.post(PARTNER_REFRESH_PATH, response_model=TalkoPartnerView)
 @inject
 async def refresh_talko_partner(
     partner_id: str,

@@ -1,23 +1,21 @@
-"""API key schema: scoped bearer credentials (spec 0005, C2).
+"""API key schema: scoped bearer credentials (spec 0005, C2; T2 greenfield).
 
-Moved VERBATIM from ``voiceai/platform/models.py`` with one comment-only fix: the
-legacy file calls these "bcrypt hashes" while the codebase has always minted
-PBKDF2-SHA256 (see ``platform/auth.py`` and ``static_methods``) — the wording now
-says PBKDF2. No behavior change.
+Greenfield delta (T2): inherits :class:`voiceai.database.base.BaseFields`; the
+repository pins `id` to `key_id`. The comment-only PBKDF2 fix from C2 stays.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from voiceai.common.datetime_utils import utc_now
+from voiceai.database.base import BaseFields
 
 __all__ = ["ApiKey"]
 
 
-class ApiKey(BaseModel):
+class ApiKey(BaseFields):
     """Scoped bearer credential (secret itself is never stored)."""
 
     key_id: str
@@ -28,5 +26,4 @@ class ApiKey(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     expires_at: datetime | None = None
     created_by: str | None = None
-    created_at: datetime = Field(default_factory=utc_now)
     last_used_at: datetime | None = None

@@ -1,42 +1,30 @@
-"""HTTP surface for the auth module: wiring only, no logic (AGENTS.md rule 1f).
+"""HTTP surface for the auth module: wiring only, no logic (AGENTS.md rule 1f; T2 greenfield).
 
-Thirteen routes moved line-by-line from ``voiceai/platform/auth_router.py`` (spec
-0005, C5); the refactor deltas are mechanical:
-
-* Bodies delegate to ``AuthService`` (per-request over the app.state store seam);
-  role/scope gates already live in the service with verbatim messages.
-* Request/response envelopes live here (the agents-A4 precedent), with verbatim
-  field constraints; payloads serialize identically to legacy inside the standard
-  ``common.responses`` envelopes (rule 2) at identical statuses, with identical
-  ``detail`` strings on errors — byte-identity holds at the payload level, and the
-  endgame cutover spec owns any client migration.
-* Every handler funnels ``AppError`` through the single ``_to_http`` mapper (the C6
-  map test enumerates it); unexpected exceptions propagate to the factory's opaque-500
-  backstop. ``get_store`` maps the legacy 503 seam onto ``DependencyUnavailableError``.
+T2 deltas: wire shapes live in `schemas.AuthContract` (talko parity); cookie flags
+come from `Environment` through the container (the `adapters/cookies.py` bridge is
+deleted); login/signup/accept answer the JWT pair (`LoginResponse` + refresh
+cookie) beside the legacy session cookie (dual-write until the T7 cutover); new
+`POST /refresh` rotates; logout revokes both cookies' tokens.
 """
 
-from datetime import datetime
 from typing import Annotated
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
-from voiceai.common.constants import EMAIL_PATTERN
 from voiceai.common.errors import AppError
 from voiceai.common.logger import get_logger
 from voiceai.common.responses import error_response, success_response
 from voiceai.core.container import VoiceAIContainer
+from voiceai.core.environment import Environment
 from voiceai.modules.auth import constants as C
-from voiceai.modules.auth.adapters.cookies import COOKIE_SAMESITE, COOKIE_SECURE
 from voiceai.modules.auth.errors import InvalidCredentialsError
 from voiceai.modules.auth.helpers import public_user
-from voiceai.modules.auth.models.audit import AuthEvent
-from voiceai.modules.auth.models.invite import Invite
 from voiceai.modules.auth.models.principal import Principal
-from voiceai.modules.auth.models.user import User, UserRole
-from voiceai.modules.auth.service import AuthService
+from voiceai.modules.auth.models.user import User
+from voiceai.modules.auth.schemas import AuthContract
+from voiceai.modules.auth.service import AuthService, SessionTokens
 
 __all__ = ["router"]
 
@@ -44,106 +32,22 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 # -- envelopes (request shapes in, response shapes out) ------------------------
-
-
-class SignupRequest(BaseModel):
-    """First-user registration body."""
-
-    email: str = Field(..., pattern=EMAIL_PATTERN)
-    name: str | None = Field(None, min_length=1)
-    password: str = Field(..., min_length=8, max_length=128)
-
-
-class LoginRequest(BaseModel):
-    """Credential body; `remember` stretches the session to 30 days."""
-
-    email: str = Field(..., pattern=EMAIL_PATTERN)
-    password: str = Field(..., min_length=1, max_length=128)
-    remember: bool = Field(False, description="Extend the session to 30 days instead of the default week.")
-
-
-class InviteRequest(BaseModel):
-    """Invite creation body."""
-
-    email: str = Field(..., pattern=EMAIL_PATTERN)
-    name: str | None = Field(None, min_length=1)
-    role: UserRole = "member"
-
-
-class AcceptInviteRequest(BaseModel):
-    """Invite redemption body."""
-
-    token: str = Field(..., min_length=1)
-    name: str | None = Field(None, min_length=1)
-    password: str = Field(..., min_length=8, max_length=128)
-
-
-class SetRoleRequest(BaseModel):
-    """Role-change body."""
-
-    role: UserRole
-
-
-class ChangePasswordRequest(BaseModel):
-    """Password-rotation body."""
-
-    current_password: str = Field(..., min_length=1, max_length=128)
-    new_password: str = Field(..., min_length=8, max_length=128)
-
-
-class UserResponse(BaseModel):
-    """Client-safe user ledger shape (no hash, no internals)."""
-
-    user_id: str
-    email: str
-    name: str | None = None
-    role: UserRole
-    org_id: str = "default"
-    disabled: bool = False
-    created_at: datetime
-    last_login_at: datetime | None = None
-
-
-class UserListResponse(BaseModel):
-    """User ledger listing."""
-
-    users: list[UserResponse]
-
-
-class AuthMeResponse(BaseModel):
-    """Caller identity plus effective scopes."""
-
-    user: UserResponse
-    scopes: list[str] = Field(default_factory=list)
-
-
-class CreateInviteResponse(BaseModel):
-    """Issued invite plus its raw token (shown once)."""
-
-    invite_id: str
-    email: str
-    role: UserRole
-    token: str = Field(..., description="Raw invite token, shown once. Accept via POST /auth/accept.")
-    expires_at: datetime
-
-
-class InviteListResponse(BaseModel):
-    """Pending invites (never token hashes)."""
-
-    invites: list[Invite]
-
-
-class WsTicketResponse(BaseModel):
-    """Single-use websocket ticket, valid 60s."""
-
-    ticket: str = Field(..., description="Single-use websocket ticket, valid 60s.")
-    expires_in: int = 60
-
-
-class AuthEventListResponse(BaseModel):
-    """Recent audit events, newest first."""
-
-    events: list[AuthEvent]
+# Canonical definitions live in `schemas.AuthContract`; these aliases keep the
+# handler bodies readable and make the move reviewable as pure relocation.
+SignupRequest = AuthContract.SignupRequest
+LoginRequest = AuthContract.LoginRequest
+InviteRequest = AuthContract.InviteRequest
+AcceptInviteRequest = AuthContract.AcceptInviteRequest
+SetRoleRequest = AuthContract.SetRoleRequest
+ChangePasswordRequest = AuthContract.ChangePasswordRequest
+UserResponse = AuthContract.UserResponse
+UserListResponse = AuthContract.UserListResponse
+AuthMeResponse = AuthContract.AuthMeResponse
+LoginResponse = AuthContract.LoginResponse
+CreateInviteResponse = AuthContract.CreateInviteResponse
+InviteListResponse = AuthContract.InviteListResponse
+WsTicketResponse = AuthContract.WsTicketResponse
+AuthEventListResponse = AuthContract.AuthEventListResponse
 
 
 # -- seams --------------------------------------------------------------------
@@ -158,6 +62,7 @@ def client_ip(request: Request) -> str:
 
 
 ServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_service])]
+EnvDep = Annotated[Environment, Depends(Provide[VoiceAIContainer.environment])]
 
 
 @inject
@@ -171,27 +76,73 @@ def _to_http(exc: AppError) -> JSONResponse:
     return error_response(exc)
 
 
-def _set_session_cookie(response: Response, token: str, ttl_s: int) -> None:
-    """Attach the opaque session cookie (verbatim flags, bridge-sourced)."""
+def _cookie_flags(env: Environment) -> dict[str, object]:
+    """Resolve the session-cookie flags from the environment (T2 owns the knobs).
+
+    Args:
+        env: The process configuration carrying `cookie_secure*`/`cookie_domain`.
+
+    Returns:
+        The `secure`/`samesite`/`domain` kwargs for `set_cookie` (`domain=None`
+        keeps the host-only behavior when no domain is configured).
+    """
+    return {
+        "secure": env.cookie_secure_effective,
+        "samesite": env.cookie_samesite,
+        "domain": env.cookie_domain or None,
+    }
+
+
+def _set_session_cookie(response: Response, token: str, ttl_s: int, env: Environment) -> None:
+    """Attach the opaque legacy session cookie (flags from `Environment`, T2)."""
     response.set_cookie(
         C.SESSION_COOKIE,
         token,
         max_age=ttl_s,
         httponly=True,
-        secure=COOKIE_SECURE,
-        samesite=COOKIE_SAMESITE,  # type: ignore[arg-type]  # why: bridge reads the legacy env string, as before
         path="/",
+        **_cookie_flags(env),  # type: ignore[arg-type]  # why: flag mapping is exact per _cookie_flags
     )
 
 
-def _clear_session_cookie(response: Response) -> None:
-    """Drop the session cookie (verbatim path)."""
+def _set_refresh_cookie(response: Response, token: str, ttl_s: int, env: Environment) -> None:
+    """Attach the opaque refresh cookie (httpOnly, same flags as the session cookie)."""
+    response.set_cookie(
+        C.REFRESH_COOKIE,
+        token,
+        max_age=ttl_s,
+        httponly=True,
+        path="/",
+        **_cookie_flags(env),  # type: ignore[arg-type]  # why: flag mapping is exact per _cookie_flags
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    """Drop both auth cookies (verbatim paths)."""
     response.delete_cookie(C.SESSION_COOKIE, path="/")
+    response.delete_cookie(C.REFRESH_COOKIE, path="/")
 
 
 def _me_response(user: User, scopes: list[str]) -> AuthMeResponse:
     """Shape the caller-identity payload clients pin."""
     return AuthMeResponse(user=UserResponse(**public_user(user)), scopes=scopes)
+
+
+def _login_response(user: User, scopes: list[str], access_token: str, expires_in: int) -> LoginResponse:
+    """Shape the password-flow answer: identity plus the JWT pair metadata."""
+    return LoginResponse(
+        user=UserResponse(**public_user(user)),
+        scopes=scopes,
+        access_token=access_token,
+        token_type=C.BEARER_SCHEME,
+        expires_in=expires_in,
+    )
+
+
+def _pair_cookies(result: Response, tokens: SessionTokens, *, remember: bool, env: Environment) -> None:
+    """Attach the legacy session cookie plus the refresh cookie (dual-write, T2)."""
+    _set_session_cookie(result, tokens.legacy_token, C.REMEMBER_TTL_S if remember else C.SESSION_TTL_S, env)
+    _set_refresh_cookie(result, tokens.refresh_token, env.jwt_refresh_ttl_s, env)
 
 
 def _session_scopes(user: User) -> list[str]:
@@ -211,39 +162,55 @@ PrincipalDep = Annotated[Principal, Depends(get_principal)]
 # -- routes -------------------------------------------------------------------
 
 
-@router.post("/signup", status_code=201)
+@router.post("/signup", status_code=201, response_model=AuthContract.LoginResponse)
 @inject
-async def signup(payload: SignupRequest, service: ServiceDep) -> JSONResponse:
+async def signup(payload: SignupRequest, service: ServiceDep, env: EnvDep) -> JSONResponse:
     """Register the first user (owner); later signups need an invite."""
     try:
-        user, token = await service.signup(payload.email, payload.name, payload.password)
+        user, tokens = await service.signup(payload.email, payload.name, payload.password)
     except AppError as exc:
         return _to_http(exc)
     get_logger("auth").info("Owner signed up: %s", user.email)  # TODO(spec-0005): drop the email, log the user_id
-    result = success_response(UserResponse(**public_user(user)), status_code=201)
-    _set_session_cookie(result, token, C.SESSION_TTL_S)
+    result = success_response(
+        _login_response(user, _session_scopes(user), tokens.access_token, env.jwt_access_ttl_s),
+        status_code=201,
+    )
+    _pair_cookies(result, tokens, remember=False, env=env)
     return result
 
 
-@router.post("/login")
+@router.post("/login", response_model=AuthContract.LoginResponse)
 @inject
-async def login(payload: LoginRequest, request: Request, service: ServiceDep) -> JSONResponse:
-    """Check credentials, mint a session cookie, return the caller identity."""
+async def login(payload: LoginRequest, request: Request, service: ServiceDep, env: EnvDep) -> JSONResponse:
+    """Check credentials, set both cookies, return identity plus the access token."""
     try:
-        user, token = await service.login(
+        user, tokens = await service.login(
             payload.email, payload.password, payload.remember, client_ip=client_ip(request)
         )
     except AppError as exc:
         return _to_http(exc)
-    result = success_response(_me_response(user, _session_scopes(user)))
-    _set_session_cookie(result, token, C.REMEMBER_TTL_S if payload.remember else C.SESSION_TTL_S)
+    result = success_response(_login_response(user, _session_scopes(user), tokens.access_token, env.jwt_access_ttl_s))
+    _pair_cookies(result, tokens, remember=payload.remember, env=env)
+    return result
+
+
+@router.post("/refresh", response_model=AuthContract.LoginResponse)
+@inject
+async def refresh(request: Request, service: ServiceDep, env: EnvDep) -> JSONResponse:
+    """Rotate the refresh cookie into a fresh pair (single-use rotation)."""
+    try:
+        user, tokens = await service.refresh(request.cookies.get(C.REFRESH_COOKIE), client_ip=client_ip(request))
+    except AppError as exc:
+        return _to_http(exc)
+    result = success_response(_login_response(user, _session_scopes(user), tokens.access_token, env.jwt_access_ttl_s))
+    _pair_cookies(result, tokens, remember=True, env=env)
     return result
 
 
 @router.post("/logout")
 @inject
 async def logout(request: Request, service: ServiceDep) -> JSONResponse:
-    """Revoke the session cookie's token (anonymous logout still clears it)."""
+    """Revoke both cookies' tokens (anonymous logout still clears them)."""
     try:
         principal = await service.authenticate(
             request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", "")
@@ -251,15 +218,19 @@ async def logout(request: Request, service: ServiceDep) -> JSONResponse:
     except InvalidCredentialsError:
         principal = None
     try:
-        await service.logout(request.cookies.get(C.SESSION_COOKIE), principal)
+        await service.logout(
+            request.cookies.get(C.SESSION_COOKIE),
+            request.cookies.get(C.REFRESH_COOKIE),
+            principal,
+        )
     except AppError as exc:
         return _to_http(exc)
     result = success_response(dict(C.OK_BODY))
-    _clear_session_cookie(result)
+    _clear_auth_cookies(result)
     return result
 
 
-@router.get("/me")
+@router.get("/me", response_model=AuthContract.AuthMeResponse)
 @inject
 async def me(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
     """Return the session caller's identity (keys read 401 here)."""
@@ -312,16 +283,19 @@ async def delete_invite(invite_id: str, principal: PrincipalDep, service: Servic
     return success_response(dict(C.OK_BODY))
 
 
-@router.post("/accept", status_code=201)
+@router.post("/accept", status_code=201, response_model=AuthContract.LoginResponse)
 @inject
-async def accept_invite(payload: AcceptInviteRequest, service: ServiceDep) -> JSONResponse:
-    """Redeem an invite token into a user plus a first session cookie."""
+async def accept_invite(payload: AcceptInviteRequest, service: ServiceDep, env: EnvDep) -> JSONResponse:
+    """Redeem an invite token into a user plus a first token pair."""
     try:
-        user, token = await service.accept_invite(payload.token, payload.name, payload.password)
+        user, tokens = await service.accept_invite(payload.token, payload.name, payload.password)
     except AppError as exc:
         return _to_http(exc)
-    result = success_response(_me_response(user, _session_scopes(user)), status_code=201)
-    _set_session_cookie(result, token, C.SESSION_TTL_S)
+    result = success_response(
+        _login_response(user, _session_scopes(user), tokens.access_token, env.jwt_access_ttl_s),
+        status_code=201,
+    )
+    _pair_cookies(result, tokens, remember=False, env=env)
     return result
 
 
@@ -364,21 +338,22 @@ async def delete_user(user_id: str, principal: PrincipalDep, service: ServiceDep
 @inject
 async def change_password(
     payload: ChangePasswordRequest,
-    request: Request,
     principal: PrincipalDep,
     service: ServiceDep,
+    env: EnvDep,
 ) -> JSONResponse:
-    """Rotate the caller's password, keeping only the current session."""
+    """Rotate the caller's password, re-issuing their cookies (all else dies)."""
     try:
-        await service.change_password(
+        tokens = await service.change_password(
             principal,
             payload.current_password,
             payload.new_password,
-            request.cookies.get(C.SESSION_COOKIE),
         )
     except AppError as exc:
         return _to_http(exc)
-    return success_response(dict(C.OK_BODY))
+    result = success_response(dict(C.OK_BODY))
+    _pair_cookies(result, tokens, remember=False, env=env)
+    return result
 
 
 @router.post("/ws-ticket")

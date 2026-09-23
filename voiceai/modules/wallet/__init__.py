@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING
 
 from voiceai.modules import ModuleDef
 from voiceai.modules.wallet.controller import router, templates_router, wallet_router
-from voiceai.modules.wallet.models import LedgerEntry, Template, Wallet
+from voiceai.modules.wallet.models import LedgerEntry, Wallet
 from voiceai.modules.wallet.repository import MongoWalletRepository, WalletRepository
+from voiceai.modules.wallet.schemas import WalletContract
 from voiceai.modules.wallet.service import WalletService
 
 if TYPE_CHECKING:
@@ -17,8 +18,8 @@ __all__ = [
     "LedgerEntry",
     "MODULE",
     "MongoWalletRepository",
-    "Template",
     "Wallet",
+    "WalletContract",
     "WalletRepository",
     "WalletService",
     "router",

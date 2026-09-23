@@ -91,6 +91,7 @@ ERROR_KEY_DETAILS: Final[str] = "details"
 
 # --- HTTP status codes ----------------------------------------------------------------------
 HTTP_OK: Final[int] = 200
+HTTP_CREATED: Final[int] = 201
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_UNAUTHORIZED: Final[int] = 401
 HTTP_FORBIDDEN: Final[int] = 403

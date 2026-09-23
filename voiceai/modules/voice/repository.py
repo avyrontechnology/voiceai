@@ -100,9 +100,7 @@ class VoicePlaceCallRepository:
         Returns:
             Every active partner record.
         """
-        page: Page[TalkoPartnerConfig] = await self._partners.list(
-            PaginationParams(page=1, page_size=100)
-        )
+        page: Page[TalkoPartnerConfig] = await self._partners.list(PaginationParams(page=1, page_size=100))
         return list(page.items)
 
     async def delete_partner(self, partner_id: str) -> bool:

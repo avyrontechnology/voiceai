@@ -20,7 +20,10 @@ from voiceai.modules.voice.constants import (
     SEQUENCE_ID_KEY,
     TURN_ID_KEY,
 )
-from voiceai.modules.voice.models import TalkoPartnerConfig, TalkoPartnerView, TranscriberEvent, TurnMeta, WsDataPacket
+from voiceai.modules.voice.models import TalkoPartnerConfig, TranscriberEvent, TurnMeta, WsDataPacket
+from voiceai.modules.voice.schemas import VoiceContract
+
+TalkoPartnerView = VoiceContract.TalkoPartnerView
 
 __all__ = ["packet_view", "talko_partner_view", "transcriber_event_view", "turn_meta_from_meta_info"]
 

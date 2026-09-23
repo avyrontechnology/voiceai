@@ -1,10 +1,14 @@
-"""Wallet and ledger models."""
+"""Wallet and ledger documents (T5 greenfield: persisted shapes only).
+
+Wire DTOs (requests, responses, template views) live in `schemas.WalletContract`;
+the template catalog seed lives in `templates.py`.
+"""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from voiceai.database.base import BaseFields
 
@@ -16,13 +20,6 @@ class Wallet(BaseFields):
     currency: str = "credits"
 
 
-class TopUpRequest(BaseModel):
-    """Request payload for topping up a wallet."""
-
-    amount_credits: float = Field(..., gt=0)
-    reason: str | None = None
-
-
 class LedgerEntry(BaseFields):
     """A single ledger entry for a wallet transaction."""
 
@@ -31,29 +28,16 @@ class LedgerEntry(BaseFields):
     reason: str | None = None
 
 
-class LedgerListResponse(BaseModel):
-    """Response payload for listing ledger entries."""
+class StoredTemplate(BaseFields):
+    """A seed agent template as stored (system of record: `agent_templates`).
 
-    entries: list[LedgerEntry]
-
-
-class TemplateSummary(BaseModel):
-    """Summary of a template without the full agent payload."""
+    The repository pins `id` to `template_id`. Field-for-field the seed shape in
+    `templates.py`, which remains the seed source — the seeder upserts those rows.
+    """
 
     template_id: str
-    name: str
-    industry: str
-    description: str
+    name: str = ""
+    industry: str = ""
+    description: str = ""
     languages: list[str] = Field(default_factory=list)
-
-
-class Template(TemplateSummary):
-    """A full template including the agent payload."""
-
-    agent_payload: dict[str, Any]
-
-
-class TemplateListResponse(BaseModel):
-    """Response payload for listing templates."""
-
-    templates: list[TemplateSummary]
+    agent_payload: dict[str, Any] = Field(default_factory=dict)  # why: template payloads are free-form JSON

@@ -1,22 +1,20 @@
-"""Invite schema: pending organization invites (spec 0005, C2).
+"""Invite schema: pending organization invites (spec 0005, C2; T2 greenfield).
 
-Moved VERBATIM from ``voiceai/platform/models.py``; timestamps ride
-``common.datetime_utils.utc_now``.
+Greenfield delta (T2): inherits :class:`voiceai.database.base.BaseFields`; the
+repository pins `id` to `invite_id`.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-
-from voiceai.common.datetime_utils import utc_now
+from voiceai.database.base import BaseFields
 from voiceai.modules.auth.models.user import UserRole
 
 __all__ = ["Invite"]
 
 
-class Invite(BaseModel):
+class Invite(BaseFields):
     """Pending organization invite."""
 
     invite_id: str
@@ -26,5 +24,3 @@ class Invite(BaseModel):
     token_hash: str
     expires_at: datetime
     accepted: bool = False
-    created_by: str | None = None
-    created_at: datetime = Field(default_factory=utc_now)

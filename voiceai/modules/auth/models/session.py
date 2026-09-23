@@ -1,7 +1,8 @@
-"""Session schema: server-side session records (spec 0005, C2).
+"""Session schema: server-side session records (spec 0005, C2; T2 greenfield).
 
-Moved VERBATIM from ``voiceai/platform/models.py``; timestamps ride
-``common.datetime_utils.utc_now``.
+Greenfield deltas (T2): inherits :class:`voiceai.database.base.BaseFields`; the
+repository pins `id` to `token_hash`. `kind` gains ``refresh`` — opaque rotating
+refresh tokens (the JWT access token itself is stateless and never stored).
 """
 
 from __future__ import annotations
@@ -9,19 +10,23 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from voiceai.database.base import BaseFields
 
-from voiceai.common.datetime_utils import utc_now
+__all__ = ["SessionKind", "SessionRecord"]
 
-__all__ = ["SessionRecord"]
+#: Session-record kinds on the shared ledger: login sessions, single-use ws
+#: tickets, and opaque JWT refresh tokens.
+SessionKind = Literal["session", "ws-ticket", "refresh"]
 
 
-class SessionRecord(BaseModel):
+class SessionRecord(BaseFields):
     """Server-side session record keyed by token hash."""
 
     token_hash: str
     user_id: str
     org_id: str = "default"
-    kind: Literal["session", "ws-ticket"] = "session"
-    created_at: datetime = Field(default_factory=utc_now)
+    kind: SessionKind = "session"
     expires_at: datetime
+    #: JWT revocation stamp copied from the user row at mint; a refresh whose stamp
+    #: trails the row was rotated out by a password change or logout-all.
+    token_version: int = 0

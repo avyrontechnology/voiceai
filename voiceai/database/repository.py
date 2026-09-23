@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
+from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import NotFoundError
 from voiceai.common.pagination import Page, PaginationParams, paginate
@@ -58,6 +59,25 @@ class BaseRepository(Protocol[TModel]):
 
     async def soft_delete(self, item_id: str, *, user_id: str | None = None) -> bool:
         """Flag a document inactive, returning whether this call was the one that did it."""
+        ...
+
+    async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
+        """Return the active document where `field` equals `value`, or `None`.
+
+        Field names are code constants at call sites (never user input); backends serve
+        this from an index the owning module creates (see `scripts/migrate.py`).
+        """
+        ...
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
+        """Return active documents where `field` equals `value`, oldest first.
+
+        Args:
+            field: Document field to match (a code constant, never user input).
+            value: Exact match value.
+            limit: Maximum rows, clamped to `MAX_PAGE_SIZE`.
+        """
         ...
 
 
@@ -183,6 +203,19 @@ class InMemoryRepository(Generic[TModel]):
         """Return the live id-to-document map backing this collection."""
         # why: the in-memory backend stores driver-shaped dicts; only this class reads them.
         return self._db.collections.setdefault(self._collection.value, {})
+
+    async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
+        """Return the active document where `field` equals `value`, or `None`."""
+        for model in self._active_models():
+            if getattr(model, field, None) == value:
+                return model
+        return None
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
+        """Return active documents where `field` equals `value`, oldest first."""
+        matched = [model for model in self._active_models() if getattr(model, field, None) == value]
+        return matched[: max(0, min(limit, MAX_PAGE_SIZE))]
 
     def _active_models(self) -> Sequence[TModel]:
         """Return every non-deleted document of this collection, in insertion order.
@@ -334,3 +367,20 @@ class MotorRepository(Generic[TModel]):
             mutation["updated_by"] = user_id
         outcome = await self._collection.update_one({"_id": item_id, "is_active": True}, {"$set": mutation})
         return outcome.matched_count == 1
+
+    async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
+        """Return the active document where `field` equals `value`, or `None`."""
+        document = await self._collection.find_one({field: value, "is_active": True})
+        return self._to_model(document) if document is not None else None
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
+        """Return active documents where `field` equals `value`, oldest first."""
+        bounded = max(0, min(limit, MAX_PAGE_SIZE))
+        window = (
+            await self._collection.find({field: value, "is_active": True})
+            .sort([("created_at", 1), ("_id", 1)])
+            .limit(bounded)
+            .to_list(length=bounded)
+        )
+        return [self._to_model(document) for document in window]

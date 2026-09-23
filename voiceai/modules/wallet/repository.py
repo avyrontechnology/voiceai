@@ -1,4 +1,4 @@
-"""Wallet storage repository interfaces and implementations."""
+"""Wallet storage repository interfaces and implementations (T5b: templates in DB)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from typing import Protocol
 
 from voiceai.common.pagination import PaginationParams
 from voiceai.database.repository import BaseRepository
-from voiceai.modules.wallet.models import LedgerEntry, Wallet
+from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
 
 
 class WalletRepository(Protocol):
-    """Storage adapter for wallet and ledger."""
+    """Storage adapter for wallet, ledger, and the seed template catalog."""
 
     async def get_wallet(self) -> Wallet:
         """Get the singleton wallet instance."""
@@ -28,13 +28,27 @@ class WalletRepository(Protocol):
         """List ledger entries with optional filtering by type."""
         ...
 
+    async def list_templates(self) -> list[StoredTemplate]:
+        """List every stored seed template, oldest first."""
+        ...
+
+    async def get_template(self, template_id: str) -> StoredTemplate | None:
+        """Return the stored template with this id, or `None`."""
+        ...
+
 
 class MongoWalletRepository:
     """MongoDB implementation of WalletRepository."""
 
-    def __init__(self, wallet_repo: BaseRepository[Wallet], ledger_repo: BaseRepository[LedgerEntry]) -> None:
+    def __init__(
+        self,
+        wallet_repo: BaseRepository[Wallet],
+        ledger_repo: BaseRepository[LedgerEntry],
+        template_repo: BaseRepository[StoredTemplate],
+    ) -> None:
         self._wallet = wallet_repo
         self._ledger = ledger_repo
+        self._templates = template_repo
 
     async def get_wallet(self) -> Wallet:
         """Get the singleton wallet instance, creating it if necessary."""
@@ -63,3 +77,18 @@ class MongoWalletRepository:
             entries = [e for e in entries if e.type == entry_type]
         # Reverse to get newest first (matching old legacy behavior)
         return list(reversed(entries))
+
+    async def list_templates(self) -> list[StoredTemplate]:
+        """List every stored seed template, oldest first."""
+        items: list[StoredTemplate] = []
+        page_number = 1
+        while True:
+            page = await self._templates.list(PaginationParams(page=page_number, page_size=100))
+            items.extend(page.items)
+            if not page.has_next:
+                return items
+            page_number += 1
+
+    async def get_template(self, template_id: str) -> StoredTemplate | None:
+        """Return the stored template with this id, or `None`."""
+        return await self._templates.get(template_id)

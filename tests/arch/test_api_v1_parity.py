@@ -68,10 +68,15 @@ def _container_for(env: Environment, store: Any) -> VoiceAIContainer:
         store: The `MemoryStore` the cut-over controller resolves.
 
     Returns:
-        A container whose auth store binding serves `store`.
+        A container whose auth store and service bindings serve `store` (the
+        service carries test JWT settings — password flows mint pairs).
     """
+    from voiceai.modules.auth.service import AuthService
+    from voiceai.modules.auth.tests.conftest import _JWT
+
     container = build_container(env)
     container.auth_store.override(providers.Object(store))
+    container.auth_service.override(providers.Object(AuthService(store, jwt=_JWT)))
     return container
 
 

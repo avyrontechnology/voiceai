@@ -1,8 +1,10 @@
-"""Store port the auth service depends on (AGENTS.md rule 9).
+"""Store port the auth service depends on (AGENTS.md rule 9; T2 greenfield).
 
-``AuthStorePort`` names exactly the store methods the auth domain touches; both legacy
-stores (``MemoryStore`` today, ``RedisStore`` in production — a subclass of the
-former) satisfy it structurally without importing this package.
+``AuthStorePort`` names exactly the store methods the auth domain touches. T2 adds
+indexed lookups (`get_api_key_by_hash`, `get_invite_by_token_hash`) and the
+revocation pair (`save_revoked`, `is_revoked`) so no flow scans a collection:
+the Mongo store answers from indexes, the legacy stores from direct keys (with
+two documented scans that die at the T7 cutover).
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
 from voiceai.modules.auth.models.invite import Invite
+from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.session import SessionRecord
 from voiceai.modules.auth.models.user import User
 
@@ -70,6 +73,10 @@ class AuthStorePort(Protocol):
         """Return the invite with this id, or `None`."""
         ...
 
+    async def get_invite_by_token_hash(self, token_hash: str) -> Invite | None:
+        """Return the live invite with this token digest, or `None` (indexed, no scan)."""
+        ...
+
     async def list_invites(self) -> list[Invite]:
         """Return every invite."""
         ...
@@ -80,6 +87,10 @@ class AuthStorePort(Protocol):
 
     async def list_api_keys(self) -> list[ApiKey]:
         """Return every API key."""
+        ...
+
+    async def get_api_key_by_hash(self, key_hash: str) -> ApiKey | None:
+        """Return the API key with this secret hash, or `None` (indexed, no scan)."""
         ...
 
     async def save_api_key(self, key: ApiKey) -> None:
@@ -96,6 +107,14 @@ class AuthStorePort(Protocol):
 
     async def list_user_sessions(self, user_id: str) -> list[SessionRecord]:
         """Return every session record of a user (password-change sweep)."""
+        ...
+
+    async def save_revoked(self, token: RevokedToken) -> None:
+        """Deny one access token by its JWT id (single-logout path)."""
+        ...
+
+    async def is_revoked(self, jti: str) -> bool:
+        """Report whether a JWT id was denied (cache-fast, store-backed)."""
         ...
 
 

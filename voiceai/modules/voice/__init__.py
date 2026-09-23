@@ -27,15 +27,8 @@ from voiceai.modules.voice.errors import (
     VoiceError,
 )
 from voiceai.modules.voice.models import (
-    ConnectTalkoPartnerRequest,
-    CreateTalkoPartnerRequest,
-    PlaceCallRequest,
     PlacedCall,
     TalkoPartnerConfig,
-    TalkoPartnerListResponse,
-    TalkoPartnerPreview,
-    TalkoPartnerView,
-    UpdateTalkoPartnerRequest,
 )
 from voiceai.modules.voice.ports import (
     ActiveTranscriberProbePort,
@@ -55,6 +48,7 @@ from voiceai.modules.voice.ports import (
 )
 from voiceai.modules.voice.ports.outbound import DialOutcome, OutboundDialPort, PartnerPreview
 from voiceai.modules.voice.repository import PlaceCallRepository, VoicePlaceCallRepository
+from voiceai.modules.voice.schemas import VoiceContract
 from voiceai.modules.voice.service import VoiceCallService
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only; the container arrives at call time
@@ -69,7 +63,6 @@ MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router)
 
 __all__ = [
     "MODULE",
-    "ConnectTalkoPartnerRequest",
     "ActiveTranscriberProbePort",
     "AgentBrainPort",
     "CallInputPort",
@@ -88,22 +81,17 @@ __all__ = [
     "SynthesisPort",
     "DialOutcome",
     "PlaceCallError",
-    "PlaceCallRequest",
     "PlacedCall",
     "TalkoPartnerConfig",
     "TalkoPartnerExistsError",
-    "TalkoPartnerListResponse",
-    "TalkoPartnerPreview",
-    "TalkoPartnerView",
     "TranscriptionError",
     "TranscriptionPoolPort",
     "TranscriptionPort",
-    "CreateTalkoPartnerRequest",
     "PlaceCallRepository",
     "UnknownComponentLabelError",
     "UnknownTalkoPartnerError",
-    "UpdateTalkoPartnerRequest",
     "VoiceCallService",
+    "VoiceContract",
     "VoicePlaceCallRepository",
     "VoiceComponentError",
     "VoiceError",

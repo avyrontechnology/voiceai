@@ -20,6 +20,18 @@ class Collections(str, Enum):
     WALLETS = "wallets"
     LEDGER = "ledger"
     TALKO_PARTNERS = "talko_partners"
+    #: Seed agent-template catalog (T5b: templates.py is the seed source).
+    AGENT_TEMPLATES = "agent_templates"
+    #: Auth collections (greenfield T0 registry; stores land in the auth turn T2).
+    #: Sessions-refresh holds opaque rotating refresh tokens (TTL on `expires_at`);
+    #: revoked-tokens holds access-token denylist entries (TTL = access TTL).
+    SESSIONS = "sessions"
+    INVITES = "invites"
+    AUTH_EVENTS = "auth_events"
+    API_KEYS = "api_keys"
+    REVOKED_TOKENS = "revoked_tokens"
+    #: Agent prompt blobs (greenfield T3 replaces CWD-relative `agent_data/` files).
+    AGENT_PROMPTS = "agent_prompts"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

@@ -26,18 +26,20 @@ from voiceai.modules.voice.errors import PlaceCallError, TalkoPartnerExistsError
 from voiceai.modules.voice.exceptions import ensure_recipient_dialable, ensure_talko_partner_known
 from voiceai.modules.voice.helpers import talko_partner_view
 from voiceai.modules.voice.models import (
-    ConnectTalkoPartnerRequest,
-    CreateTalkoPartnerRequest,
-    PlaceCallRequest,
     PlacedCall,
     TalkoPartnerConfig,
-    TalkoPartnerPreview,
-    TalkoPartnerView,
-    UpdateTalkoPartnerRequest,
 )
 from voiceai.modules.voice.ports.outbound import OutboundDialPort
 from voiceai.modules.voice.repository import PlaceCallRepository
+from voiceai.modules.voice.schemas import VoiceContract
 from voiceai.modules.voice.session.prompts import prompt_responses_from_store
+
+ConnectTalkoPartnerRequest = VoiceContract.ConnectTalkoPartnerRequest
+CreateTalkoPartnerRequest = VoiceContract.CreateTalkoPartnerRequest
+PlaceCallRequest = VoiceContract.PlaceCallRequest
+TalkoPartnerPreview = VoiceContract.TalkoPartnerPreview
+TalkoPartnerView = VoiceContract.TalkoPartnerView
+UpdateTalkoPartnerRequest = VoiceContract.UpdateTalkoPartnerRequest
 
 __all__ = [
     "AssistantManagerFactory",
@@ -354,9 +356,7 @@ class VoiceCallService:
         repo = self._require_place_store()
         record = await repo.get_partner(partner_id)
         if record is None:
-            raise NotFoundError(
-                f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id}
-            )
+            raise NotFoundError(f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id})
         return talko_partner_view(record)
 
     async def list_partners(self) -> list[TalkoPartnerView]:
@@ -369,9 +369,7 @@ class VoiceCallService:
         records = await repo.list_partners()
         return [talko_partner_view(record) for record in records]
 
-    async def update_partner(
-        self, *, partner_id: str, payload: UpdateTalkoPartnerRequest
-    ) -> TalkoPartnerView:
+    async def update_partner(self, *, partner_id: str, payload: UpdateTalkoPartnerRequest) -> TalkoPartnerView:
         """Patch a partner record; empty key keeps the stored secret (spec 0008).
 
         Args:
@@ -387,9 +385,7 @@ class VoiceCallService:
         repo = self._require_place_store()
         record = await repo.get_partner(partner_id)
         if record is None:
-            raise NotFoundError(
-                f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id}
-            )
+            raise NotFoundError(f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id})
         if payload.display_name is not None:
             record.display_name = payload.display_name
         if payload.talko_api_base_url is not None:
@@ -423,9 +419,7 @@ class VoiceCallService:
         repo = self._require_place_store()
         deleted = await repo.delete_partner(partner_id)
         if not deleted:
-            raise NotFoundError(
-                f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id}
-            )
+            raise NotFoundError(f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id})
         return True
 
     def _require_place_store(self) -> PlaceCallRepository:
@@ -447,14 +441,13 @@ class VoiceCallService:
             PlaceCallError: Unwired outbound port or misconfigured service base.
         """
         from voiceai.modules.voice.errors import PlaceCallError
+
         if self._outbound is None:
             raise PlaceCallError("Outbound calling is not wired for this service.")
         base = (self._talko_service_base_url or "").rstrip("/")
         if not base:
             raise PlaceCallError("Talko service base URL is not configured.")
-        preview = await self._outbound.fetch_partner_dids(
-            talko_api_key=talko_api_key, talko_api_base_url=base
-        )
+        preview = await self._outbound.fetch_partner_dids(talko_api_key=talko_api_key, talko_api_base_url=base)
         return TalkoPartnerPreview(
             partner_id=preview.get("partner_id"),
             dids=list(preview.get("dids") or []),
@@ -481,9 +474,7 @@ class VoiceCallService:
         if not partner_id:
             from voiceai.modules.voice.errors import PlaceCallError
 
-            raise PlaceCallError(
-                "Talko returned no DIDs to derive a partner from; pass partner_id explicitly."
-            )
+            raise PlaceCallError("Talko returned no DIDs to derive a partner from; pass partner_id explicitly.")
         self._require_place_store()
         existing = await self._place_repository.get_partner(partner_id)  # type: ignore[union-attr]
         if existing is None:
@@ -524,9 +515,7 @@ class VoiceCallService:
         self._require_place_store()
         record = await self._place_repository.get_partner(partner_id)  # type: ignore[union-attr]
         if record is None:
-            raise NotFoundError(
-                f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id}
-            )
+            raise NotFoundError(f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id})
         preview = await self.preview_partner(talko_api_key=record.talko_api_key)
         if preview.dids:
             record.dids = list(record.dids) + [d for d in preview.dids if d not in record.dids]

@@ -68,6 +68,7 @@ class MemoryStore:
             "sessions": {},
             "invites": {},
             "auth_events": {},
+            "revoked": {},
         }
         self._wallet = Wallet().model_dump(mode="json")
         self._ledger: List[Dict[str, Any]] = []
@@ -339,6 +340,13 @@ class MemoryStore:
     async def save_api_key(self, key: ApiKey) -> None:
         self._put("api_keys", key.key_id, key.model_dump(mode="json"))
 
+    async def get_api_key_by_hash(self, key_hash: str) -> Optional[ApiKey]:
+        """Return the API key with this secret hash (T2 port; in-process scan)."""
+        for raw in self._all("api_keys"):
+            if raw.get("key_hash") == key_hash:
+                return ApiKey(**raw)
+        return None
+
     async def list_api_keys(self) -> List[ApiKey]:
         return [ApiKey(**raw) for raw in self._all("api_keys")]
 
@@ -413,6 +421,13 @@ class MemoryStore:
         raw = self._get("invites", invite_id)
         return Invite(**raw) if raw else None
 
+    async def get_invite_by_token_hash(self, token_hash: str) -> Optional[Invite]:
+        """Return the invite with this token digest (T2 port; in-process scan)."""
+        for raw in self._all("invites"):
+            if raw.get("token_hash") == token_hash:
+                return Invite(**raw)
+        return None
+
     async def list_invites(self) -> List[Invite]:
         return [Invite(**raw) for raw in self._all("invites")]
 
@@ -429,11 +444,19 @@ class MemoryStore:
         items.sort(key=lambda e: e.created_at, reverse=True)
         return items[:limit]
 
+    async def save_revoked(self, token: Any) -> None:
+        """Deny one access token by JWT id (T2 port; `Any` avoids a legacy→modules import)."""
+        self._put("revoked", token.jti, {"jti": token.jti, "expires_at": token.expires_at})
+
+    async def is_revoked(self, jti: str) -> bool:
+        """Return whether a JWT id was denied (T2 port)."""
+        return self._get("revoked", jti) is not None
+
     # -- workspace reset ---------------------------------------------------------------------
     # Auth collections (users/sessions/invites/auth_events) are NEVER wiped:
     # clearing them would brick every login with no recovery path.
 
-    _AUTH_COLLECTIONS = ("users", "sessions", "invites", "auth_events")
+    _AUTH_COLLECTIONS = ("users", "sessions", "invites", "auth_events", "revoked")
 
     async def reset_platform(self) -> Dict[str, int]:
         cleared = {
@@ -764,6 +787,13 @@ class RedisStore(MemoryStore):
     async def save_api_key(self, key: ApiKey) -> None:
         await self._write("api_keys", key.key_id, key.model_dump(mode="json"))
 
+    async def get_api_key_by_hash(self, key_hash: str) -> Optional[ApiKey]:
+        """Return the API key with this secret hash (T2 port; legacy scan, dies at T7)."""
+        for raw in await self._list_collection("api_keys"):
+            if raw.get("key_hash") == key_hash:
+                return ApiKey(**raw)
+        return None
+
     async def list_api_keys(self) -> List[ApiKey]:
         return [ApiKey(**raw) for raw in await self._list_collection("api_keys")]
 
@@ -836,6 +866,13 @@ class RedisStore(MemoryStore):
         raw = await self._read("invites", invite_id)
         return Invite(**raw) if raw else None
 
+    async def get_invite_by_token_hash(self, token_hash: str) -> Optional[Invite]:
+        """Return the invite with this token digest (T2 port; legacy scan, dies at T7)."""
+        for raw in await self._list_collection("invites"):
+            if raw.get("token_hash") == token_hash:
+                return Invite(**raw)
+        return None
+
     async def list_invites(self) -> List[Invite]:
         return [Invite(**raw) for raw in await self._list_collection("invites")]
 
@@ -849,6 +886,31 @@ class RedisStore(MemoryStore):
         items = [AuthEvent(**raw) for raw in await self._list_collection("auth_events")]
         items.sort(key=lambda e: e.created_at, reverse=True)
         return items[:limit]
+
+    async def save_revoked(self, token: Any) -> None:
+        """Deny one access token by JWT id, expiring with the token (T2 port).
+
+        Ephemeral by design (TTL, not audit): the denylist entry dies with the
+        token it denies, so no reset/sweep logic ever touches it.
+        """
+        import json
+        from datetime import datetime, timezone
+
+        expires_at = token.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        ttl = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        if ttl <= 0:
+            return
+        await self._redis.set(
+            self._key("revoked", token.jti),
+            json.dumps({"jti": token.jti}),
+            ex=ttl,
+        )
+
+    async def is_revoked(self, jti: str) -> bool:
+        """Return whether a JWT id was denied (T2 port)."""
+        return await self._redis.get(self._key("revoked", jti)) is not None
 
     async def reset_platform(self) -> Dict[str, int]:
         cleared: Dict[str, int] = {}

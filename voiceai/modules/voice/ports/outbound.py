@@ -71,7 +71,6 @@ class OutboundDialPort(Protocol):
         """Queue one simulated call; progression continues in the background."""
         ...
 
-
     async def fetch_partner_dids(
         self,
         *,
@@ -80,6 +79,7 @@ class OutboundDialPort(Protocol):
     ) -> PartnerPreview:
         """Validate a partner key and fetch its DIDs from talko-service (spec 0009)."""
         ...
+
 
 class PartnerPreview(TypedDict, total=False):
     """Plain-data preview of a partner fetch for the service layer.

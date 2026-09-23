@@ -10,6 +10,9 @@ MODULE_NAME: Final[str] = "auth"
 #: Session cookie carrying the opaque session token.
 SESSION_COOKIE: Final[str] = "otoba_session"
 
+#: Refresh cookie carrying the opaque JWT refresh token (httpOnly, T2).
+REFRESH_COOKIE: Final[str] = "otoba_refresh"
+
 #: Session-record kinds on the shared session ledger.
 SESSION_KIND: Final[Literal["session"]] = "session"
 WS_TICKET_KIND: Final[Literal["ws-ticket"]] = "ws-ticket"
@@ -36,6 +39,14 @@ LOGIN_MAX_ATTEMPTS: Final[int] = 5
 #: Full keys read ``auth:throttle:{ip}``; values are ephemeral counters with a
 #: ``LOGIN_WINDOW_S`` TTL, not persisted models (no `Collections` entry).
 THROTTLE_KEY_PREFIX: Final[str] = "auth:throttle:"
+
+#: Redis key prefix for the JWT denylist cache (T2): ``auth:denied:{jti}`` holds
+#: ``"1"`` with the access token's remaining TTL. Ephemeral by design — the
+#: `revoked_tokens` collection is the truth, the cache is speed.
+DENYLIST_KEY_PREFIX: Final[str] = "auth:denied:"
+
+#: Authorization scheme for JWT access tokens on the wire.
+BEARER_SCHEME: Final[str] = "bearer"
 
 #: PBKDF2 iterations for password hashing (frozen by spec 0005 non-goals).
 PBKDF2_ITERATIONS: Final[int] = 600_000

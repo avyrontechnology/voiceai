@@ -1,9 +1,9 @@
-"""User schema: roles, scopes and the user record (spec 0005, C2).
+"""User schema: roles, scopes and the user record (spec 0005, C2; T2 greenfield).
 
-Moved VERBATIM from ``voiceai/platform/models.py`` (role literals and scope maps,
-then ``User``); only the shared helpers ride their canonical homes —
-``EMAIL_PATTERN`` from ``common.constants`` and timestamps from
-``common.datetime_utils.utc_now`` (semantically identical to the legacy ``utcnow``).
+Greenfield deltas (T2): inherits :class:`voiceai.database.base.BaseFields` (AGENTS.md
+rule 5 — every persisted document carries `id`/audit/soft-delete); the repository
+pins `id` to `user_id`, so identity is unchanged. `token_version` is the JWT
+revocation stamp, bumped on role change, password rotation and logout-all.
 """
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from voiceai.common.constants import EMAIL_PATTERN
-from voiceai.common.datetime_utils import utc_now
+from voiceai.database.base import BaseFields
 
 __all__ = [
     "ALL_SCOPES",
@@ -76,7 +76,7 @@ ROLE_SCOPES: dict[str, list[str]] = {
 ROLE_RANK: dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
 
 
-class User(BaseModel):
+class User(BaseFields):
     """Platform user with role and org."""
 
     user_id: str
@@ -86,5 +86,8 @@ class User(BaseModel):
     role: UserRole = "member"
     org_id: str = "default"
     disabled: bool = False
-    created_at: datetime = Field(default_factory=utc_now)
     last_login_at: datetime | None = None
+    #: JWT revocation stamp: access tokens carry it as `ver` and are rejected when it
+    #: trails the row. Bumped on role change, password rotation and logout-all, so one
+    #: write kills every outstanding access token within its (short) TTL.
+    token_version: int = 0

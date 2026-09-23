@@ -78,7 +78,6 @@ ENVIRON_FLAGGED_FILES = frozenset(
         "voiceai/modules/agents/brains/graph/routing.py",
         "voiceai/modules/agents/brains/knowledgebase.py",
         "voiceai/modules/agents/brains/simple.py",
-        "voiceai/modules/auth/adapters/cookies.py",
         "voiceai/modules/voice/asr/pool.py",
         "voiceai/modules/voice/asr/providers/assemblyai_transcriber.py",
         "voiceai/modules/voice/asr/providers/azure_transcriber.py",
@@ -127,7 +126,6 @@ CREATE_TASK_RESIDUAL_REASON = "spec-0001-P9 TaskRegistry burn-down"
 #: transcriber/synthesizer loops, telephony listeners, session loops).
 CREATE_TASK_FLAGGED_FILES = frozenset(
     {
-        "voiceai/modules/voice/adapters/outbound.py",
         "voiceai/modules/voice/asr/pool.py",
         "voiceai/modules/voice/asr/providers/assemblyai_transcriber.py",
         "voiceai/modules/voice/asr/providers/azure_transcriber.py",
@@ -165,7 +163,11 @@ CREATE_TASK_FLAGGED_FILES = frozenset(
 
 
 def _python_files() -> list[Path]:
-    """Return every guarded source file, skipping bytecode caches.
+    """Return every guarded source file, skipping bytecode caches and test trees.
+
+    Colocated `*/tests/*` trees are pinned by their own suites, not by these
+    guards: compat suites must wire legacy doubles (`MemoryStore`, `os.environ`
+    setup) to prove migration behavior, which production code must never do.
 
     Returns:
         Sorted list of ``*.py`` paths under the guard scopes.
@@ -177,7 +179,9 @@ def _python_files() -> list[Path]:
         assert scope.is_dir(), f"guard scope missing: {scope}"
     found: list[Path] = []
     for scope in GUARD_SCOPES:
-        found.extend(path for path in scope.rglob("*.py") if "__pycache__" not in path.parts)
+        found.extend(
+            path for path in scope.rglob("*.py") if "__pycache__" not in path.parts and "tests" not in path.parts
+        )
     return sorted(found)
 
 

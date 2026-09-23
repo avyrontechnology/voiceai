@@ -15,9 +15,9 @@ service contract (`DialOutcome`) survives unchanged.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
+from voiceai.core.resilience import TaskRegistry
 from voiceai.modules.voice.ports.outbound import DialOutcome, PartnerPreview
 from voiceai.platform.models import new_id as _legacy_new_id
 from voiceai.platform.simulation import (
@@ -38,10 +38,13 @@ __all__ = [
 ]
 
 
-#: Retained background simulated-call tasks (AGENTS.md §5: every `create_task`
-#: result is retained; the legacy runner this mirrors never cancelled them, so
-#: neither does this bridge — entries drop themselves on completion).
-_background_tasks: set[asyncio.Task[Any]] = set()
+#: Retained background simulated-call tasks (AGENTS.md §5) behind the one
+#: lifecycle primitive: entries drop themselves on completion (bounded by
+#: concurrent work), failures log with their stack, and `aclose()` cancels the
+#: living on shutdown. The legacy runner this mirrors never cancelled, so
+#: process-lifetime retention stays fire-and-forget until the runtime cutover
+#: wires the registry into lifespan shutdown.
+_background_tasks = TaskRegistry()
 
 
 async def dial_trunk_call(
@@ -136,6 +139,7 @@ async def start_simulated_call_background(
     from_number: str | None = None,
     variables: dict[str, Any] | None = None,
     delay_scale: float = 0.5,
+    tasks: TaskRegistry | None = None,
 ) -> DialOutcome:
     """Queue one simulated call and progress it in the background.
 
@@ -148,6 +152,8 @@ async def start_simulated_call_background(
         from_number: Caller DID override, if any.
         variables: Per-contact data carried onto the execution.
         delay_scale: Pacing scale for the background progression.
+        tasks: Registry owning the progression task; the module-global one when
+            `None` (quickstart/legacy callers outside container wiring).
 
     Returns:
         The queued-call outcome (the progression updates the legacy row, and
@@ -164,9 +170,10 @@ async def start_simulated_call_background(
     )
     store = _LegacyMemoryStore()
     await store.save_execution(execution)
-    task = asyncio.create_task(_legacy_progress_simulated_call(store, execution.execution_id, delay_scale))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    (tasks or _background_tasks).start(
+        _legacy_progress_simulated_call(store, execution.execution_id, delay_scale),
+        name=f"simulated-call-{execution.execution_id}",
+    )
     return DialOutcome(
         execution_id=execution.execution_id,
         status=execution.status.value,
@@ -180,7 +187,14 @@ class OutboundDialBridge:
 
     Stateless explicit binding so the container injects a typed object instead
     of a module; every method delegates verbatim (documented once, above).
+
+    Args:
+        tasks: Registry owning background progression tasks; the module-global
+            one when `None` (callers outside container wiring).
     """
+
+    def __init__(self, tasks: TaskRegistry | None = None) -> None:
+        self._tasks = tasks
 
     async def dial_trunk_call(
         self,
@@ -248,6 +262,7 @@ class OutboundDialBridge:
             from_number=from_number,
             variables=variables,
             delay_scale=delay_scale,
+            tasks=self._tasks,
         )
 
 

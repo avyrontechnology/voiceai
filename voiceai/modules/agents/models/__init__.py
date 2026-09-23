@@ -38,6 +38,10 @@ from voiceai.modules.agents.models.brains import (
     Node,
     SimpleLlmAgent,
 )
+
+# T3 storage envelopes import only `database.base`, so they cannot join the
+# agent↔tools cycle documented above — alphabetical placement stays load-safe.
+from voiceai.modules.agents.models.definition import AgentDefinition
 from voiceai.modules.agents.models.pipeline import (
     S2S_PROVIDER_CONFIGS,
     SYNTHESIZER_PROVIDER_CONFIGS,
@@ -60,6 +64,7 @@ from voiceai.modules.agents.models.pipeline import (
     Synthesizer,
     Transcriber,
 )
+from voiceai.modules.agents.models.prompts import AgentPrompts
 from voiceai.modules.agents.models.rag import (
     LanceDBProviderConfig,
     MongoDBProviderConfig,
@@ -81,7 +86,9 @@ __all__ = [
     "AGENT_WELCOME_MESSAGE",
     "S2S_PROVIDER_CONFIGS",
     "SYNTHESIZER_PROVIDER_CONFIGS",
+    "AgentDefinition",
     "AgentModel",
+    "AgentPrompts",
     "AgentRouteConfig",
     "AzureConfig",
     "CallEvent",

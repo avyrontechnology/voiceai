@@ -1,21 +1,17 @@
-"""Audit schema: auth event rows (spec 0005, C2).
+"""Audit schema: auth event rows (spec 0005, C2; T2 greenfield).
 
-Moved VERBATIM from ``voiceai/platform/models.py``; timestamps ride
-``common.datetime_utils.utc_now``.
+Greenfield delta (T2): inherits :class:`voiceai.database.base.BaseFields`; the
+repository pins `id` to `event_id`.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-
-from pydantic import BaseModel, Field
-
-from voiceai.common.datetime_utils import utc_now
+from voiceai.database.base import BaseFields
 
 __all__ = ["AuthEvent"]
 
 
-class AuthEvent(BaseModel):
+class AuthEvent(BaseFields):
     """One auth audit row."""
 
     event_id: str
@@ -23,4 +19,3 @@ class AuthEvent(BaseModel):
     user_id: str | None = None
     email: str | None = None
     detail: str | None = None
-    created_at: datetime = Field(default_factory=utc_now)

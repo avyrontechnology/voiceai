@@ -240,8 +240,7 @@ def validate_recipient_number(to_number: str) -> str:
         )
     if digits.startswith(INDIA_COUNTRY_CODE) and len(digits) != INDIA_FULL_LENGTH:
         raise ValueError(
-            f"to_number {to_number!r} looks like a truncated Indian mobile: "
-            f"need {INDIA_COUNTRY_CODE} + 10 digits."
+            f"to_number {to_number!r} looks like a truncated Indian mobile: need {INDIA_COUNTRY_CODE} + 10 digits."
         )
     return digits
 

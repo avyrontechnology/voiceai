@@ -21,7 +21,6 @@ from voiceai.modules.agents.service import AgentService
 MODULE: ModuleDef = ModuleDef(name=MODULE_NAME, router=router)
 
 __all__ = [
-    "CONTAINER_KEY_AGENT_DEFINITIONS",
     "MODULE",
     "AgentConfigInvalidError",
     "AgentDefinitionPort",

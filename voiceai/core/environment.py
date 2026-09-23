@@ -15,7 +15,7 @@ from typing import Any, Final, Literal
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from voiceai.common.constants import DEFAULT_LOG_LEVEL, SAFE_URL_SCHEMES
 from voiceai.common.errors import ConfigurationError
@@ -42,6 +42,11 @@ DEFAULT_DB_NAME: Final = "otoba"
 
 _FIELD_ALLOWED_ORIGINS: Final[str] = "allowed_origins"
 _FIELD_COOKIE_SECURE: Final[str] = "cookie_secure"
+_FIELD_COOKIE_SAMESITE: Final[str] = "cookie_samesite"
+_FIELD_JWT_PRIVATE_KEY: Final[str] = "jwt_private_key"
+_FIELD_JWT_PUBLIC_KEY: Final[str] = "jwt_public_key"
+_FIELD_JWT_ACCESS_TTL_S: Final[str] = "jwt_access_ttl_s"
+_FIELD_JWT_REFRESH_TTL_S: Final[str] = "jwt_refresh_ttl_s"
 _LIST_SEPARATOR: Final[str] = ","
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
@@ -50,6 +55,15 @@ _INVALID_VALUE_MESSAGE: Final[str] = "Invalid value for {path}"
 _INVALID_ORIGIN_MESSAGE: Final[str] = (
     "{path} entries must be exact http(s) origins (scheme://host[:port], "
     "no wildcard, no path); invalid entry: {entry!r}"
+)
+_INVALID_JWT_KEYS_MESSAGE: Final[str] = (
+    "{path} requires both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY set (PEM text), or neither (JWT flows stay dark)"
+)
+_INVALID_JWT_TTL_MESSAGE: Final[str] = "{path} must be a positive number of seconds"
+_INVALID_JWT_REFRESH_MESSAGE: Final[str] = "{path} must exceed JWT_ACCESS_TTL_S (refresh outlives access)"
+_INVALID_SAMESITE_MESSAGE: Final[str] = (
+    "{path} 'none' mandates the Secure cookie flag — set COOKIE_SECURE=1 (cross-site cookies are "
+    "dropped by browsers without it)"
 )
 _ORIGIN_WILDCARD: Final[str] = "*"
 _UNKNOWN_PATH: Final[str] = "UNKNOWN"
@@ -70,13 +84,25 @@ class Environment(BaseModel):
     app_env: Literal["dev", "staging", "prod"] = APP_ENV_DEV
     log_level: str = DEFAULT_LOG_LEVEL
     #: Empty disables every redis-backed feature (the container then registers `None`).
+    #: Legacy single-URL knob: the isolated `redis_*_url` fields below fall back to it,
+    #: so existing deployments keep working until they set three separate URLs.
     redis_url: str = ""
+    #: Isolated Redis URLs (greenfield split): cache holds TTL-only ephemera (session
+    #: cache, throttle counters, locks, pub/sub); broker/results back Celery. Each falls
+    #: back to `redis_url` when empty. Production sets three SEPARATE URLs — Upstash has
+    #: no `SELECT`, so isolation means separate databases, never DB indexes.
+    redis_cache_url: str = ""
+    redis_broker_url: str = ""
+    redis_result_url: str = ""
     #: Base URL of the talko-service deployment the outbound bridge dials and
     #: fetches partner DIDs through (spec 0009). Empty means outbound Talko
     #: features resolve per-request/per-record values only, never a default.
     talko_service_base_url: str = ""
     db_backend: Literal["memory", "mongo"] = DB_BACKEND_MEMORY
     db_url: str = ""
+    #: Preferred MongoDB connection string (Atlas `mongodb+srv://...`). Wins over `db_url`
+    #: when set; the T7 cutover makes this canonical and `db_url` the fallback.
+    mongo_url: str = ""
     db_name: str = DEFAULT_DB_NAME
     #: `ALLOWED_ORIGINS` as a comma-separated list of exact `scheme://host[:port]` origins.
     #: Wildcards and non-origin entries are rejected by the model validator on EVERY
@@ -85,6 +111,25 @@ class Environment(BaseModel):
     allowed_origins: tuple[str, ...] = ()
     #: Tri-state: `True`/`False` force the cookie flag, `None` defers to `app_env`.
     cookie_secure: bool | None = None
+    #: Cookie `Domain` (empty = host-only, the current behavior) and `SameSite` mode.
+    #: `none` mandates `Secure` — enforced by the model validator (fail closed), because
+    #: browsers drop cross-site cookies without it (the Vercel→droplet 401 loop).
+    cookie_domain: str = ""
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    #: Stateless JWT sessions (CTO decision): short-lived access tokens plus opaque
+    #: rotating refresh tokens. Keys are PEM text; both set or both empty (fail closed) —
+    #: empty keeps every JWT flow dark until the auth turn lands.
+    jwt_issuer: str = "otobaai"
+    jwt_audience: str = "otobaai-api"
+    jwt_access_ttl_s: int = 900
+    jwt_refresh_ttl_s: int = 30 * 24 * 3600
+    jwt_private_key: str = ""
+    jwt_public_key: str = ""
+    #: Blob store for prompts/audio/KB binaries (replaces CWD-relative `agent_data/`).
+    #: Empty disables it; the voice/agents turns wire the uploader.
+    blob_store_url: str = ""
+    blob_bucket: str = ""
+    blob_region: str = "ap-south-1"
     #: Cutover flag for the new-architecture voice WS route (spec 0004 B14): `False`
     #: (default) keeps ``/chat/v1/{agent_id}`` dark — the handler closes immediately —
     #: while quickstart stays the deployed entry. ``VOICE_WS_ENABLED`` in the environment.
@@ -109,6 +154,44 @@ class Environment(BaseModel):
         ensure_exact_origins(value)
         return value
 
+    @model_validator(mode="after")
+    def _validate_cross_field(self) -> Environment:
+        """Fail closed on insecure or half-configured combinations.
+
+        Returns:
+            The validated environment unchanged.
+
+        Raises:
+            ConfigurationError: When `SameSite=None` lacks the `Secure` flag, when
+                exactly one JWT key is set, or when the JWT TTLs are non-positive or
+                inverted. Raised directly (not wrapped): like the origins validator,
+                callers on every construction path must see the offending variable.
+        """
+        if self.cookie_samesite == "none" and self.cookie_secure is False:
+            raise ConfigurationError(
+                _INVALID_SAMESITE_MESSAGE.format(path=_FIELD_COOKIE_SAMESITE.upper()),
+                path=_FIELD_COOKIE_SAMESITE.upper(),
+            )
+        private_set = bool(self.jwt_private_key)
+        public_set = bool(self.jwt_public_key)
+        if private_set != public_set:
+            raise ConfigurationError(
+                _INVALID_JWT_KEYS_MESSAGE.format(path=_FIELD_JWT_PRIVATE_KEY.upper()),
+                path=_FIELD_JWT_PRIVATE_KEY.upper(),
+            )
+        if private_set:
+            if self.jwt_access_ttl_s <= 0:
+                raise ConfigurationError(
+                    _INVALID_JWT_TTL_MESSAGE.format(path=_FIELD_JWT_ACCESS_TTL_S.upper()),
+                    path=_FIELD_JWT_ACCESS_TTL_S.upper(),
+                )
+            if self.jwt_refresh_ttl_s <= self.jwt_access_ttl_s:
+                raise ConfigurationError(
+                    _INVALID_JWT_REFRESH_MESSAGE.format(path=_FIELD_JWT_REFRESH_TTL_S.upper()),
+                    path=_FIELD_JWT_REFRESH_TTL_S.upper(),
+                )
+        return self
+
     @property
     def is_prod(self) -> bool:
         """Report whether this process runs in production.
@@ -129,6 +212,52 @@ class Environment(BaseModel):
         if self.cookie_secure is not None:
             return self.cookie_secure
         return self.is_prod
+
+    @property
+    def redis_cache_url_effective(self) -> str:
+        """Resolve the cache Redis URL, falling back to the legacy single URL.
+
+        Returns:
+            `REDIS_CACHE_URL` when set, otherwise `REDIS_URL` (empty disables cache features).
+        """
+        return self.redis_cache_url or self.redis_url
+
+    @property
+    def redis_broker_url_effective(self) -> str:
+        """Resolve the Celery broker URL, falling back to the legacy single URL.
+
+        Returns:
+            `REDIS_BROKER_URL` when set, otherwise `REDIS_URL` (empty disables the broker).
+        """
+        return self.redis_broker_url or self.redis_url
+
+    @property
+    def redis_result_url_effective(self) -> str:
+        """Resolve the Celery result-backend URL, falling back to the broker URL.
+
+        Returns:
+            `REDIS_RESULT_URL` when set, otherwise the effective broker URL.
+        """
+        return self.redis_result_url or self.redis_broker_url_effective
+
+    @property
+    def db_url_effective(self) -> str:
+        """Resolve the MongoDB connection string, preferring the Atlas alias.
+
+        Returns:
+            `MONGO_URL` when set, otherwise `DB_URL` (empty fails closed for `mongo` backend).
+        """
+        return self.mongo_url or self.db_url
+
+    @property
+    def jwt_enabled(self) -> bool:
+        """Report whether the JWT session flows may run.
+
+        Returns:
+            `True` only when both keys are configured — a half-configured keypair fails
+            closed at validation, so this is purely a darkness check for the auth turn.
+        """
+        return bool(self.jwt_private_key and self.jwt_public_key)
 
 
 def _split_csv(raw: str) -> list[str]:
@@ -232,6 +361,37 @@ def _parse_tristate_bool(path: str, raw: str) -> bool | None:
     raise ConfigurationError(_INVALID_BOOL_MESSAGE.format(path=path), path=path)
 
 
+def _parse_samesite(raw: str) -> str:
+    """Normalise the `COOKIE_SAMESITE` value; an empty value means "unset".
+
+    Args:
+        raw: The raw variable value.
+
+    Returns:
+        The lower-cased mode, or `"lax"` when the variable is present but empty (the
+        safe default, mirroring the field default).
+    """
+    normalized = raw.strip().lower()
+    return normalized or "lax"
+
+
+def _parse_pem(raw: str) -> str:
+    """Normalise a PEM variable for runtimes that cannot carry real newlines.
+
+    Docker `--env-file`/`env_file` entries are single-line literals, so operators
+    paste keys with `\\n` escapes; local shells and python-dotenv carry real
+    newlines. Accepting both keeps one documented format per file. PEM base64
+    never contains a backslash, so the replacement cannot corrupt a real key.
+
+    Args:
+        raw: The raw variable value.
+
+    Returns:
+        The value with literal `\\n` sequences decoded to newlines.
+    """
+    return raw.replace("\\n", "\n")
+
+
 def _parse_raw(field_name: str, raw: str) -> Any:  # why: each field parses to its own type
     """Convert one raw environment value into the type its field expects.
 
@@ -246,6 +406,10 @@ def _parse_raw(field_name: str, raw: str) -> Any:  # why: each field parses to i
         return _parse_allowed_origins(raw)
     if field_name == _FIELD_COOKIE_SECURE:
         return _parse_tristate_bool(field_name.upper(), raw)
+    if field_name == _FIELD_COOKIE_SAMESITE:
+        return _parse_samesite(raw)
+    if field_name in (_FIELD_JWT_PRIVATE_KEY, _FIELD_JWT_PUBLIC_KEY):
+        return _parse_pem(raw)
     return raw
 
 

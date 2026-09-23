@@ -18,9 +18,11 @@ __all__ = ["AgentDefinitionPort", "AgentSessionStorePort", "LlmPort"]
 class AgentDefinitionPort(Protocol):
     """CRUD over stored agent definitions, keyed by the bare-UUID agent id.
 
-    Implementations own the storage details (step A3 lands the redis adapter); callers see
-    only ids and raw config dicts. Deletion of a definition deliberately does NOT touch the
-    prompt store — the legacy prompt-file-orphan-on-DELETE quirk is preserved.
+    Implementations own the storage details (T3: Mongo over indexed collections;
+    the Redis adapter stays for quickstart until the T7 cutover); callers see
+    only ids and raw config dicts. Deletion of a definition does NOT touch the
+    prompt store — the service orchestrates prompts-first deletion instead, so
+    each port keeps a single responsibility.
     """
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:  # why: engine seam is raw config dicts
@@ -49,6 +51,13 @@ class AgentSessionStorePort(Protocol):
 
     async def save_prompts(self, agent_id: str, prompts: dict[str, Any] | None) -> None:  # why: free-form JSON
         """Persist `prompts` for `agent_id`; `None` stores the empty payload."""
+
+    async def delete_prompts(self, agent_id: str) -> bool:
+        """Remove the payload for `agent_id`; `True` when one existed.
+
+        T3 ends the prompt-file orphan on DELETE: the service removes prompts
+        prompts-first, so a definition delete never strands its payload.
+        """
 
 
 @runtime_checkable

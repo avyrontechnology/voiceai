@@ -54,12 +54,16 @@ def _container_for(env: Environment, store: Any) -> VoiceAIContainer:
         store: The `MemoryStore` the cut-over controller resolves.
 
     Returns:
-        A container whose auth store binding serves `store`.
+        A container whose auth store and service bindings serve `store` (the
+        service carries test JWT settings — password flows mint pairs).
     """
     from voiceai.modules.auth.ports import AuthStorePort
+    from voiceai.modules.auth.service import AuthService
+    from voiceai.modules.auth.tests.conftest import _JWT
 
     container = build_container(env)
     container.auth_store.override(providers.Object(store))
+    container.auth_service.override(providers.Object(AuthService(store, jwt=_JWT)))
     return container
 
 
@@ -178,7 +182,7 @@ async def test_new_me_envelope_serves_same_user_with_same_cookie(
     assert response.status_code == 200, response.text
     envelope: dict[str, Any] = response.json()
     assert envelope["ok"] is True
-    assert envelope["data"]["user"]["user_id"] == created["user_id"]
+    assert envelope["data"]["user"]["user_id"] == created["user"]["user_id"]
     assert envelope["data"]["user"]["email"] == OWNER_EMAIL
     assert "deprecation" not in response.headers
     assert "sunset" not in response.headers

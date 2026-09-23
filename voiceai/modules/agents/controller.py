@@ -1,21 +1,18 @@
-"""HTTP surface of the agents module: wiring only, no logic (AGENTS.md rule 1f; spec 0002, A4).
+"""HTTP surface of the agents module: wiring only, no logic (AGENTS.md rule 1f; T3 greenfield).
 
-Additive: the quickstart server keeps serving the unprefixed legacy paths while this router
-mounts the same four routes under the app factory's `/api/v1`. Responses use the spec 0001
-envelope; every legacy payload shape rides inside `data` byte-identical (the raw config on
-GET, `{"agent_id", "state"}` on writes, `{"agents": [...]}` on the directory), and the
-quickstart quirks are preserved and tagged — above all the bare `except Exception` that
-swallows the missing-agent 404 into a 500 on GET/PUT/DELETE `/agent/{agent_id}`, while the
-prompts route alone answers a true 404.
+T3 deltas: the request body lives in `schemas.AgentsContract` (talko parity).
+Responses stay raw engine dicts by contract — no `response_model` constrains them,
+because a model would silently strip the free-form fields the engine reads; the
+byte-identity pins live in the colocated tests instead.
 """
 
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
+from voiceai.common.constants import HTTP_CREATED
 from voiceai.common.responses import success_response
 from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.agents.constants import (
@@ -27,34 +24,18 @@ from voiceai.modules.agents.constants import (
     MODULE_NAME,
 )
 from voiceai.modules.agents.errors import AgentNotFoundError, AgentsError
-from voiceai.modules.agents.models import AgentModel
+from voiceai.modules.agents.schemas import AgentsContract
 from voiceai.modules.agents.service import AgentService
 
 __all__ = ["CreateAgentPayload", "router"]
 
 router = APIRouter(tags=[MODULE_NAME])
 
-#: 201 for POST /agent (the quickstart `status_code=201`); not yet in `common.constants`.
-_HTTP_CREATED: Final[int] = 201
+#: Alias keeping handler signatures readable; the canonical shape is the contract.
+CreateAgentPayload = AgentsContract.CreateAgentRequest
+
 #: Operator-facing message of the swallowed 404; the client sees only the opaque 500 envelope.
 _SWALLOWED_NOT_FOUND_MESSAGE: Final[str] = "Agent lookup failed"
-
-
-class CreateAgentPayload(BaseModel):
-    """Request body for agent create and update — the exact quickstart payload contract.
-
-    Lives with the controller because it is the HTTP envelope of the boundary, not part of
-    the A2 definition schema package (`models/`), which other steps own.
-    """
-
-    agent_config: AgentModel = Field(
-        ..., description="The main agent configuration including tools, tasks, and settings."
-    )
-    # Values are usually strings (system_prompt, welcome_message) but may be nested blocks
-    # such as task_1.multilingual_prompts, which the engine reads at runtime.
-    agent_prompts: dict[str, dict[str, Any]] | None = Field(  # why: prompt blocks are free-form JSON
-        default=None, description="Optional prompts mapped by intent/context."
-    )
 
 
 ServiceDep = Annotated[AgentService, Depends(Provide[VoiceAIContainer.agent_service])]
@@ -103,12 +84,12 @@ async def read_agent_prompts(agent_id: str, service: ServiceDep) -> JSONResponse
     return success_response(await service.get_agent_prompts(agent_id))
 
 
-@router.post(AGENT_PATH, status_code=_HTTP_CREATED)
+@router.post(AGENT_PATH, status_code=HTTP_CREATED)
 @inject
 async def create_agent(payload: CreateAgentPayload, service: ServiceDep) -> JSONResponse:
     """Create an agent; answers 201 with `{"agent_id", "state": "created"}` as data."""
     created = await service.create_agent(payload.agent_config, payload.agent_prompts)
-    return success_response(created, status_code=_HTTP_CREATED)
+    return success_response(created, status_code=HTTP_CREATED)
 
 
 @router.put(AGENT_BY_ID_PATH)

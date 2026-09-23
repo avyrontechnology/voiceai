@@ -25,6 +25,9 @@ class Principal:
     scopes: list[str] = field(default_factory=list)
     key_id: str | None = None
     key_name: str | None = None
+    #: JWT id of the access token this principal was resolved from (`None` for legacy
+    #: sessions and API keys). Carried so logout can deny exactly this token.
+    token_id: str | None = None
 
     def effective_scopes(self) -> list[str]:
         """Return key scopes verbatim, else the role's scope table (unknown roles grant nothing)."""

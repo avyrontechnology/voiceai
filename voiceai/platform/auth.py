@@ -16,15 +16,19 @@ Notes for operators:
   immediately; there is nothing client-side to revoke.
 """
 
+from __future__ import annotations
+
 import hmac
 from datetime import timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import new_id, utcnow
-from voiceai.platform.store import MemoryStore
+
+if TYPE_CHECKING:
+    from voiceai.platform.store import MemoryStore
 
 logger = configure_logger(__name__)
 
