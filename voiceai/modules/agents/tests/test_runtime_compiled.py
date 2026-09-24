@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from voiceai.common.errors import TenantNotBoundError
 from voiceai.modules.agents.runtime.compiled import CachedAgentReader
 
 CONFIG = {"agent_name": "Support", "tasks": []}
@@ -75,10 +78,17 @@ class _Clock:
         return self.now
 
 
-def _reader(ttl_s: float = 60.0) -> tuple[CachedAgentReader, _FakeDefinitions, _FakePrompts, _Clock]:
-    """Assemble a reader over fakes with a controllable clock."""
+def _reader(
+    ttl_s: float = 60.0, tenant_id: str = "acme"
+) -> tuple[CachedAgentReader, _FakeDefinitions, _FakePrompts, _Clock]:
+    """Assemble a single-tenant reader over fakes with a controllable clock."""
     definitions, prompts, clock = _FakeDefinitions(), _FakePrompts(), _Clock()
-    return CachedAgentReader(definitions=definitions, prompt_store=prompts, ttl_s=ttl_s, clock=clock), definitions, prompts, clock
+    return (
+        CachedAgentReader(definitions=definitions, prompt_store=prompts, tenant_id=tenant_id, ttl_s=ttl_s, clock=clock),
+        definitions,
+        prompts,
+        clock,
+    )
 
 
 async def test_definition_hit_serves_memory_without_touching_inner() -> None:
@@ -139,3 +149,22 @@ async def test_prompts_hit_miss_invalidate_and_none() -> None:
     assert prompts.loads == 3
     assert await reader.delete_prompts("a-1") is True
     assert await reader.delete_prompts("a-1") is False
+
+
+async def test_reader_without_tenant_is_rejected_at_construction() -> None:
+    """An unscoped reader would mix tenants, so it cannot be built."""
+    definitions, prompts, clock = _FakeDefinitions(), _FakePrompts(), _Clock()
+
+    with pytest.raises(TenantNotBoundError):
+        CachedAgentReader(definitions=definitions, prompt_store=prompts, clock=clock)
+
+
+async def test_entries_are_keyed_by_tenant_then_agent() -> None:
+    """The cache key pins the cross-lifecycle defense: even a shared instance
+    could never serve a cross-tenant hit, because the tenant is in the key."""
+    reader, _, _, _ = _reader(tenant_id="acme")
+
+    await reader.get_agent("a-1")
+
+    assert ("acme", "a-1") in reader._entries
+    assert all(isinstance(key, tuple) for key in reader._entries)

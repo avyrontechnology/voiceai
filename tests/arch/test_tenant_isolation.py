@@ -28,14 +28,18 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/common/keys.py",
         "voiceai/common/tenancy.py",  # spec 0020, M1a: ambient context vocabulary
         "voiceai/core/app_factory.py",  # spec 0020, M1b: tenant middleware binding
+        "voiceai/core/container.py",  # spec 0020, M1b: scoped wiring (reads ambient tenant)
         "voiceai/database/base.py",  # spec 0020, M1b: the tenant_id field itself
         "voiceai/database/constants.py",  # spec 0020, M1b: TENANT_ID_FIELD literal
         "voiceai/database/scoped.py",  # spec 0020, M1b: the scoping choke point itself
+        "voiceai/modules/agents/runtime/compiled.py",  # spec 0020, M1b: tenant-keyed cache
+        "voiceai/modules/agents/tests/test_runtime_compiled.py",  # spec 0020, M1b: key pins
         "voiceai/modules/auth/models/invite.py",  # spec 0020, M1b: org-carried invite
         "voiceai/modules/auth/models/session.py",  # spec 0020, M1b: tenant sync validator
         "voiceai/modules/auth/models/user.py",  # spec 0020, M1b: tenant sync validator
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping
         "voiceai/modules/auth/tests/test_tenancy.py",  # spec 0020, M1b: boundary pins
+        "voiceai/modules/wallet/adapters/legacy_store.py",  # spec 0020, M1b: translation stamps
     }
 )
 

@@ -15,6 +15,8 @@ backend-selected service and this file deletes with it.
 
 from __future__ import annotations
 
+from voiceai.common.constants import DEFAULT_TENANT_ID
+from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.modules.wallet.models import LedgerEntry as ModuleLedgerEntry
 from voiceai.modules.wallet.models import StoredTemplate as ModuleStoredTemplate
 from voiceai.modules.wallet.models import Wallet as ModuleWallet
@@ -29,8 +31,17 @@ LegacyStore = MemoryStore | RedisStore
 
 
 def _to_module_wallet(wallet: LegacyWallet) -> ModuleWallet:
-    """Shape a legacy wallet as the module model (singleton id is module-side)."""
-    return ModuleWallet(id="singleton", balance_credits=wallet.balance_credits, currency=wallet.currency)
+    """Shape a legacy wallet as the module model (singleton id is module-side).
+
+    The legacy store predates tenancy and holds one tenant's money: translation
+    stamps the default tenant (the read-path form of the M1b backfill rule).
+    """
+    return ModuleWallet(
+        id="singleton",
+        balance_credits=wallet.balance_credits,
+        currency=wallet.currency,
+        tenant_id=DEFAULT_TENANT_ID,
+    )
 
 
 def _to_legacy_wallet(wallet: ModuleWallet) -> LegacyWallet:
@@ -39,13 +50,14 @@ def _to_legacy_wallet(wallet: ModuleWallet) -> LegacyWallet:
 
 
 def _to_module_entry(entry: LegacyLedgerEntry) -> ModuleLedgerEntry:
-    """Shape a legacy ledger entry as the module model."""
+    """Shape a legacy ledger entry as the module model (default-tenant stamped)."""
     return ModuleLedgerEntry(
         id=entry.entry_id,
         type=entry.type,
         amount_credits=entry.amount_credits,
         reason=entry.reason,
         created_at=entry.created_at,
+        tenant_id=DEFAULT_TENANT_ID,
     )
 
 
@@ -96,7 +108,11 @@ class LegacyStoreWalletRepository:
         return [_to_module_entry(entry) for entry in await self._store.list_ledger(limit=limit, entry_type=entry_type)]
 
     async def list_templates(self) -> list[ModuleStoredTemplate]:
-        """List the seed catalog (frozen legacy behavior: templates live in code here)."""
+        """List the seed catalog (frozen legacy behavior: templates live in code here).
+
+        Seed templates are platform-global, owned by no tenant: they translate
+        as system-tenant rows.
+        """
         return [
             ModuleStoredTemplate(
                 template_id=t.template_id,
@@ -105,6 +121,7 @@ class LegacyStoreWalletRepository:
                 description=t.description,
                 languages=list(t.languages),
                 agent_payload=dict(t.agent_payload),
+                tenant_id=SYSTEM_TENANT_ID,
             )
             for t in SEED_TEMPLATES
         ]

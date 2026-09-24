@@ -59,6 +59,11 @@ SESSION_COOKIE: Final[str] = "otoba_session"
 #: stashed principal over re-resolving the same credentials.
 PRINCIPAL_STATE_ATTR: Final[str] = "principal"
 
+#: The tenant id single-tenant deployments and the M1b backfill use where no org
+#: was ever assigned (spec 0020, M1b). Tenant ids reuse `org_id` verbatim, and
+#: every pre-tenancy row carries org `"default"` — so `"default"` is the name.
+DEFAULT_TENANT_ID: Final[str] = "default"
+
 # --- Secret redaction -----------------------------------------------------------------------
 REDACTED_VALUE: Final[str] = "***"
 # A regex over key *names*, not a credential of any kind.

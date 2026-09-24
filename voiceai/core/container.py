@@ -12,6 +12,7 @@ from dependency_injector import containers, providers
 from voiceai.common.datetime_utils import utc_now
 from voiceai.common.logger import configure_logging, get_logger
 from voiceai.common.security import redact_secrets
+from voiceai.common.tenancy import current_tenant
 from voiceai.core.db import create_db
 from voiceai.core.environment import Environment, get_environment
 from voiceai.core.redis import create_redis, create_redis_cache
@@ -141,8 +142,13 @@ def _build_health_service(repo: Any, logger: Any, started_at: Any) -> Any:
     return HealthService(repo=repo, logger=logger, started_at=started_at)
 
 
-def _agent_collection(db_client: Any, collection: Any, model: Any) -> Any:
-    """Build one agents-collection repository on the deployment's database.
+def _scoped_collection(db_client: Any, collection: Any, model: Any) -> Any:
+    """Build one collection repository pinned to the ambient request tenant.
+
+    Called from per-request (Factory) providers only: the tenant is read at
+    construction, so a Singleton must never be built through here (it would pin
+    the first request's tenant forever). Outside a bound tenant this fails
+    loudly instead of serving cross-tenant rows (spec 0020, M1b).
 
     Args:
         db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
@@ -150,13 +156,15 @@ def _agent_collection(db_client: Any, collection: Any, model: Any) -> Any:
         model: The `BaseFields` document type stored there.
 
     Returns:
-        An `InMemoryRepository` or `MotorRepository` behind `BaseRepository`.
+        A `TenantScopedRepository` over the deployment's driver repository.
     """
     from voiceai.core.db import InMemoryDatabase
     from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
-    return factory(db_client, collection, model)
+    inner = factory(db_client, collection, model)
+    return TenantScopedRepository(inner, current_tenant().tenant_id, collection)
 
 
 def _build_agent_definitions(db_client: Any) -> Any:
@@ -164,7 +172,7 @@ def _build_agent_definitions(db_client: Any) -> Any:
     from voiceai.modules.agents.models.definition import AgentDefinition
     from voiceai.modules.agents.repository import MongoAgentDefinitions
 
-    return MongoAgentDefinitions(_agent_collection(db_client, Collections.AGENTS, AgentDefinition))
+    return MongoAgentDefinitions(_scoped_collection(db_client, Collections.AGENTS, AgentDefinition))
 
 
 def _build_agent_prompt_store(db_client: Any) -> Any:
@@ -172,7 +180,7 @@ def _build_agent_prompt_store(db_client: Any) -> Any:
     from voiceai.modules.agents.models.prompts import AgentPrompts
     from voiceai.modules.agents.repository import MongoAgentPrompts
 
-    return MongoAgentPrompts(_agent_collection(db_client, Collections.AGENT_PROMPTS, AgentPrompts))
+    return MongoAgentPrompts(_scoped_collection(db_client, Collections.AGENT_PROMPTS, AgentPrompts))
 
 
 def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
@@ -186,7 +194,14 @@ def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
 
     # Spec 0012: call-setup reads (definition + prompts, per call) hit the
     # read-through cache; writes invalidate. Unit tests bypass it with fakes.
-    cached = CachedAgentReader(definitions=definitions, prompt_store=prompt_store)
+    # The reader is single-tenant by construction (spec 0020, M1b): its cache
+    # entries are keyed by the ambient request tenant, so a lifecycle flip to a
+    # shared instance could never serve cross-tenant hits.
+    cached = CachedAgentReader(
+        definitions=definitions,
+        prompt_store=prompt_store,
+        tenant_id=current_tenant().tenant_id,
+    )
     return AgentService(
         definitions=cached,
         prompt_store=cached,
@@ -198,9 +213,8 @@ def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
 
 
 def _build_voice_call_service(session_store: Any, db_client: Any, environment: Any, tasks: Any) -> Any:
-    from voiceai.core.db import InMemoryDatabase
     from voiceai.database.constants import Collections
-    from voiceai.database.repository import BaseRepository, InMemoryRepository, MotorRepository
+    from voiceai.database.repository import BaseRepository
     from voiceai.modules.voice.adapters.manager import (
         build_assistant_manager,
         record_execution,
@@ -210,14 +224,10 @@ def _build_voice_call_service(session_store: Any, db_client: Any, environment: A
     from voiceai.modules.voice.repository import VoicePlaceCallRepository
     from voiceai.modules.voice.service import VoiceCallService
 
-    executions: BaseRepository[PlacedCall]
-    partners: BaseRepository[TalkoPartnerConfig]
-    if isinstance(db_client, InMemoryDatabase):
-        executions = InMemoryRepository[PlacedCall](db_client, Collections.EXECUTIONS, PlacedCall)
-        partners = InMemoryRepository[TalkoPartnerConfig](db_client, Collections.TALKO_PARTNERS, TalkoPartnerConfig)
-    else:
-        executions = MotorRepository[PlacedCall](db_client, Collections.EXECUTIONS, PlacedCall)
-        partners = MotorRepository[TalkoPartnerConfig](db_client, Collections.TALKO_PARTNERS, TalkoPartnerConfig)
+    executions: BaseRepository[PlacedCall] = _scoped_collection(db_client, Collections.EXECUTIONS, PlacedCall)
+    partners: BaseRepository[TalkoPartnerConfig] = _scoped_collection(
+        db_client, Collections.TALKO_PARTNERS, TalkoPartnerConfig
+    )
     return VoiceCallService(
         manager_factory=build_assistant_manager,
         execution_recorder=record_execution,
@@ -230,24 +240,17 @@ def _build_voice_call_service(session_store: Any, db_client: Any, environment: A
 
 
 def _build_wallet_service(db_client: Any) -> Any:
-    from voiceai.core.db import InMemoryDatabase
     from voiceai.database.constants import Collections
-    from voiceai.database.repository import BaseRepository, InMemoryRepository, MotorRepository
+    from voiceai.database.repository import BaseRepository
     from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
     from voiceai.modules.wallet.repository import MongoWalletRepository
     from voiceai.modules.wallet.service import WalletService
 
-    wallet_repo: BaseRepository[Wallet]
-    ledger_repo: BaseRepository[LedgerEntry]
-    template_repo: BaseRepository[StoredTemplate]
-    if isinstance(db_client, InMemoryDatabase):
-        wallet_repo = InMemoryRepository[Wallet](db_client, Collections.WALLETS, Wallet)
-        ledger_repo = InMemoryRepository[LedgerEntry](db_client, Collections.LEDGER, LedgerEntry)
-        template_repo = InMemoryRepository[StoredTemplate](db_client, Collections.AGENT_TEMPLATES, StoredTemplate)
-    else:
-        wallet_repo = MotorRepository[Wallet](db_client, Collections.WALLETS, Wallet)
-        ledger_repo = MotorRepository[LedgerEntry](db_client, Collections.LEDGER, LedgerEntry)
-        template_repo = MotorRepository[StoredTemplate](db_client, Collections.AGENT_TEMPLATES, StoredTemplate)
+    wallet_repo: BaseRepository[Wallet] = _scoped_collection(db_client, Collections.WALLETS, Wallet)
+    ledger_repo: BaseRepository[LedgerEntry] = _scoped_collection(db_client, Collections.LEDGER, LedgerEntry)
+    template_repo: BaseRepository[StoredTemplate] = _scoped_collection(
+        db_client, Collections.AGENT_TEMPLATES, StoredTemplate
+    )
     return WalletService(MongoWalletRepository(wallet_repo, ledger_repo, template_repo))
 
 
@@ -282,9 +285,12 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         started_at=providers.Callable(utc_now),
     )
 
-    # Agents Module
-    agent_definitions = providers.Singleton(_build_agent_definitions, db_client)
-    agent_session_store = providers.Singleton(_build_agent_prompt_store, db_client)
+    # Agents Module: per-request collection views (spec 0020, M1b). These must
+    # stay Factory, never Singleton: a shared instance would pin the first
+    # request's tenant on every later request. The driver handles underneath
+    # are stateless, so per-request views cost an object allocation, not a socket.
+    agent_definitions = providers.Factory(_build_agent_definitions, db_client)
+    agent_session_store = providers.Factory(_build_agent_prompt_store, db_client)
 
     agent_service = providers.Factory(
         _build_agent_service,

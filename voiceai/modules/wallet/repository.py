@@ -55,8 +55,9 @@ class MongoWalletRepository:
         """Get the singleton wallet instance, creating it if necessary."""
         wallet = await self._wallet.get(SINGLETON_WALLET_ID)
         if not wallet:
-            wallet = Wallet(id=SINGLETON_WALLET_ID)
-            await self._wallet.insert(wallet)
+            # Return the INSERT RESULT, not the pre-insert object: the repository
+            # owns id assignment and tenant stamping (spec 0020, M1b) on its copy.
+            wallet = await self._wallet.insert(Wallet(id=SINGLETON_WALLET_ID))
         return wallet
 
     async def save_wallet(self, wallet: Wallet) -> None:

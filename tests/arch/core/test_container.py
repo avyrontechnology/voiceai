@@ -116,6 +116,7 @@ class TestBuildContainer:
 
     def test_every_module_service_resolves_offline(self, arch_environment: Environment) -> None:
         """The whole service graph composes without network, redis, or mongo."""
+        from voiceai.common.tenancy import SYSTEM_TENANT_ID, TenantContext, bind_tenant
         from voiceai.modules.agents.service import AgentService
         from voiceai.modules.auth.service import AuthService
         from voiceai.modules.health.repository import HealthRepository
@@ -125,12 +126,15 @@ class TestBuildContainer:
 
         container = build_container(arch_environment)
 
-        assert isinstance(container.auth_service(), AuthService)
-        assert isinstance(container.health_repository(), HealthRepository)
-        assert isinstance(container.health_service(), HealthService)
-        assert isinstance(container.agent_service(), AgentService)
-        assert isinstance(container.voice_call_service(), VoiceCallService)
-        assert isinstance(container.wallet_service(), WalletService)
+        # Request-scoped services read the ambient tenant at construction (spec
+        # 0020, M1b): composition stays offline, but no longer tenant-free.
+        with bind_tenant(TenantContext(tenant_id=SYSTEM_TENANT_ID, request_id="composition")):
+            assert isinstance(container.auth_service(), AuthService)
+            assert isinstance(container.health_repository(), HealthRepository)
+            assert isinstance(container.health_service(), HealthService)
+            assert isinstance(container.agent_service(), AgentService)
+            assert isinstance(container.voice_call_service(), VoiceCallService)
+            assert isinstance(container.wallet_service(), WalletService)
 
 
 class TestRedisFactory:

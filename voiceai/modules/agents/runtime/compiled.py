@@ -7,8 +7,9 @@ window. Write-through invalidation (every mutating call bumps the agent's
 generation) makes stale reads impossible across the writer — no version protocol
 needed because all production writes flow through these same ports.
 
-Bounds (AGENTS.md §5): one entry per agent id, TTL expiry, no background tasks.
-``CancelledError`` propagates; inner errors propagate and are never cached.
+Bounds (AGENTS.md §5): one entry per (tenant, agent) pair, TTL expiry, no
+background tasks. ``CancelledError`` propagates; inner errors propagate and are
+never cached.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from voiceai.common.errors import DependencyUnavailableError
+from voiceai.common.errors import DependencyUnavailableError, TenantNotBoundError
 from voiceai.modules.agents.constants import RUNTIME_CACHE_TTL_S
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort
 
@@ -43,18 +44,30 @@ class _Entry:
 class CachedAgentReader:
     """TTL read-through cache decorating the definition + prompt ports.
 
+    The instance is single-tenant by construction (spec 0020, M1b): entries are
+    keyed by ``(tenant_id, agent_id)`` so a shared instance could never serve a
+    cross-tenant hit even if its lifecycle ever changed. The tenant is an
+    explicit constructor argument — never ambient, never defaulted.
+
     Args:
         definitions: Inner definition store (source of truth on miss).
         prompt_store: Inner prompt store (source of truth on miss).
+        tenant_id: Owning tenant; empty is rejected (fail-loud, no mixing).
         ttl_s: Entry lifetime; expired entries reload on next read.
         clock: Time source (injectable for tests; defaults to wall time).
     """
 
     definitions: AgentDefinitionPort | None
     prompt_store: AgentSessionStorePort
+    tenant_id: str = ""
     ttl_s: float = RUNTIME_CACHE_TTL_S
     clock: Any = field(default_factory=lambda: time.monotonic)  # why: tests inject a fake clock
-    _entries: dict[str, _Entry] = field(default_factory=dict, init=False, repr=False)
+    _entries: dict[tuple[str, str], _Entry] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Reject an unscoped reader: an unkeyed cache would mix tenants."""
+        if not self.tenant_id:
+            raise TenantNotBoundError("cached reader requires a tenant")
 
     def _require_definitions(self) -> AgentDefinitionPort:
         """Return the inner definition store, or 503 exactly as the service does.
@@ -74,19 +87,21 @@ class CachedAgentReader:
         return self.definitions
 
     def _entry(self, agent_id: str) -> _Entry:
-        """Return the row for ``agent_id``, creating it empty on first touch."""
+        """Return the row for this tenant's ``agent_id``, creating it empty on first touch."""
+        key = (self.tenant_id, agent_id)
         try:
-            return self._entries[agent_id]
+            return self._entries[key]
         except KeyError:
             entry = _Entry()
-            self._entries[agent_id] = entry
+            self._entries[key] = entry
             return entry
 
     def _invalidate(self, agent_id: str) -> None:
         """Bump the generation so in-flight readers reload on next access."""
-        self._entry(agent_id).generation += 1
-        self._entries[agent_id].definition_expires = 0.0
-        self._entries[agent_id].prompts_loaded = False
+        entry = self._entry(agent_id)
+        entry.generation += 1
+        entry.definition_expires = 0.0
+        entry.prompts_loaded = False
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         """Serve the definition from memory on hit, load on miss/expiry."""

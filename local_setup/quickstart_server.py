@@ -18,11 +18,18 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, WebSo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from voiceai.common.constants import API_PREFIX, CONTAINER_STATE_ATTR, HTTP_SERVICE_UNAVAILABLE
+from voiceai.common.constants import (
+    API_PREFIX,
+    CONTAINER_STATE_ATTR,
+    DEFAULT_TENANT_ID,
+    HTTP_SERVICE_UNAVAILABLE,
+)
 from voiceai.common.errors import AppError
 from voiceai.common.errors import AppError as _QuickstartAppError
 from voiceai.common.responses import error_response as _quickstart_error_response
 from voiceai.common.responses import success_response as _quickstart_success_response
+from voiceai.common.tenancy import TenantContext, bind_tenant
+from voiceai.core.app_factory import TenantMiddleware
 from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
@@ -102,13 +109,35 @@ from voiceai.modules.agents.repository import RedisAgentRepository as _LegacyAge
 
 _agents_container.agent_definitions.override(providers.Object(_LegacyAgentRepository(_AgentRedisSeam())))
 _agents_container.agent_session_store.override(providers.Object(_LegacyPromptStore()))
-agent_service: AgentService = _agents_container.agent_service()
 
-# Spec 0004 (B4): the live-call WS handler below is a thin delegate into the voice
-# module, composed through the same container as the agents CRUD above (the A5
-# precedent). Resolving here keeps the legacy engine import at module init, exactly
-# where the old direct AssistantManager import loaded it.
-voice_call_service: VoiceCallService = _agents_container.voice_call_service()
+# Spec 0020 (M1b): quickstart is a single-tenant dev server, but new-arch services
+# are request-scoped to a tenant. The process pins the default tenant for these
+# import-time resolutions, and every request rebinds it through TenantMiddleware
+# with the fixed resolver below — legacy routes never read the context, so they
+# observe zero behavior change. Retired at the T7 cutover with this stack.
+_QUICKSTART_BOOT_REQUEST_ID = "quickstart-boot"
+
+
+def _quickstart_tenant_context(request_id: str) -> TenantContext:
+    """Build the single-tenant context quickstart wires and serves everything under."""
+    return TenantContext(tenant_id=DEFAULT_TENANT_ID, request_id=request_id or _QUICKSTART_BOOT_REQUEST_ID)
+
+
+async def _fixed_default_resolver(*args: object) -> tuple[TenantContext, None]:
+    """Resolve every quickstart request to the default tenant (no credential lookup)."""
+    request_id = args[2] if len(args) > 2 and isinstance(args[2], str) else ""
+    return _quickstart_tenant_context(request_id), None
+
+
+_agents_container.tenant_resolver.override(providers.Object(_fixed_default_resolver))
+with bind_tenant(_quickstart_tenant_context(_QUICKSTART_BOOT_REQUEST_ID)):
+    agent_service: AgentService = _agents_container.agent_service()
+
+    # Spec 0004 (B4): the live-call WS handler below is a thin delegate into the voice
+    # module, composed through the same container as the agents CRUD above (the A5
+    # precedent). Resolving here keeps the legacy engine import at module init, exactly
+    # where the old direct AssistantManager import loaded it.
+    voice_call_service: VoiceCallService = _agents_container.voice_call_service()
 
 app = FastAPI()
 
@@ -127,6 +156,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Spec 0020 (M1b): bind the default tenant around every request so the new-arch
+# routers mounted below see a total `current_tenant()`. Single-tenant dev only.
+app.add_middleware(TenantMiddleware)
 
 
 def _auth_service_from_app(app: FastAPI) -> auth_module.AuthService:
