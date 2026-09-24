@@ -18,7 +18,8 @@ MODALITIES: Final[tuple[str, ...]] = ("asr", "tts", "s2s", "llm")
 CATALOG_ID_SEPARATOR: Final[str] = ":"
 
 #: Seed revision stamped on every row (spec 0022: drift visibility).
-CATALOG_VERSION: Final[int] = 1
+#: v2: backfills voices for openai_realtime and gemini_live S2S entries.
+CATALOG_VERSION: Final[int] = 2
 
 #: Route paths (mounted under the API prefix by the app factory).
 CATALOG_MODALITIES_PATH: Final[str] = "/catalog/modalities"
