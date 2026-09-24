@@ -34,9 +34,9 @@ enforced by `tests/arch/test_layer_contract.py`).
 - `brains/` — runtime agent hierarchy (simple/contextual, knowledgebase,
   extraction, summarization, webhook, graph). Legacy collaborators arrive via
   `adapters/` only. Frozen: new runtime code goes to `runtime/`, never here.
-- `runtime/` (specs 0012/0015) — enterprise hot-path seam + conversation-brain
+- `runtime/` (specs 0012/0015, cut over in 0024 M3) — enterprise hot-path seam + conversation-brain
   builder: `BrainFactory` (engine-kind registry; prod instance crosses into the
-  engine via the `brain_factory` task kwarg), `BrainPort`, `CachedAgentReader`
+  engine via the `brain_factory` task kwarg — the ONLY brain path since M3), `BrainPort`, `CachedAgentReader`
   (TTL read-through over both ports, write-through invalidation; prod wiring in
   `core/container.py`), `run_judgments` (concurrent completion/voicemail
   judgments with timeout + fail-safe defaults), plus pure helpers

@@ -13,10 +13,9 @@ actually does in `TaskManager.__get_agent_object`:
 
 Engine wiring (AGENTS.md §3.1 bridge 3): the factory INSTANCE crosses into legacy
 via the `brain_factory` task kwarg, so `task_manager.py` gains zero imports —
-receiving an injected object is not an import. Sessions without the kwarg run the
-verbatim legacy branches (all existing pins hold); adapter-injected sessions run
-this path; `tests/test_brain_factory_equivalence.py` proves both build identical
-configs.
+receiving an injected object is not an import. Since spec 0024 (M3 cutover)
+the factory path is the ONLY path: sessions without the kwarg fail fast naming
+the spec. `tests/test_brain_factory_equivalence.py` pins the assembly.
 """
 
 from __future__ import annotations

@@ -53,11 +53,11 @@ def build_assistant_manager(
     extra: dict[str, Any] = {}
     if prompt_responses is not None:
         extra["prompt_responses"] = prompt_responses
-    # Spec 0015: every prod call builds conversation brains through the shared
-    # assembly (kwargs-injection, AGENTS.md §3.1 bridge 3). Import through the
-    # agents __all__ surface (bridge 4) — never the submodule. The factory instance
-    # flows AssistantManager → tasks → TaskManager.kwargs; un-injected sessions
-    # (tests, harnesses) keep the verbatim legacy branches.
+    # Spec 0015 (cut over in 0024 M3): every prod call builds conversation brains
+    # through the shared assembly (kwargs-injection, AGENTS.md §3.1 bridge 3).
+    # Import through the agents __all__ surface (bridge 4) — never the submodule.
+    # The factory instance flows AssistantManager → tasks → TaskManager.kwargs;
+    # sessions without it fail fast naming the spec (no legacy fallback remains).
     from voiceai.modules.agents import BrainFactory
 
     extra["brain_factory"] = BrainFactory()

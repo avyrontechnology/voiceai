@@ -81,5 +81,18 @@ them).
 
 ## Burn-down
 
-- [ ] Slice 1: factory-only flip + equivalence rewrite.
-- [ ] Slice 2: burn-down + docs + tripwire.
+- [x] Slice 1: factory-only flip + equivalence rewrite.
+- [x] Slice 2: burn-down + docs + tripwire.
+
+## T7 remainder (explicitly not M3)
+
+- `agent_types/*` package deletion (blocked on the `task_manager.py:62`
+  star-import + characterization suites).
+- `brains/legacy_graph.py` deletion (exported dead surface, cutover decision).
+- RAG `os.environ` side-channel removal (spec-0004 debt).
+- `assistant.py` (no importers; delete with the engine).
+- Pre-existing `make test-all` debt, unchanged by M3: legacy JWT-less signup
+  failures (`mount_new_auth` + bare `Environment`), `test_clinic_*`
+  (`examples` module), prompts/telephone/prompt-loader contracts (§8), and
+  the `test_foundation` order-flake (legacy `test_agent_prompts_endpoint`
+  imports quickstart at collection time).
