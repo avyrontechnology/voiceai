@@ -127,6 +127,7 @@ def build_service(
     prompt_store: FakePromptStore | None = None,
     llm: FakeLlm | None = None,
     guard: GuardSpy | None = None,
+    catalog: Any | None = None,
 ) -> AgentService:
     """Assemble a service around fakes, defaulting each collaborator."""
     return AgentService(
@@ -136,6 +137,7 @@ def build_service(
         require_extraction_model=guard if guard is not None else GuardSpy(),
         extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,
         logger=logging.getLogger("otobaai.test.agents"),
+        catalog=catalog,
     )
 
 

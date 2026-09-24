@@ -183,7 +183,7 @@ def _build_agent_prompt_store(db_client: Any) -> Any:
     return MongoAgentPrompts(_scoped_collection(db_client, Collections.AGENT_PROMPTS, AgentPrompts))
 
 
-def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
+def _build_agent_service(definitions: Any, prompt_store: Any, catalog: Any) -> Any:
     from voiceai.modules.agents.adapters.llm import (
         EXTRACTION_SYSTEM_PROMPT,
         ensure_extraction_model_configured,
@@ -209,6 +209,7 @@ def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
         require_extraction_model=ensure_extraction_model_configured,
         extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,
         logger=get_logger("agents"),
+        catalog=catalog,
     )
 
 
@@ -313,6 +314,9 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         started_at=providers.Callable(utc_now),
     )
 
+    # Catalog Module: system-tenant rows, no ambient read — Singleton is safe.
+    catalog_service = providers.Singleton(_build_catalog_service, db_client)
+
     # Agents Module: per-request collection views (spec 0020, M1b). These must
     # stay Factory, never Singleton: a shared instance would pin the first
     # request's tenant on every later request. The driver handles underneath
@@ -324,6 +328,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         _build_agent_service,
         definitions=agent_definitions,
         prompt_store=agent_session_store,
+        catalog=catalog_service,
     )
 
     # Voice Module
@@ -338,9 +343,6 @@ class VoiceAIContainer(containers.DeclarativeContainer):
 
     # Wallet Module
     wallet_service = providers.Factory(_build_wallet_service, db_client=db_client)
-
-    # Catalog Module: system-tenant rows, no ambient read — Singleton is safe.
-    catalog_service = providers.Singleton(_build_catalog_service, db_client)
 
 
 async def aclose_container(container: VoiceAIContainer) -> None:

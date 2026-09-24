@@ -16,7 +16,7 @@ keys, and for multiagent configs the nested ``task_1.{agent_name}.system_prompt`
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 from voiceai.common.logger import get_logger
@@ -29,6 +29,7 @@ from voiceai.modules.agents.constants import (
 )
 
 __all__ = [
+    "audit_provider_config",
     "collect_agent_records",
     "is_agent_key",
     "parse_agent_record",
@@ -165,3 +166,161 @@ def select_multiagent_system_prompt(task_prompts: Mapping[str, Any], agent_name:
         TypeError: When the block is not subscriptable (legacy parity).
     """
     return task_prompts[agent_name][_SYSTEM_PROMPT_KEY]
+
+
+def _catalog_index(entries: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
+    """Index catalog rows by (modality, provider) for the config walk."""
+    index: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for entry in entries:
+        key = (str(entry.get("modality", "")), str(entry.get("provider", "")))
+        index.setdefault(key, []).append(entry)
+    return index
+
+
+def _check_leaf(
+    problems: list[str],
+    index: dict[tuple[str, str], list[Mapping[str, Any]]],
+    *,
+    modality: str,
+    provider: object,
+    model: object,
+    where: str,
+) -> None:
+    """Append a problem unless (modality, provider, model) resolves in the catalog.
+
+    Closed rows must match exactly; `models_open` rows accept any non-empty
+    model (suggestions, not a closed set). Unknown providers fail with the
+    valid values — a typo must never reach the realtime path.
+    """
+    if not isinstance(provider, str) or not provider:
+        problems.append(f"{where}: missing {modality} provider")
+        return
+    rows = index.get((modality, provider), [])
+    if not rows:
+        valid = sorted({key[1] for key in index if key[0] == modality})
+        problems.append(f"{where}: unknown {modality} provider {provider!r} (valid: {', '.join(valid)})")
+        return
+    if not isinstance(model, str) or not model:
+        problems.append(f"{where}: missing {modality} model for provider {provider!r}")
+        return
+    known = {str(row.get("model", "")) for row in rows}
+    if model in known:
+        return
+    if any(row.get("models_open") is True for row in rows):
+        return
+    problems.append(
+        f"{where}: unknown {modality} model {model!r} for provider {provider!r} (valid: {', '.join(sorted(known))})"
+    )
+
+
+def _check_language(
+    problems: list[str], is_language_valid: Callable[[str], bool], code: object, where: str
+) -> None:
+    """Append a problem for a malformed BCP-47 language code (absent codes pass)."""
+    if code is None:
+        return
+    if not isinstance(code, str) or not is_language_valid(code):
+        problems.append(f"{where}: malformed language code {code!r}")
+
+
+def _check_languages(
+    problems: list[str],
+    is_language_valid: Callable[[str], bool],
+    codes: object,
+    where: str,
+) -> None:
+    """Append problems for each malformed code in a language-hint list."""
+    if codes is None:
+        return
+    if not isinstance(codes, list):
+        problems.append(f"{where}: language hints must be a list")
+        return
+    for code in codes:
+        _check_language(problems, is_language_valid, code, where)
+
+
+def _audit_llm_leaves(
+    problems: list[str],
+    index: dict[tuple[str, str], list[Mapping[str, Any]]],
+    node: object,
+    where: str,
+) -> None:
+    """Recurse an `llm_agent` subtree validating every LLM call-site leaf.
+
+    A leaf is any mapping with string `provider`/`model` keys: unlike the
+    pipeline components (whose providers the schema validates), `Llm.provider`
+    is a free string, so unknown providers fail here, not later.
+    """
+    if isinstance(node, Mapping):
+        provider = node.get("provider")
+        model = node.get("model")
+        if isinstance(provider, str) and "model" in node:
+            _check_leaf(problems, index, modality="llm", provider=provider, model=model, where=where)
+        for key, value in node.items():
+            _audit_llm_leaves(problems, index, value, f"{where}.{key}")
+    elif isinstance(node, list):
+        for position, value in enumerate(node):
+            _audit_llm_leaves(problems, index, value, f"{where}[{position}]")
+
+
+def audit_provider_config(
+    config: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    is_language_valid: Callable[[str], bool],
+) -> list[str]:
+    """Audit one dumped agent config against catalog rows (pure, spec 0022 slice 2).
+
+    Walks every task's `tools_config`: transcriber model + languages, LLM
+    leaves (provider AND model — the schema leaves `Llm.provider` free), and
+    the S2S model. Synthesizer `provider_config` shapes (model/voice) land in
+    slice 3 with the voice curation; synthesizer/transcriber/S2S provider
+    names are already schema-strict. Returns problem strings (empty means
+    valid) — callers raise their own module error, so this stays import-clean:
+    catalog rows arrive as plain mappings and the language predicate injects.
+
+    Args:
+        config: One agent definition dump (`model_dump`, defaults materialized).
+        entries: Catalog rows as plain mappings.
+        is_language_valid: BCP-47 predicate (the catalog's, injected).
+
+    Returns:
+        Human-readable problems, each naming the task path and the valid
+        values; empty when the config resolves.
+    """
+    problems: list[str] = []
+    index = _catalog_index(entries)
+    tasks = config.get("tasks", [])
+    if not isinstance(tasks, list):
+        return ["tasks must be a list"]
+    for position, task in enumerate(tasks):
+        if not isinstance(task, Mapping):
+            problems.append(f"tasks[{position}]: must be a mapping")
+            continue
+        tools = task.get("tools_config", {})
+        if not isinstance(tools, Mapping):
+            problems.append(f"tasks[{position}]: tools_config must be a mapping")
+            continue
+        where = f"tasks[{position}]"
+        transcriber = tools.get("transcriber")
+        if isinstance(transcriber, Mapping):
+            _check_leaf(
+                problems,
+                index,
+                modality="asr",
+                provider=transcriber.get("provider"),
+                model=transcriber.get("model"),
+                where=f"{where}.transcriber",
+            )
+            _check_language(problems, is_language_valid, transcriber.get("language"), f"{where}.transcriber")
+            _check_languages(problems, is_language_valid, transcriber.get("language_hints"), f"{where}.transcriber")
+        llm_agent = tools.get("llm_agent")
+        if llm_agent is not None:
+            _audit_llm_leaves(problems, index, llm_agent, f"{where}.llm_agent")
+        s2s = tools.get("s2s")
+        if isinstance(s2s, Mapping):
+            provider_config = s2s.get("provider_config")
+            model = provider_config.get("model") if isinstance(provider_config, Mapping) else None
+            _check_leaf(
+                problems, index, modality="s2s", provider=s2s.get("provider"), model=model, where=f"{where}.s2s"
+            )
+    return problems

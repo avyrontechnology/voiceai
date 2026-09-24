@@ -36,10 +36,11 @@ from voiceai.modules.agents.constants import (
     TASK_TYPE_EXTRACTION,
     TASKS_KEY,
 )
-from voiceai.modules.agents.errors import AgentNotFoundError, PromptStoreError
+from voiceai.modules.agents.errors import AgentConfigInvalidError, AgentNotFoundError, PromptStoreError
 from voiceai.modules.agents.exceptions import ensure_agent_exists
 from voiceai.modules.agents.models import AgentModel
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
+from voiceai.modules.agents.static_methods import audit_provider_config
 
 __all__ = ["AgentService"]
 
@@ -85,6 +86,10 @@ class AgentService:
             var; raises when the model is not configured (see `adapters/llm.py`).
         extraction_system_prompt: The system prompt of the extraction-generation call.
         logger: The `otobaai` module logger (rule 3), injected so tests can capture it.
+        catalog: The provider catalog service (spec 0022, slice 2), or `None`
+            for compositions without validation — unwired compositions skip
+            provider checks with a warning, never silently (the container
+            always wires it).
     """
 
     def __init__(
@@ -95,6 +100,7 @@ class AgentService:
         require_extraction_model: Callable[[], None],
         extraction_system_prompt: str,
         logger: Logger,
+        catalog: Any = None,  # why: CatalogService; None keeps test compositions validation-free
     ) -> None:
         self._definitions = definitions
         self._prompt_store = prompt_store
@@ -102,6 +108,30 @@ class AgentService:
         self._require_extraction_model = require_extraction_model
         self._extraction_system_prompt = extraction_system_prompt
         self._logger = logger
+        self._catalog = catalog
+
+    async def _validate_providers(self, data: dict[str, Any]) -> None:
+        """Reject provider/model/language values the catalog cannot resolve.
+
+        Runs on the dumped config (schema defaults materialized) BEFORE any
+        extraction LLM spend, so a typo fails fast and free (spec 0022).
+
+        Args:
+            data: The agent definition dump about to persist.
+
+        Raises:
+            AgentConfigInvalidError: With every problem and the valid values.
+        """
+        if self._catalog is None:
+            self._logger.warning("agent provider validation skipped: catalog unwired")
+            return
+        entries = [entry.model_dump() for entry in await self._catalog.entries()]
+        problems = audit_provider_config(data, entries, self._catalog.is_valid_language)
+        if problems:
+            raise AgentConfigInvalidError(
+                "; ".join(problems),
+                details={"problems": problems},
+            )
 
     def _require_definitions(self) -> AgentDefinitionPort:
         """Return the definition store, or raise because none was injected.
@@ -245,6 +275,7 @@ class AgentService:
         agent_uuid = str(uuid4())
         data_for_db = config.model_dump()
         data_for_db[ASSISTANT_STATUS_KEY] = ASSISTANT_STATUS_SEEDING  # legacy-parity(spec-0002)
+        await self._validate_providers(data_for_db)
         self._logger.info(_LOG_CREATING_AGENT, agent_uuid)
         if len(data_for_db[TASKS_KEY]) > 0:
             self._logger.info(_LOG_EXTRACTION_SETUP)
@@ -295,6 +326,7 @@ class AgentService:
         ensure_agent_exists(await store.get_agent(agent_id), agent_id)
         new_data = config.model_dump()
         new_data[ASSISTANT_STATUS_KEY] = ASSISTANT_STATUS_UPDATED  # legacy-parity(spec-0002)
+        await self._validate_providers(new_data)
         self._logger.info(_LOG_UPDATING_AGENT, agent_id)
         jobs: list[tuple[int, str]] = []
         for index, task in enumerate(new_data.get(TASKS_KEY, [])):

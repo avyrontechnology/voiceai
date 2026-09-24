@@ -15,6 +15,7 @@ from voiceai.modules.catalog.models import CatalogEntry
 from voiceai.modules.catalog.repository import CatalogRepository
 from voiceai.modules.catalog.schemas import ModelSummary, ProviderSummary, VoiceSummary
 from voiceai.modules.catalog.static_methods import build_catalog_id
+from voiceai.modules.catalog.static_methods import is_valid_language as is_well_formed_language
 from voiceai.modules.catalog.utils import seed_catalog
 
 __all__ = ["CatalogService"]
@@ -150,3 +151,12 @@ class CatalogService:
             The number of rows written.
         """
         return await seed_catalog(self._repository)
+
+    async def entries(self) -> list[CatalogEntry]:
+        """Return every active system row (slice-2 agent validation bulk read)."""
+        return list(await self._repository.list_all())
+
+    @staticmethod
+    def is_valid_language(code: str) -> bool:
+        """Return whether `code` is a well-formed BCP-47 tag (predicate for validators)."""
+        return is_well_formed_language(code)
