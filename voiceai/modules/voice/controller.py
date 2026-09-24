@@ -106,8 +106,15 @@ async def voice_chat(
             agent_id,
             "missing ticket" if not ticket else "rejected ticket",
         )
+        await auth.audit("ws_denied", detail=agent_id)
         await websocket.close(code=WS_CLOSE_DENIED)
         return
+    await auth.audit(
+        "ws_connect",
+        user_id=principal.user_id,
+        email=principal.email,
+        detail=agent_id,
+    )
     context = TenantContext(
         tenant_id=principal.org_id,
         request_id=new_id("ws"),
@@ -127,6 +134,14 @@ async def voice_chat(
         try:
             await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
         finally:
+            # Channel lifecycle event (spec 0021, M2): the run's record joins
+            # the tenant-stamped audit trail whether the run succeeded or not.
+            await auth.audit(
+                "call_recorded",
+                user_id=principal.user_id,
+                email=principal.email,
+                detail=agent_id,
+            )
             try:
                 await websocket.close()
             except RuntimeError:
@@ -143,12 +158,20 @@ async def place_call(
     service: ServiceDep,
 ) -> JSONResponse:
     """Place one outbound call (spec 0008)."""
-    await _require_scope(request, auth, "calls:write")
+    principal = await _require_scope(request, auth, "calls:write")
 
     try:
         placed = await service.place_call(payload=payload)
     except AppError as exc:
         return error_response(exc)
+    # Channel lifecycle event (spec 0021, M2): the dial joins the tenant-stamped
+    # audit trail. Advisory by contract — `audit` never fails the placement.
+    await auth.audit(
+        "call_placed",
+        user_id=principal.user_id,
+        email=principal.email,
+        detail=placed.execution_id,
+    )
     return success_response(placed.model_dump(mode="json"), status_code=202)
 
 

@@ -95,6 +95,10 @@ under it. No migrations, no flags beyond the existing one. Rollback is revert.
 
 ## Burn-down
 
-- [ ] Slice 1: WS ticket gate + tenant binding.
-- [ ] Slice 2: place_call agent ownership + execution tenant proof.
-- [ ] Slice 3: channel lifecycle events.
+- [x] Slice 1: WS ticket gate + tenant binding.
+- [x] Slice 2: place_call agent ownership + execution tenant proof.
+- [x] Slice 3: channel lifecycle events (`ws_connect`/`ws_denied` in the WS
+  handler, `call_placed` in the place-call handler, `call_recorded` in the WS
+  run finally) — all through `AuthService.audit()`, tenant-stamped, no new
+  collection. WS-run `PlacedCall` rows still flow through the legacy
+  `engine_hook` till cutover (documented, not re-plumbed here).

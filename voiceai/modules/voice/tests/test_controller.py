@@ -75,15 +75,22 @@ class _Auth:
     """AuthService double redeeming one scripted principal (or none).
 
     Mirrors the real resolver on empty input: a missing ticket never resolves.
+    Audit calls are recorded for the channel-event assertions.
     """
 
     def __init__(self, principal=None):
         self._principal = principal
         self.seen_tickets = []
+        self.audits = []
 
     async def redeem_ticket(self, ticket):
         self.seen_tickets.append(ticket)
         return self._principal if ticket else None
+
+    async def audit(self, event_type, *, user_id=None, email=None, detail=None):
+        self.audits.append(
+            {"type": event_type, "user_id": user_id, "email": email, "detail": detail}
+        )
 
 
 class _Socket:
@@ -238,3 +245,22 @@ async def test_ticket_value_reaches_the_redeemer():
     container = _container(flag=True, auth=auth)
     await _drive(container, TICKET)
     assert auth.seen_tickets == [TICKET]
+
+
+async def test_denied_call_is_audited_without_a_subject():
+    auth = _Auth(None)
+    container = _container(flag=True, auth=auth)
+    await _drive(container, "bogus-ticket-value")
+    assert auth.audits == [
+        {"type": "ws_denied", "user_id": None, "email": None, "detail": AGENT_ID}
+    ]
+
+
+async def test_accepted_run_audits_connect_and_record():
+    auth = _Auth(_principal(org_id="globex"))
+    container = _container(flag=True, auth=auth)
+    await _drive(container, TICKET)
+    assert auth.audits == [
+        {"type": "ws_connect", "user_id": "u-1", "email": "u@example.com", "detail": AGENT_ID},
+        {"type": "call_recorded", "user_id": "u-1", "email": "u@example.com", "detail": AGENT_ID},
+    ]

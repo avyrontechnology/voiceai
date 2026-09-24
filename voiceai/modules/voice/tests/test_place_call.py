@@ -329,6 +329,26 @@ async def test_controller_place_call_simulated_and_partner_crud() -> None:
     assert bad_body.status_code == 422
 
 
+async def test_controller_place_call_audits_the_dial() -> None:
+    """A placed dial joins the tenant-stamped audit trail with its execution id."""
+    service, _ = _service()
+    client = await _authed_client(service)
+
+    placed = await client.post(
+        f"{PREFIX}/calls/place", json={"agent_id": "agent-1", "to_number": "+919812345678", "delay_scale": 0}
+    )
+    assert placed.status_code == 202, placed.text
+    execution_id = placed.json()["data"]["execution_id"]
+
+    events = await client.get(f"{PREFIX}/auth/events")
+    assert events.status_code == 200, events.text
+    dials = [e for e in events.json()["data"]["events"] if e["type"] == "call_placed"]
+
+    assert len(dials) == 1
+    assert dials[0]["detail"] == execution_id
+    assert dials[0]["tenant_id"] == "default"
+
+
 async def test_controller_partner_update_delete_roundtrip() -> None:
     service, _ = _service()
     client = await _authed_client(service)
