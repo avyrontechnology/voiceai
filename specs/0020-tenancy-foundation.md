@@ -69,8 +69,16 @@ migrations. Rollback is a revert; nothing depends on the new names.
 
 ## Burn-down
 
-- [x] M1a: context type + var + error + tests (this turn).
-- [ ] M1b: `BaseFields.tenant_id`, `TenantScopedRepository`, tenant
-  middleware, `modules/tenancy`, default-tenant backfill from `org_id`,
-  `auth → identity` shim, audit direct-first, tenant-aware reader cache,
-  one UI-sync spec. Separate turn, same spec number.
+- [x] M1a: context type + var + error + tests (c41fbb03).
+- [ ] M1b slices below, one commit each, `make check` green each.
+
+## M1b decisions (approved)
+
+1. Tenant id values reuse `org_id` verbatim (`"default"` survives as a real
+   tenant id). No mapping table.
+2. Backfill runs in a brief maintenance window with writers stopped (single
+   VM); script stays idempotent so reruns are safe.
+3. `auth → identity` is a re-export shim now (`# legacy-shim(spec-0020)`);
+   the real file move waits for M9 cutover.
+4. Anonymous/public routes bind `SYSTEM_TENANT_ID` with empty scopes, keeping
+   `current_tenant()` total behind the middleware.

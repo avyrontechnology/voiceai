@@ -59,3 +59,17 @@ def test_touch_without_actor_keeps_the_last_known_one() -> None:
     document.touch()
 
     assert document.updated_by == "user-1"
+
+
+def test_tenant_id_defaults_to_pre_tenancy_none() -> None:
+    """Old rows read back with no tenant; ``None`` is never written by scoped repos."""
+    document = BaseFields()
+
+    assert document.tenant_id is None
+
+
+def test_tenant_id_round_trips() -> None:
+    """A stamped tenant survives serialisation, the backfill's read path."""
+    document = BaseFields(tenant_id="acme")
+
+    assert BaseFields.model_validate(document.model_dump()).tenant_id == "acme"

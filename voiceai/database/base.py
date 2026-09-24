@@ -19,6 +19,9 @@ class BaseFields(BaseModel):
 
     Attributes:
         id: Storage identifier. ``None`` until a repository assigns one on insert.
+        tenant_id: Isolation boundary. ``None`` means a pre-tenancy row (spec 0020,
+            M1b backfills it from ``org_id``); ``None`` is never a valid query
+            target — scoped repositories always bind a concrete tenant.
         created_at: Creation timestamp, always timezone-aware UTC.
         updated_at: Timestamp of the last write; bumped by :meth:`touch`.
         created_by: Identifier of the actor that created the document, when known.
@@ -28,6 +31,7 @@ class BaseFields(BaseModel):
     """
 
     id: str | None = None
+    tenant_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     created_by: str | None = None
