@@ -62,7 +62,9 @@ def _task_config(llm_config):
 
 def _build_llm_config(llm_agent_config):
     """The llm_config TaskManager hands to the LLM class for a simple_llm_agent."""
-    tm = TaskManager("agent", 0, _task_config(llm_agent_config), MagicMock())
+    from voiceai.modules.agents import BrainFactory
+
+    tm = TaskManager("agent", 0, _task_config(llm_agent_config), MagicMock(), brain_factory=BrainFactory())
     return tm.llm_config
 
 

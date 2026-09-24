@@ -1,22 +1,28 @@
-"""Factory/legacy equivalence: the injected path builds identical brains (spec 0015).
+"""Factory-only brain assembly: the cutover pin (spec 0024, M3).
 
-Runs the REAL `TaskManager.__init__` twice per agent shape — once through the
-verbatim legacy branches, once through an injected `BrainFactory` — and asserts
-byte-identical `injected_cfg` dicts, identical `RAG_SERVER_URL` side-channel
-writes, identical `tools["llm_agent"]` wiring, and identical `agent_type`.
-Brain classes are fakes on BOTH paths (patched task_manager globals on legacy,
-injected constructors on factory), so only the ASSEMBLY is under test — exactly
-what the rethink moved. This test is what lets a follow-up spec delete the
-legacy branches.
+Runs the REAL `TaskManager.__init__` through the injected `BrainFactory` per
+agent shape and asserts the assembled config, the `RAG_SERVER_URL`
+side-channel write, the `tools["llm_agent"]` wiring, and the agent type.
+Brain classes are injected fakes, so only the ASSEMBLY is under test.
+
+Companion gates: unknown kinds answer `AgentsError` (never the legacy
+string-raise), malformed tasks raise exactly as before (`KeyError` on strict
+subscripts), sessions without the kwarg fail fast naming the spec, and the
+verbatim legacy assembly markers are mechanically absent from the legacy
+method — the flip can never silently revert.
 """
 
 from __future__ import annotations
 
+import inspect
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
+import pytest
 
 from voiceai.agent_manager import task_manager as task_manager_module
 from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.modules.agents.errors import AgentsError
 from voiceai.modules.agents.runtime.factory import BrainFactory
 
 _RAG_URL = "http://rag.internal:9000"
@@ -112,19 +118,8 @@ def _capture():
     return _Fake
 
 
-def _run_legacy(llm_agent, monkeypatch, fake):
-    """Build through the verbatim branches (module-global patch targets live)."""
-    monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
-    target = {"graph_agent": "GraphAgent", "knowledgebase_agent": "KnowledgeBaseAgent"}.get(
-        llm_agent["agent_type"], "StreamingContextualAgent"
-    )
-    with patch.object(task_manager_module, target, fake):
-        tm = _build(_task(llm_agent), rag_server_url=_RAG_URL, llm_key="k-compare")
-    return tm, dict(os.environ)
-
-
-def _run_factory(llm_agent, monkeypatch, fake):
-    """Build through the injected factory with the same fake constructors."""
+def _run(llm_agent, monkeypatch, fake):
+    """Build through the injected factory with fake constructors."""
     monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
     factory = BrainFactory(
         constructors={"simple_llm_agent": fake, "graph_agent": fake, "knowledgebase_agent": fake}
@@ -133,39 +128,85 @@ def _run_factory(llm_agent, monkeypatch, fake):
     return tm, dict(os.environ)
 
 
-def _assert_equivalent(llm_agent, monkeypatch, expected_env):
-    """Both paths, same inputs: identical config, env, wiring, and type."""
-    legacy_fake, factory_fake = _capture(), _capture()
-    legacy_tm, legacy_env = _run_legacy(llm_agent, monkeypatch, legacy_fake)
-    factory_tm, factory_env = _run_factory(llm_agent, monkeypatch, factory_fake)
+async def test_graph_path_assembles_shared_config(monkeypatch):
+    """Graph: injected credentials, pacing stamps, env write, wiring, type."""
+    fake = _capture()
+    tm, env = _run(_GRAPH_AGENT, monkeypatch, fake)
 
-    assert len(legacy_fake.instances) == len(factory_fake.instances) == 1
-    legacy_cfg = legacy_fake.instances[0].cfg
-    factory_cfg = factory_fake.instances[0].cfg
-    if isinstance(legacy_cfg, dict):
-        # Graph/knowledgebase: the assembled config dicts match key for key.
-        assert factory_cfg == legacy_cfg
-    else:
-        # Simple: each session composes its own llm object, so compare shape —
-        # same class carrying the same model into the constructor.
-        assert type(factory_cfg) is type(legacy_cfg)
-        assert getattr(factory_cfg, "model", None) == getattr(legacy_cfg, "model", None)
-    assert factory_env["RAG_SERVER_URL"] == legacy_env["RAG_SERVER_URL"] == expected_env
-    assert factory_tm.tools["llm_agent"] is factory_fake.instances[0]
-    assert legacy_tm.tools["llm_agent"] is legacy_fake.instances[0]
-    assert factory_tm.agent_type == legacy_tm.agent_type == llm_agent["agent_type"]
+    (brain,) = fake.instances
+    assert brain.cfg["llm_key"] == "k-compare"
+    assert brain.cfg["model"] == "gpt-5.4-mini"
+    assert brain.cfg["buffer_size"] == 100
+    assert env["RAG_SERVER_URL"] == _RAG_URL
+    assert tm.tools["llm_agent"] is brain
+    assert tm.agent_type == "graph_agent"
 
 
-async def test_graph_path_builds_identical_brains(monkeypatch):
-    """Graph: injected config, env write, wiring, and type match exactly."""
-    _assert_equivalent(_GRAPH_AGENT, monkeypatch, _RAG_URL)
+async def test_knowledgebase_path_assembles_shared_config(monkeypatch):
+    """Knowledgebase: same shared merge, env write, wiring, type."""
+    fake = _capture()
+    tm, env = _run(_KB_AGENT, monkeypatch, fake)
 
-
-async def test_knowledgebase_path_builds_identical_brains(monkeypatch):
-    """Knowledgebase: injected config, env write, wiring, and type match exactly."""
-    _assert_equivalent(_KB_AGENT, monkeypatch, _RAG_URL)
+    (brain,) = fake.instances
+    assert brain.cfg["llm_key"] == "k-compare"
+    assert brain.cfg["model"] == "gpt-5.4-mini"
+    assert brain.cfg["buffer_size"] == 100
+    assert env["RAG_SERVER_URL"] == _RAG_URL
+    assert tm.tools["llm_agent"] is brain
+    assert tm.agent_type == "knowledgebase_agent"
 
 
 async def test_simple_path_passes_the_composed_llm_through(monkeypatch):
-    """Simple: same constructor shape, no env side-channel on either path."""
-    _assert_equivalent(_SIMPLE_AGENT, monkeypatch, "http://original.example:1")
+    """Simple: the composed llm object reaches the constructor; no env write."""
+    fake = _capture()
+    tm, env = _run(_SIMPLE_AGENT, monkeypatch, fake)
+
+    (brain,) = fake.instances
+    assert tm.tools["llm_agent"] is brain
+    assert tm.agent_type == "simple_llm_agent"
+    assert env["RAG_SERVER_URL"] == "http://original.example:1"
+
+
+async def test_unknown_kind_answers_agents_error_not_a_string_raise(monkeypatch):
+    """Unknown types are an envelope, never the legacy `raise f` TypeError."""
+    fake = _capture()
+    monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
+    factory = BrainFactory(constructors={"simple_llm_agent": fake})
+    tm = _build(_task(_SIMPLE_AGENT), brain_factory=factory)
+
+    with pytest.raises(AgentsError) as exc_info:
+        tm._TaskManager__get_agent_object(MagicMock(), "nope_agent")
+    assert exc_info.value.details["agent_type"] == "nope_agent"
+
+
+async def test_malformed_task_raises_key_error_like_legacy(monkeypatch):
+    """Strict subscripts survive the move: malformed tasks raise `KeyError`."""
+    fake = _capture()
+    broken = _task(_GRAPH_AGENT)
+    del broken["tools_config"]
+    monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
+    factory = BrainFactory(constructors={"graph_agent": fake})
+
+    with pytest.raises(KeyError):
+        _build(broken, brain_factory=factory)
+
+
+async def test_missing_factory_kwarg_fails_fast_naming_the_spec(monkeypatch):
+    """Sessions without the kwarg fail loudly, never silently legacy."""
+    monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
+
+    with pytest.raises(RuntimeError, match="spec 0024"):
+        _build(_task(_SIMPLE_AGENT))
+
+
+def test_verbatim_assembly_markers_are_gone():
+    """The deleted branches cannot silently return to the legacy method."""
+    source = inspect.getsource(task_manager_module.TaskManager._TaskManager__get_agent_object)
+    for marker in (
+        "StreamingContextualAgent(",
+        "GraphAgent(",
+        "KnowledgeBaseAgent(",
+        "Agent type is not created yet",
+        'os.environ["RAG_SERVER_URL"]',
+    ):
+        assert marker not in source, f"verbatim marker returned: {marker}"

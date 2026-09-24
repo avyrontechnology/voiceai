@@ -1203,110 +1203,19 @@ class TaskManager(BaseManager):
 
     def __get_agent_object(self, llm, agent_type, assistant_config=None):
         self.agent_type = agent_type
-        # Spec 0015: an injected BrainFactory (prod, via the `brain_factory` task
-        # kwarg from adapters/manager) builds through the shared assembly; receiving
-        # an injected object is not an import (AGENTS.md §3.1 bridge 3), so this
-        # legacy file gains no imports. Sessions without the kwarg (tests, harnesses)
-        # run the verbatim branches below — see test_brain_factory_equivalence.
+        # Spec 0024 (M3 cutover): conversation brains build ONLY through the
+        # injected BrainFactory (prod, via the `brain_factory` task kwarg from
+        # adapters/manager). Receiving an injected object is not an import
+        # (AGENTS.md §3.1 bridge 3), so this legacy file gains no imports.
+        # The verbatim graph/knowledgebase branches deleted here were proven
+        # identical by tests/test_brain_factory_equivalence.py before removal.
         factory = self.kwargs.get("brain_factory")
-        if factory is not None:
-            return factory.build(agent_type, llm, self)
-        if agent_type == "simple_llm_agent":
-            llm_agent = StreamingContextualAgent(llm)
-        elif agent_type == "graph_agent":
-            logger.info("Setting up graph agent with rag-proxy-server support")
-            llm_config = self.task_config["tools_config"]["llm_agent"].get("llm_config", {})
-            rag_server_url = self.kwargs.get("rag_server_url", os.getenv("RAG_SERVER_URL", "http://localhost:8000"))
-
-            logger.info(f"Graph agent config: {llm_config}")
-            logger.info(f"RAG server URL: {rag_server_url}")
-
-            # Set RAG server URL in environment for GraphAgent to use
-            os.environ["RAG_SERVER_URL"] = rag_server_url
-
-            # Inject provider credentials for routing and response generation
-            injected_cfg = dict(llm_config)
-            if "llm_key" in self.kwargs:
-                injected_cfg["llm_key"] = self.kwargs["llm_key"]
-            if "base_url" in self.kwargs:
-                injected_cfg["base_url"] = self.kwargs["base_url"]
-
-            # Pass context_data for variable replacement in node prompts
-            if self.context_data:
-                injected_cfg["context_data"] = self.context_data
-
-            if "api_version" in self.kwargs:
-                injected_cfg["api_version"] = self.kwargs["api_version"]
-            if "api_tools" in self.kwargs:
-                injected_cfg["api_tools"] = self.kwargs["api_tools"]
-            if "reasoning_effort" in self.kwargs:
-                injected_cfg["reasoning_effort"] = self.kwargs["reasoning_effort"]
-            if "reasoning_summary" in self.kwargs:
-                injected_cfg["reasoning_summary"] = self.kwargs["reasoning_summary"]
-            if "service_tier" in self.kwargs:
-                injected_cfg["service_tier"] = self.kwargs["service_tier"]
-            if "overflow_llm" in self.kwargs:
-                injected_cfg["overflow_llm"] = self.kwargs["overflow_llm"]
-            if "routing_reasoning_effort" in self.kwargs:
-                injected_cfg["routing_reasoning_effort"] = self.kwargs["routing_reasoning_effort"]
-            if "routing_max_tokens" in self.kwargs:
-                injected_cfg["routing_max_tokens"] = self.kwargs["routing_max_tokens"]
-            # Set when the caller serves the conversation LLM from a different backend than the agent's own.
-            for key in ("aux_model", "aux_provider", "route_routing_to_conversation"):
-                if key in self.kwargs:
-                    injected_cfg[key] = self.kwargs[key]
-            if self.llm_config.get("use_responses_api"):
-                injected_cfg["use_responses_api"] = True
-            if self.llm_config.get("compact_threshold"):
-                injected_cfg["compact_threshold"] = self.llm_config["compact_threshold"]
-            injected_cfg["buffer_size"] = self.task_config["tools_config"]["synthesizer"].get("buffer_size")
-            injected_cfg["language"] = self.language
-            injected_cfg["turn_based_conversation"] = self.turn_based_conversation
-            injected_cfg["execution_id"] = self.run_id
-
-            llm_agent = GraphAgent(injected_cfg)
-            logger.info("Graph agent created with rag-proxy-server support")
-        elif agent_type == "knowledgebase_agent":
-            logger.info("Setting up knowledge agent with rag-proxy-server support")
-            llm_config = self.task_config["tools_config"]["llm_agent"].get("llm_config", {})
-            rag_server_url = self.kwargs.get("rag_server_url", os.getenv("RAG_SERVER_URL", "http://localhost:8000"))
-
-            logger.info(f"Knowledge agent config: {llm_config}")
-            logger.info(f"RAG server URL: {rag_server_url}")
-
-            # Set RAG server URL in environment for KnowledgeAgent to use
-            os.environ["RAG_SERVER_URL"] = rag_server_url
-
-            # Inject provider credentials and endpoints into KnowledgeAgent config
-            injected_cfg = dict(llm_config)
-            if "llm_key" in self.kwargs:
-                injected_cfg["llm_key"] = self.kwargs["llm_key"]
-            if "base_url" in self.kwargs:
-                injected_cfg["base_url"] = self.kwargs["base_url"]
-            if "api_version" in self.kwargs:
-                injected_cfg["api_version"] = self.kwargs["api_version"]
-            if "api_tools" in self.kwargs:
-                injected_cfg["api_tools"] = self.kwargs["api_tools"]
-            if "reasoning_effort" in self.kwargs:
-                injected_cfg["reasoning_effort"] = self.kwargs["reasoning_effort"]
-            if "reasoning_summary" in self.kwargs:
-                injected_cfg["reasoning_summary"] = self.kwargs["reasoning_summary"]
-            if "service_tier" in self.kwargs:
-                injected_cfg["service_tier"] = self.kwargs["service_tier"]
-            if "overflow_llm" in self.kwargs:
-                injected_cfg["overflow_llm"] = self.kwargs["overflow_llm"]
-            if self.llm_config.get("use_responses_api"):
-                injected_cfg["use_responses_api"] = True
-            if self.llm_config.get("compact_threshold"):
-                injected_cfg["compact_threshold"] = self.llm_config["compact_threshold"]
-            injected_cfg["buffer_size"] = self.task_config["tools_config"]["synthesizer"].get("buffer_size")
-            injected_cfg["language"] = self.language
-
-            llm_agent = KnowledgeBaseAgent(injected_cfg)
-            logger.info("Knowledge agent created with rag-proxy-server support")
-        else:
-            raise f"{agent_type} Agent type is not created yet"
-        return llm_agent
+        if factory is None:
+            raise RuntimeError(
+                "TaskManager requires a 'brain_factory' task kwarg (spec 0024 M3): "
+                "pass BrainFactory() from voiceai.modules.agents."
+            )
+        return factory.build(agent_type, llm, self)
 
     def __setup_s2s(self):
         """Validate the S2S config. The provider itself is built once prompts are loaded."""

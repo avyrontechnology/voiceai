@@ -19,6 +19,13 @@ from voiceai.modules.voice.session.composition import CallArgs
 from voiceai.modules.voice.session.interruption import InterruptionManager
 
 
+def _factory():
+    """Default-constructed factory (matches the legacy branch builds)."""
+    from voiceai.modules.agents import BrainFactory
+
+    return BrainFactory()
+
+
 def _llm_agent_config(**overrides):
     cfg = {
         "model": "gpt-5.4-mini",
@@ -80,7 +87,9 @@ def _args(**overrides):
         "conversation_history": None,
         "output_queue": None,
         "yield_chunks": True,
-        "kwargs": {},
+        # Brains build through the injected factory (spec 0024 M3); the default
+        # constructors match what the legacy branches built.
+        "kwargs": {"brain_factory": _factory()},
     }
     base.update(overrides)
     return CallArgs(**base)
@@ -97,7 +106,7 @@ async def test_init_bundles_its_arguments_for_the_composition_root(monkeypatch):
     monkeypatch.setattr(composition, "compose_call_session", _record)
     tm = TaskManager.__new__(TaskManager)
     task = _args().task
-    TaskManager.__init__(tm, "agent", 0, task, MagicMock(), assistant_id="a-1")
+    TaskManager.__init__(tm, "agent", 0, task, MagicMock(), assistant_id="a-1", brain_factory=_factory())
     (bundle,) = seen
     assert isinstance(bundle, CallArgs)
     assert (bundle.assistant_name, bundle.task_id, bundle.assistant_id) == ("agent", 0, "a-1")
@@ -153,7 +162,9 @@ def test_compose_runs_every_phase_in_source_order(monkeypatch):
 
 
 async def test_from_components_builds_a_live_session_with_reconfigured_gates():
-    tm = TaskManager.from_components(_args(kwargs={"process_interim_results": "false"}))
+    tm = TaskManager.from_components(
+        _args(kwargs={"process_interim_results": "false", "brain_factory": _factory()})
+    )
     assert tm.task_id == 0
     assert tm.assistant_name == "agent"
     assert tm.kwargs["task_manager_instance"] is tm

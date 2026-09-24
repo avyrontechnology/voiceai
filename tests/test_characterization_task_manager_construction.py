@@ -83,7 +83,12 @@ def _build(task, **kwargs):
 
     The cancels run before any await point, so the tasks never execute — construction
     state alone is under test, exactly as in the lone pin this matrix extends.
+    Brains build through the injected factory (spec 0024 M3); the default
+    constructors match what the legacy branches built, so pins hold.
     """
+    from voiceai.modules.agents import BrainFactory
+
+    kwargs.setdefault("brain_factory", BrainFactory())
     tm = TaskManager("agent", 0, task, MagicMock(), **kwargs)
     for name in (
         "first_message_task_new",
@@ -281,6 +286,13 @@ def _capture_agent_cls():
     return _FakeAgent
 
 
+def _factory_with(fake, kind):
+    """Factory injecting one fake constructor (spec 0024 M3: globals no longer dispatch)."""
+    from voiceai.modules.agents import BrainFactory
+
+    return BrainFactory(constructors={kind: fake})
+
+
 async def test_graph_agent_construction_contract(monkeypatch):
     monkeypatch.setenv("RAG_SERVER_URL", "http://original.example:1")
     fake = _capture_agent_cls()
@@ -292,8 +304,12 @@ async def test_graph_agent_construction_contract(monkeypatch):
             "nodes": [{"id": "start", "prompt": "hi", "edges": []}],
         },
     }
-    with patch("voiceai.agent_manager.task_manager.GraphAgent", fake):
-        tm = _build(_task(graph_agent), rag_server_url="http://rag.internal:9000", llm_key="k-graph")
+    tm = _build(
+        _task(graph_agent),
+        rag_server_url="http://rag.internal:9000",
+        llm_key="k-graph",
+        brain_factory=_factory_with(fake, "graph_agent"),
+    )
 
     # Preserved quirk: the kwarg is written INTO the process environment for the agent.
     assert os.environ["RAG_SERVER_URL"] == "http://rag.internal:9000"
@@ -318,8 +334,9 @@ async def test_knowledgebase_agent_construction_contract(monkeypatch):
         "agent_type": "knowledgebase_agent",
         "llm_config": {**_llm_config(), "vector_store": {"provider": "lancedb", "vector_id": "test"}},
     }
-    with patch("voiceai.agent_manager.task_manager.KnowledgeBaseAgent", fake):
-        tm = _build(_task(kb_agent), rag_server_url="http://rag.internal:9001")
+    tm = _build(
+        _task(kb_agent), rag_server_url="http://rag.internal:9001", brain_factory=_factory_with(fake, "knowledgebase_agent")
+    )
 
     assert os.environ["RAG_SERVER_URL"] == "http://rag.internal:9001"
     assert tm.tools["llm_agent"] is fake.instances[0]

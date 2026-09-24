@@ -103,7 +103,12 @@ def _build(task, **kwargs):
 
     The cancels run before any await point, so the tasks never execute — construction
     state alone is under test, exactly as in the B1 matrix this suite extends.
+    Brains build through the injected factory (spec 0024 M3); the default
+    constructors match what the legacy branches built, so parity pins hold.
     """
+    from voiceai.modules.agents import BrainFactory
+
+    kwargs.setdefault("brain_factory", BrainFactory())
     tm = TaskManager("agent", 0, task, MagicMock(), **kwargs)
     for name in (
         "first_message_task_new",
