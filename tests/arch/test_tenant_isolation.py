@@ -39,6 +39,8 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/auth/models/user.py",  # spec 0020, M1b: tenant sync validator
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping
         "voiceai/modules/auth/tests/test_tenancy.py",  # spec 0020, M1b: boundary pins
+        "voiceai/modules/voice/controller.py",  # spec 0021, M2: channel tenant binding
+        "voiceai/modules/voice/tests/test_controller.py",  # spec 0021, M2: gate pins
         "voiceai/modules/wallet/adapters/legacy_store.py",  # spec 0020, M1b: translation stamps
     }
 )

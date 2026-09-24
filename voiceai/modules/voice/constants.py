@@ -135,6 +135,12 @@ CHAT_WS_PATH: Final[str] = "/chat/v1/{agent_id}"
 WS_CLOSE_DARK: Final[int] = 4403
 #: WS close code when no agent definition exists for the id (mirrors HTTP 404).
 WS_CLOSE_UNKNOWN_AGENT: Final[int] = 4404
+#: WS close code when the ticket is missing, invalid, used, expired, or
+#: scope-less (mirrors HTTP 401). One code for all denials: clients branch on
+#: codes, and distinct reasons would oracle ticket validity.
+WS_CLOSE_DENIED: Final[int] = 4401
+#: Query parameter carrying the single-use WS ticket (spec 0021, M2).
+WS_TICKET_PARAM: Final[str] = "ticket"
 
 # --- Outbound place-call (spec 0008) -------------------------------------------------
 #: HTTP route for single-call outbound dials (dual-served bare + API prefix).

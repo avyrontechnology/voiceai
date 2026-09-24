@@ -11,14 +11,18 @@ Spec 0008 adds the outbound place-call and partner-credential routes. Authentica
 resolves through the container ``AuthService`` with per-route scope gates.
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, WebSocket
 from starlette.responses import JSONResponse
 
-from voiceai.common.errors import AppError
+from voiceai.common.constants import CONTAINER_STATE_ATTR
+from voiceai.common.errors import AppError, ConfigurationError
+from voiceai.common.ids import new_id
+from voiceai.common.logger import get_logger
 from voiceai.common.responses import error_response, success_response
+from voiceai.common.tenancy import TenantContext, bind_tenant
 from voiceai.core.container import VoiceAIContainer
 from voiceai.core.environment import Environment
 from voiceai.modules.auth import SESSION_COOKIE, AuthService, Principal, ensure_permitted, request_principal
@@ -32,7 +36,9 @@ from voiceai.modules.voice.constants import (
     PARTNERS_PREVIEW_PATH,
     PLACE_CALL_PATH,
     WS_CLOSE_DARK,
+    WS_CLOSE_DENIED,
     WS_CLOSE_UNKNOWN_AGENT,
+    WS_TICKET_PARAM,
 )
 from voiceai.modules.voice.models import PlacedCall
 from voiceai.modules.voice.schemas import VoiceContract
@@ -52,14 +58,13 @@ TalkoPartnerView = VoiceContract.TalkoPartnerView
 
 __all__ = ["router"]
 
+logger = get_logger("voice")
+
 router = APIRouter(tags=[MODULE_NAME])
 
 
 ServiceDep = Annotated[VoiceCallService, Depends(Provide[VoiceAIContainer.voice_call_service])]
 EnvironmentDep = Annotated[Environment, Depends(Provide[VoiceAIContainer.environment])]
-# why: bridge 4 forbids even typing imports of agents submodules (layer-contract
-# test); the runtime object is the AgentDefinitionPort the container wires.
-AgentDefinitionsDep = Annotated[Any, Depends(Provide[VoiceAIContainer.agent_definitions])]
 AuthServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_service])]
 
 
@@ -77,26 +82,55 @@ async def _require_scope(request: Request, auth: AuthService, scope: str) -> Pri
 async def voice_chat(
     websocket: WebSocket,
     agent_id: str,
-    service: ServiceDep,
     environment: EnvironmentDep,
-    definitions: AgentDefinitionsDep,
+    auth: AuthServiceDep,
 ) -> None:
-    """Run one realtime call over the accepted socket (dark until cutover)."""
+    """Run one realtime call over the accepted socket (dark until cutover).
+
+    The channel owns its gate (spec 0021, M2): HTTP middleware never runs on
+    websockets, so the handler redeems the single-use ``?ticket=`` itself,
+    binds the ticket holder's tenant, and only then resolves the
+    request-scoped services from the app container (constructing them earlier
+    would read an unbound tenant). Every denial answers a close code, never a
+    body; denials log identifiers only, never the token.
+    """
     await websocket.accept()
     if not environment.voice_ws_enabled:
         await websocket.close(code=WS_CLOSE_DARK)
         return
-    agent_config = await definitions.get_agent(agent_id) if definitions is not None else None
-    if not agent_config:
-        await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
+    ticket = websocket.query_params.get(WS_TICKET_PARAM)
+    principal = await auth.redeem_ticket(ticket)
+    if principal is None or not principal.has_scope("calls:write"):
+        logger.warning(
+            "voice ws denied for agent %s (%s)",
+            agent_id,
+            "missing ticket" if not ticket else "rejected ticket",
+        )
+        await websocket.close(code=WS_CLOSE_DENIED)
         return
-    try:
-        await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
-    finally:
+    context = TenantContext(
+        tenant_id=principal.org_id,
+        request_id=new_id("ws"),
+        principal_id=principal.user_id,
+        scopes=frozenset(principal.effective_scopes()),
+    )
+    with bind_tenant(context):
+        container = getattr(websocket.app.state, CONTAINER_STATE_ATTR, None)
+        if container is None:
+            raise ConfigurationError("tenant resolution is not wired")
+        definitions = container.agent_definitions()
+        service = container.voice_call_service()
+        agent_config = await definitions.get_agent(agent_id) if definitions is not None else None
+        if not agent_config:
+            await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
+            return
         try:
-            await websocket.close()
-        except RuntimeError:
-            pass  # the run or the client already closed the socket; a second close only spams logs
+            await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
+        finally:
+            try:
+                await websocket.close()
+            except RuntimeError:
+                pass  # the run or the client already closed the socket; a second close only spams logs
 
 
 
