@@ -35,6 +35,9 @@ class Collections(str, Enum):
     #: Provider catalog rows (spec 0022, M-catalog): system-tenant modality /
     #: provider / model documents the agent builder dropdowns read.
     PROVIDER_CATALOG = "provider_catalog"
+    #: Custom voice library rows (spec 0025, M-voices): tenant-scoped
+    #: per-agent voices.
+    VOICES = "voices"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

@@ -56,6 +56,7 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "talko_partners",
     "health_checks",
     "agent_templates",
+    "voices",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).
