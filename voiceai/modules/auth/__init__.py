@@ -9,8 +9,8 @@ cutover endgame.
 from __future__ import annotations
 
 from voiceai.modules import ModuleDef
-from voiceai.modules.auth.constants import MODULE_NAME
-from voiceai.modules.auth.controller import router
+from voiceai.modules.auth.constants import MODULE_NAME, SESSION_COOKIE
+from voiceai.modules.auth.controller import request_principal, router
 from voiceai.modules.auth.errors import (
     AuthError,
     AuthNotFoundError,
@@ -25,6 +25,7 @@ from voiceai.modules.auth.exceptions import (
     ensure_invite_valid,
     ensure_permitted,
 )
+from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
 
@@ -47,6 +48,9 @@ __all__ = [
     "InviteInvalidError",
     "InvalidCredentialsError",
     "TooManyAttemptsError",
+    "Principal",
+    "SESSION_COOKIE",
+    "request_principal",
     "ensure_authenticated",
     "ensure_found",
     "ensure_invite_valid",

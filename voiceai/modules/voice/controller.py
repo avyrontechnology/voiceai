@@ -21,9 +21,7 @@ from voiceai.common.errors import AppError
 from voiceai.common.responses import error_response, success_response
 from voiceai.core.container import VoiceAIContainer
 from voiceai.core.environment import Environment
-from voiceai.modules.auth import AuthService, ensure_permitted
-from voiceai.modules.auth.constants import SESSION_COOKIE
-from voiceai.modules.auth.models.principal import Principal
+from voiceai.modules.auth import SESSION_COOKIE, AuthService, Principal, ensure_permitted, request_principal
 from voiceai.modules.voice.constants import (
     CHAT_WS_PATH,
     MODULE_NAME,
@@ -66,7 +64,10 @@ AuthServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_se
 
 
 async def _require_scope(request: Request, auth: AuthService, scope: str) -> Principal:
-    principal = await auth.authenticate(request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", ""))
+    """Gate the caller on a scope, preferring the middleware-stashed principal (one store trip)."""
+    principal = request_principal(request) or await auth.authenticate(
+        request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", "")
+    )
     ensure_permitted(principal.has_scope(scope), f"Requires {scope} scope")
     return principal
 

@@ -18,6 +18,7 @@ from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import ConflictError, InvalidRequestError
 from voiceai.common.ids import new_id
 from voiceai.common.logger import get_logger
+from voiceai.common.tenancy import TenantContext
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.errors import (
     ForbiddenError,
@@ -406,6 +407,63 @@ class AuthService:
         if principal is None:
             raise InvalidCredentialsError("Authentication required")
         return principal
+
+    async def resolve_caller(
+        self, session_token: str | None, authorization: str | None
+    ) -> Principal | None:
+        """Resolve credentials to a principal without raising on anonymous callers.
+
+        Only credential failure maps to ``None`` — backend outages propagate as
+        errors, so an outage can never silently demote traffic to anonymous
+        (fail-closed, spec 0020 M1b).
+
+        Args:
+            session_token: Opaque session token from the session cookie, if sent.
+            authorization: Raw ``Authorization`` header value, if sent.
+
+        Returns:
+            The resolved principal, or ``None`` when no credential resolved.
+
+        Raises:
+            DatabaseError: When the store itself fails (deliberately not absorbed).
+        """
+        try:
+            return await self.authenticate(session_token, authorization)
+        except InvalidCredentialsError:
+            return None
+
+    async def resolve_request_identity(
+        self, session_token: str | None, authorization: str | None, request_id: str
+    ) -> tuple[TenantContext | None, Principal | None]:
+        """Resolve one request's credentials to its tenant context and principal.
+
+        The tenant middleware (spec 0020, M1b) calls this once per request: the
+        context feeds the ambient binding, the principal is stashed on
+        ``request.state`` so controllers never resolve the same credentials
+        twice (one store trip per request, not two).
+
+        Args:
+            session_token: Opaque session token from the session cookie, if sent.
+            authorization: Raw ``Authorization`` header value, if sent.
+            request_id: Correlation id the middleware copies into the context.
+
+        Returns:
+            ``(context, principal)`` — both ``None`` for anonymous callers (the
+            middleware binds the system tenant then).
+
+        Raises:
+            DatabaseError: When the store itself fails (deliberately not absorbed).
+        """
+        principal = await self.resolve_caller(session_token, authorization)
+        if principal is None:
+            return None, None
+        context = TenantContext(
+            tenant_id=principal.org_id,
+            request_id=request_id,
+            principal_id=principal.user_id,
+            scopes=frozenset(principal.effective_scopes()),
+        )
+        return context, principal
 
     async def me(self, principal: Principal) -> tuple[User, list[str]]:
         """Return the session caller's record plus effective scopes for /me.

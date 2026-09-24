@@ -27,9 +27,11 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
     {
         "voiceai/common/keys.py",
         "voiceai/common/tenancy.py",  # spec 0020, M1a: ambient context vocabulary
+        "voiceai/core/app_factory.py",  # spec 0020, M1b: tenant middleware binding
         "voiceai/database/base.py",  # spec 0020, M1b: the tenant_id field itself
         "voiceai/database/constants.py",  # spec 0020, M1b: TENANT_ID_FIELD literal
         "voiceai/database/scoped.py",  # spec 0020, M1b: the scoping choke point itself
+        "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping
     }
 )
 

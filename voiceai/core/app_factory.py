@@ -25,19 +25,22 @@ from voiceai.common.constants import (
     APP_NAME,
     APP_VERSION,
     CONTAINER_STATE_ATTR,
+    PRINCIPAL_STATE_ATTR,
     REQUEST_ID_HEADER,
+    SESSION_COOKIE,
 )
-from voiceai.common.errors import AppError
-from voiceai.common.logger import configure_logging, set_request_id
+from voiceai.common.errors import AppError, ConfigurationError
+from voiceai.common.logger import configure_logging, get_request_id, set_request_id
 from voiceai.common.responses import register_exception_handlers, unexpected_error_response
 from voiceai.common.security import REQUEST_ID_PATTERN
+from voiceai.common.tenancy import SYSTEM_TENANT_ID, TenantContext, bind_tenant
 from voiceai.core.container import VoiceAIContainer, aclose_container, build_container
 from voiceai.core.environment import Environment, ensure_exact_origins, get_environment
 
 if TYPE_CHECKING:  # import-direction rule: modules → core is the only static direction
     from voiceai.modules import ModuleDef
 
-__all__ = ["RequestIdMiddleware", "create_app"]
+__all__ = ["RequestIdMiddleware", "TenantMiddleware", "create_app"]
 
 #: Methods and headers the browser boundary accepts when CORS is enabled at all.
 CORS_ALLOW_METHODS: Final[tuple[str, ...]] = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
@@ -100,6 +103,52 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             response = unexpected_error_response(exc, path=request.url.path)
         response.headers[REQUEST_ID_HEADER] = request_id
         return response
+
+
+class TenantMiddleware(BaseHTTPMiddleware):
+    """Bind the ambient tenant context for the duration of the request (spec 0020, M1b).
+
+    Credentials resolve through the container's ``tenant_resolver`` (the auth
+    service's non-raising ``resolve_request_identity``) — this middleware never
+    imports a module, keeping the core → modules direction one-way. The resolved
+    principal is stashed on ``request.state`` so controllers resolve each
+    request's credentials once, not twice. Anonymous or invalid credentials bind
+    the system tenant with empty scopes, so ``current_tenant()`` stays total
+    behind the middleware while every auth gate downstream still rejects
+    scope-less callers. Backend failures propagate to the 500 envelope instead
+    of demoting traffic to anonymous (fail-closed).
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Resolve the caller and bind its tenant around the rest of the stack.
+
+        Args:
+            request: The incoming request.
+            call_next: The rest of the application stack.
+
+        Returns:
+            The downstream response.
+
+        Raises:
+            ConfigurationError: When the app was built without a container or the
+                container exposes no tenant resolver — a wiring bug, opaque 500.
+        """
+        container = getattr(request.app.state, CONTAINER_STATE_ATTR, None)
+        provider = getattr(container, "tenant_resolver", None) if container is not None else None
+        if provider is None:
+            raise ConfigurationError("tenant resolution is not wired")
+        request_id = get_request_id() or ""
+        resolve = provider()
+        context, principal = await resolve(
+            request.cookies.get(SESSION_COOKIE),
+            request.headers.get("authorization", ""),
+            request_id,
+        )
+        setattr(request.state, PRINCIPAL_STATE_ATTR, principal)
+        if context is None:
+            context = TenantContext(tenant_id=SYSTEM_TENANT_ID, request_id=request_id)
+        with bind_tenant(context):
+            return await call_next(request)
 
 
 def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
@@ -173,6 +222,10 @@ def create_app(
     resolved = container if container is not None else build_container(environment)
     app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=_build_lifespan(resolved))
     setattr(app.state, CONTAINER_STATE_ATTR, resolved)
+    app.add_middleware(TenantMiddleware)
+    # TenantMiddleware is added before RequestIdMiddleware on purpose: the last
+    # add_middleware is the outermost, so RequestId runs first and the tenant
+    # context inherits the validated correlation id.
     app.add_middleware(RequestIdMiddleware)
     # Added after RequestIdMiddleware on purpose: the last add_middleware is the outermost, so
     # CORS wraps RequestIdMiddleware and even the 500 envelopes built inside it carry the CORS

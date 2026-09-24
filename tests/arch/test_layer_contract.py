@@ -274,14 +274,10 @@ def test_voice_imports_only_agents_public_surface() -> None:
 #: surface check. Each entry is (relative file, target package, imported name).
 #: New code must use the target's ``__all__`` surface instead; entries are removed
 #: (not added to) as the owning spec fixes them.
-KNOWN_DEEP_IMPORT_DEBT: frozenset[tuple[str, str, str]] = frozenset(
-    {
-        ("voiceai/modules/voice/controller.py", "voiceai.modules.auth.constants", "SESSION_COOKIE"),
-        ("voiceai/modules/voice/controller.py", "voiceai.modules.auth.models.principal", "Principal"),
-        ("voiceai/modules/wallet/controller.py", "voiceai.modules.auth.constants", "SESSION_COOKIE"),
-        ("voiceai/modules/wallet/controller.py", "voiceai.modules.auth.models.principal", "Principal"),
-    }
-)
+#:
+#: Spec 0020, M1b burned the four SESSION_COOKIE/Principal entries: both names are
+#: on the auth ``__all__`` surface now and the wallet/voice controllers use it.
+KNOWN_DEEP_IMPORT_DEBT: frozenset[tuple[str, str, str]] = frozenset()
 
 #: Web/driver packages a service file must never import (AGENTS.md §3).
 SERVICE_BANNED_PREFIXES: tuple[str, ...] = ("fastapi", "starlette")

@@ -47,6 +47,18 @@ REQUEST_ID_HEADER: Final[str] = "X-Request-ID"
 # to a short, opaque alphabet before they are trusted (AGENTS.md §4, "web boundary").
 REQUEST_ID_PATTERN_SOURCE: Final[str] = r"^[A-Za-z0-9_-]{1,64}$"
 
+# --- Web boundary: session transport ---------------------------------------------------------
+#: Session cookie carrying the opaque session token (spec 0020, M1b). Promoted here
+#: from the auth module: auth, wallet, voice, and the tenant middleware all read it,
+#: which makes it project-wide by AGENTS.md rule 2. `auth.constants` re-exports it
+#: so existing import sites keep working.
+SESSION_COOKIE: Final[str] = "otoba_session"
+
+#: `request.state` attribute where the tenant middleware stashes the resolved
+#: principal (spec 0020, M1b): one store trip per request — controllers prefer the
+#: stashed principal over re-resolving the same credentials.
+PRINCIPAL_STATE_ATTR: Final[str] = "principal"
+
 # --- Secret redaction -----------------------------------------------------------------------
 REDACTED_VALUE: Final[str] = "***"
 # A regex over key *names*, not a credential of any kind.

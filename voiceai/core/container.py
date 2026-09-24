@@ -105,6 +105,22 @@ def _build_auth_service(auth_store: Any, environment: Any) -> Any:
     return AuthService(auth_store, jwt=jwt)
 
 
+def _build_tenant_resolver(auth_service: Any) -> Any:
+    """Expose credential → (context, principal) resolution to the tenant middleware.
+
+    The bound method is non-raising on anonymous callers (``(None, None)`` means
+    the middleware binds the system tenant); backend failures propagate so an
+    outage can never silently demote traffic to anonymous (spec 0020, M1b).
+
+    Args:
+        auth_service: The composed auth service owning credential resolution.
+
+    Returns:
+        Its ``resolve_request_identity`` bound method.
+    """
+    return auth_service.resolve_request_identity
+
+
 def _build_health_repository(redis_client: Any, db_client: Any) -> Any:
     from voiceai.modules.health.repository import HealthRepository
 
@@ -244,6 +260,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
 
     # Auth Module
     auth_service = providers.Factory(_build_auth_service, auth_store, environment)
+
+    # Tenancy (spec 0020, M1b): the middleware resolves callers through this, never
+    # by importing a module — the container is the single composition point.
+    tenant_resolver = providers.Factory(_build_tenant_resolver, auth_service)
 
     # Health Module
     health_repository = providers.Factory(_build_health_repository, redis_client=redis_client, db_client=db_client)

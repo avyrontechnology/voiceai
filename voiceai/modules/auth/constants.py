@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Final, Literal
 
+from voiceai.common.constants import SESSION_COOKIE
+
+__all__ = ["SESSION_COOKIE"]
+
 #: Module name for the logger, router tags and registry entry.
 MODULE_NAME: Final[str] = "auth"
-
-#: Session cookie carrying the opaque session token.
-SESSION_COOKIE: Final[str] = "otoba_session"
 
 #: Refresh cookie carrying the opaque JWT refresh token (httpOnly, T2).
 REFRESH_COOKIE: Final[str] = "otoba_refresh"

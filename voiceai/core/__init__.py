@@ -1,6 +1,6 @@
 """Process wiring: environment, dependency container, infrastructure clients, app factory."""
 
-from voiceai.core.app_factory import RequestIdMiddleware, create_app
+from voiceai.core.app_factory import RequestIdMiddleware, TenantMiddleware, create_app
 from voiceai.core.container import VoiceAIContainer, aclose_container, build_container
 from voiceai.core.db import DatabaseClient, InMemoryDatabase, MotorDatabase, create_db
 from voiceai.core.environment import (
@@ -21,6 +21,7 @@ __all__ = [
     "MotorDatabase",
     "RequestIdMiddleware",
     "TaskRegistry",
+    "TenantMiddleware",
     "build_container",
     "create_app",
     "create_db",

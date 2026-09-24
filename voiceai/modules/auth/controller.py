@@ -13,6 +13,7 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
+from voiceai.common.constants import PRINCIPAL_STATE_ATTR
 from voiceai.common.errors import AppError
 from voiceai.common.logger import get_logger
 from voiceai.common.responses import error_response, success_response
@@ -26,7 +27,7 @@ from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.schemas import AuthContract
 from voiceai.modules.auth.service import AuthService, SessionTokens
 
-__all__ = ["router"]
+__all__ = ["request_principal", "router"]
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -67,8 +68,29 @@ EnvDep = Annotated[Environment, Depends(Provide[VoiceAIContainer.environment])]
 
 @inject
 async def get_principal(request: Request, service: ServiceDep) -> Principal:
-    """Resolve the caller from session cookie, else Bearer key (401 when neither)."""
-    return await service.authenticate(request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", ""))
+    """Resolve the caller from session cookie, else Bearer key (401 when neither).
+
+    Prefers the principal the tenant middleware already resolved and stashed on
+    `request.state` — one store trip per request, not two. Falls back to a fresh
+    resolution for stacks without the middleware.
+    """
+    return request_principal(request) or await service.authenticate(
+        request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", "")
+    )
+
+
+def request_principal(request: Request) -> Principal | None:
+    """Return the middleware-stashed principal, if this request carried credentials.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The resolved caller, or ``None`` when the middleware saw no credentials
+        (anonymous) or this stack has no tenant middleware (legacy).
+    """
+    principal = getattr(request.state, PRINCIPAL_STATE_ATTR, None)
+    return principal if isinstance(principal, Principal) else None
 
 
 def _to_http(exc: AppError) -> JSONResponse:
@@ -211,12 +233,14 @@ async def refresh(request: Request, service: ServiceDep, env: EnvDep) -> JSONRes
 @inject
 async def logout(request: Request, service: ServiceDep) -> JSONResponse:
     """Revoke both cookies' tokens (anonymous logout still clears them)."""
-    try:
-        principal = await service.authenticate(
-            request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", "")
-        )
-    except InvalidCredentialsError:
-        principal = None
+    principal = request_principal(request)
+    if principal is None:
+        try:
+            principal = await service.authenticate(
+                request.cookies.get(C.SESSION_COOKIE), request.headers.get("authorization", "")
+            )
+        except InvalidCredentialsError:
+            principal = None
     try:
         await service.logout(
             request.cookies.get(C.SESSION_COOKIE),

@@ -9,9 +9,7 @@ from starlette.responses import JSONResponse
 from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.responses import success_response
 from voiceai.core.container import VoiceAIContainer
-from voiceai.modules.auth import AuthService, ensure_permitted
-from voiceai.modules.auth.constants import SESSION_COOKIE
-from voiceai.modules.auth.models.principal import Principal
+from voiceai.modules.auth import SESSION_COOKIE, AuthService, Principal, ensure_permitted, request_principal
 from voiceai.modules.wallet.constants import (
     TEMPLATES_ROUTE_PREFIX,
     TEMPLATES_TAG,
@@ -45,8 +43,10 @@ AuthServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_se
 
 
 async def _principal(request: Request, auth: AuthService) -> Principal:
-    """Resolve the caller from session cookie, else Bearer credential."""
-    return await auth.authenticate(request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", ""))
+    """Resolve the caller, preferring the middleware-stashed principal (one store trip)."""
+    return request_principal(request) or await auth.authenticate(
+        request.cookies.get(SESSION_COOKIE), request.headers.get("authorization", "")
+    )
 
 
 async def _require_role(request: Request, auth: AuthService, minimum: str) -> Principal:
