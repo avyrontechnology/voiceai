@@ -103,8 +103,11 @@ make sec
 ## Rollout
 
 New collection + additive endpoints + additive validation (create/update only
-— reads never validate). Rollback is revert. The seed loader runs at deploy;
-re-runs are idempotent.
+— reads never validate). Rollback is revert. Both app lifespans
+(`create_app`, quickstart) run version-aware `ensure_seeded` at boot:
+missing rows insert, stale versions replace, current stores cost one bounded
+read; seed failures log loudly but never block boot. Agent validation skips
+with a warning while the catalog is empty (pre-seed window only).
 
 ## Burn-down
 

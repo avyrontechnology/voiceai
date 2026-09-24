@@ -8,7 +8,7 @@ The agent-CRUD gates below resolve through the container ``AuthService``.
 import copy
 import os
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Final
 
 import redis.asyncio as redis
@@ -18,6 +18,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, WebSo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from contextlib import asynccontextmanager
 from voiceai.common.constants import (
     API_PREFIX,
     CONTAINER_STATE_ATTR,
@@ -34,6 +35,7 @@ from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
 from voiceai.modules import auth as auth_module
+from voiceai.modules import catalog as catalog_module
 from voiceai.modules.agents import AgentNotFoundError, AgentService
 from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.schemas import VoiceContract as _VoiceContract
@@ -139,7 +141,17 @@ with bind_tenant(_quickstart_tenant_context(_QUICKSTART_BOOT_REQUEST_ID)):
     # where the old direct AssistantManager import loaded it.
     voice_call_service: VoiceCallService = _agents_container.voice_call_service()
 
-app = FastAPI()
+@asynccontextmanager
+async def _quickstart_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Seed the provider catalog at boot (spec 0022): never blocks boot."""
+    try:
+        await _agents_container.catalog_service().ensure_seeded()
+    except Exception as exc:  # noqa: BLE001 - catalog must never block boot
+        logger.warning("catalog seeding skipped: %s", type(exc).__name__)
+    yield
+
+
+app = FastAPI(lifespan=_quickstart_lifespan)
 
 # Credentials (cookies) never work with a "*" origin, so auth requires an
 # explicit allowlist. Same default the UI expects for local dev.
@@ -471,6 +483,9 @@ except Exception as exc:  # platform is additive; agent CRUD must keep working w
 # the legacy bare shapes at `/auth` are filtered out of the mount loop above now
 # that external clients have migrated.
 app.include_router(auth_module.MODULE.router, prefix=API_PREFIX)
+
+# Spec 0022: the agent builder reads provider options here in dev.
+app.include_router(catalog_module.MODULE.router, prefix=API_PREFIX)
 
 
 #############################################################################################

@@ -41,6 +41,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/auth/tests/test_tenancy.py",  # spec 0020, M1b: boundary pins
         "voiceai/modules/catalog/models.py",  # spec 0022: system default tenant
         "voiceai/modules/catalog/repository.py",  # spec 0022: system-tenant view
+        "voiceai/modules/catalog/tests/test_controller.py",  # spec 0022: boot seed pins
         "voiceai/modules/catalog/tests/test_seed.py",  # spec 0022: tenant pins
         "voiceai/modules/catalog/tests/test_service.py",  # spec 0022: stamp pins
         "voiceai/modules/voice/controller.py",  # spec 0021, M2: channel tenant binding

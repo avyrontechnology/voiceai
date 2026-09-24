@@ -44,6 +44,25 @@ async def test_seed_is_idempotent_and_system_stamped() -> None:
     assert len(rows) == first
 
 
+async def test_ensure_seeded_syncs_versions() -> None:
+    """Boot sync: missing rows insert, stale versions replace, current rows skip."""
+    service, repository = _service_and_repo()
+
+    first = await service.ensure_seeded()
+    assert first["inserted"] > 0
+    assert first["updated"] == 0
+    assert first["current"] == 0
+
+    second = await service.ensure_seeded()
+    assert second == {"inserted": 0, "updated": 0, "current": first["inserted"]}
+
+    stale = (await repository.list_all())[0]
+    stale.catalog_version = 0
+    await repository.save_entry(stale)
+    third = await service.ensure_seeded()
+    assert third == {"inserted": 0, "updated": 1, "current": first["inserted"]}
+
+
 async def test_modalities_are_the_static_four() -> None:
     """The modality contract needs no store read."""
     assert _service().modalities() == ["asr", "tts", "s2s", "llm"]

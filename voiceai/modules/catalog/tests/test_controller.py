@@ -87,3 +87,18 @@ async def test_unknown_provider_models_is_a_404_with_values() -> None:
 
     assert response.status_code == 404
     assert "sarvam" in response.text
+
+
+async def test_boot_lifespan_seeds_an_empty_store() -> None:
+    """A fresh process boots its own dropdown data (spec 0022 boot gap)."""
+    container = build_container(Environment())
+    app = create_app(env=Environment(), container=container, modules=[catalog_module.MODULE])
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    service = container.catalog_service()
+    rows = await service.entries()
+
+    assert len(rows) > 0
+    assert all(row.tenant_id == "system" for row in rows)

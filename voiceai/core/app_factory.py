@@ -30,7 +30,7 @@ from voiceai.common.constants import (
     SESSION_COOKIE,
 )
 from voiceai.common.errors import AppError, ConfigurationError
-from voiceai.common.logger import configure_logging, get_request_id, set_request_id
+from voiceai.common.logger import configure_logging, get_logger, get_request_id, set_request_id
 from voiceai.common.responses import register_exception_handlers, unexpected_error_response
 from voiceai.common.security import REQUEST_ID_PATTERN
 from voiceai.common.tenancy import SYSTEM_TENANT_ID, TenantContext, bind_tenant
@@ -152,7 +152,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
 
 def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
-    """Build the lifespan handler that releases the container's clients on shutdown.
+    """Build the lifespan handler: seed globals on startup, release on shutdown.
+
+    Startup syncs the provider catalog (spec 0022): the seed is version-aware
+    and idempotent, so steady-state boots cost one bounded read. A seed failure
+    logs loudly but never blocks boot — the catalog is non-critical (reads
+    serve empty, validation skips when empty) and converges on the next boot.
 
     Args:
         container: The container owning the process's infrastructure clients.
@@ -160,9 +165,14 @@ def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
     Returns:
         A lifespan context manager for `FastAPI(lifespan=...)`.
     """
+    boot_logger = get_logger("core.app_factory")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            await container.catalog_service().ensure_seeded()
+        except Exception as exc:  # noqa: BLE001 - catalog must never block boot
+            boot_logger.warning("catalog seeding skipped: %s", type(exc).__name__)
         try:
             yield
         finally:

@@ -126,6 +126,12 @@ class AgentService:
             self._logger.warning("agent provider validation skipped: catalog unwired")
             return
         entries = [entry.model_dump() for entry in await self._catalog.entries()]
+        if not entries:
+            # Pre-seed window: an empty catalog has nothing to validate against.
+            # Warn loudly and skip (same posture as unwired) — lifespans seed
+            # at boot, so this only fires before the first sync lands.
+            self._logger.warning("agent provider validation skipped: catalog empty")
+            return
         problems = audit_provider_config(data, entries, self._catalog.is_valid_language)
         if problems:
             raise AgentConfigInvalidError(

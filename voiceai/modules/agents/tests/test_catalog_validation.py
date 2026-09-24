@@ -113,6 +113,16 @@ async def test_unwired_catalog_skips_with_warning() -> None:
     assert result["state"] == "created"
 
 
+async def test_empty_catalog_skips_until_first_sync() -> None:
+    """Pre-seed window: no rows means nothing to validate against (warn + pass)."""
+    service = build_service(definitions=FakeDefinitionStore(), catalog=_Catalog(entries=[]))
+    model = agent_model(_task_with(transcriber={"provider": "deepgram", "model": "typo-would-fail"}))
+
+    result = await service.create_agent(model, None)
+
+    assert result["state"] == "created"
+
+
 def _raw_task_with(**tools: Any) -> dict[str, Any]:
     """A task dict without schema normalization (what the audit script reads)."""
     return {"tools_config": dict(tools)}

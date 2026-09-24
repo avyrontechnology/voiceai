@@ -7,6 +7,7 @@ for the slice-2 agent validator.
 
 from __future__ import annotations
 
+from voiceai.common.logger import get_logger
 from voiceai.common.pagination import Page, PaginationParams, paginate
 from voiceai.modules.catalog import constants as C
 from voiceai.modules.catalog.exceptions import ensure_catalog_entry
@@ -14,11 +15,14 @@ from voiceai.modules.catalog.helpers import summarize_model, summarize_provider,
 from voiceai.modules.catalog.models import CatalogEntry
 from voiceai.modules.catalog.repository import CatalogRepository
 from voiceai.modules.catalog.schemas import ModelSummary, ProviderSummary, VoiceSummary
+from voiceai.modules.catalog.seed import seed_entries
 from voiceai.modules.catalog.static_methods import build_catalog_id
 from voiceai.modules.catalog.static_methods import is_valid_language as is_well_formed_language
 from voiceai.modules.catalog.utils import seed_catalog
 
 __all__ = ["CatalogService"]
+
+logger = get_logger("catalog")
 
 
 class CatalogService:
@@ -151,6 +155,37 @@ class CatalogService:
             The number of rows written.
         """
         return await seed_catalog(self._repository)
+
+    async def ensure_seeded(self) -> dict[str, int]:
+        """Sync the store to the seed: insert missing, replace stale versions.
+
+        Boot path (both app lifespans call this): cheap when current (one
+        bounded read, zero writes), convergent when behind. Rows absent from
+        the seed are left alone (grandfather rule — deprecation, not deletion,
+        retires rows).
+
+        Returns:
+            `{"inserted": n, "updated": n, "current": n}`.
+        """
+        stored = {row.catalog_id: row for row in await self._repository.list_all()}
+        inserted = 0
+        updated = 0
+        for entry in seed_entries():
+            existing = stored.get(entry.catalog_id)
+            if existing is None:
+                await self._repository.save_entry(entry)
+                inserted += 1
+            elif existing.catalog_version < entry.catalog_version:
+                await self._repository.save_entry(entry)
+                updated += 1
+        result = {"inserted": inserted, "updated": updated, "current": len(stored)}
+        logger.info(
+            "catalog sync: %d inserted, %d updated, %d current",
+            inserted,
+            updated,
+            len(stored),
+        )
+        return result
 
     async def entries(self) -> list[CatalogEntry]:
         """Return every active system row (slice-2 agent validation bulk read)."""
