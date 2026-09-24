@@ -32,6 +32,7 @@ __all__ = [
     "S2SError",
     "SynthesisError",
     "TranscriptionError",
+    "UnknownAgentError",
     "UnknownComponentLabelError",
     "UnknownTalkoPartnerError",
     "VoiceComponentError",
@@ -132,6 +133,15 @@ class UnknownTalkoPartnerError(PlaceCallError):
 
     Fail-closed by design: the service never dials on another partner's
     credentials, so an unknown id is a 400, never a fallback.
+    """
+
+
+class UnknownAgentError(PlaceCallError):
+    """An `agent_id` named no visible agent definition (spec 0021, M2).
+
+    The definitions port is tenant-scoped, so unknown and foreign read
+    identically as missing: cross-tenant dials fail here with no oracle,
+    never reaching the trunk.
     """
 
 

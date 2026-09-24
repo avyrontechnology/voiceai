@@ -212,7 +212,9 @@ def _build_agent_service(definitions: Any, prompt_store: Any) -> Any:
     )
 
 
-def _build_voice_call_service(session_store: Any, db_client: Any, environment: Any, tasks: Any) -> Any:
+def _build_voice_call_service(
+    session_store: Any, db_client: Any, environment: Any, tasks: Any, definitions: Any
+) -> Any:
     from voiceai.database.constants import Collections
     from voiceai.database.repository import BaseRepository
     from voiceai.modules.voice.adapters.manager import (
@@ -236,6 +238,7 @@ def _build_voice_call_service(session_store: Any, db_client: Any, environment: A
         place_repository=VoicePlaceCallRepository(executions, partners),
         outbound=OutboundDialBridge(tasks=tasks),
         talko_service_base_url=environment.talko_service_base_url,
+        definitions=definitions,
     )
 
 
@@ -305,6 +308,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         db_client=db_client,
         environment=environment,
         tasks=task_registry,
+        definitions=agent_definitions,
     )
 
     # Wallet Module

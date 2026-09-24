@@ -33,6 +33,7 @@ PlaceCallRequest = VoiceContract.PlaceCallRequest
 from voiceai.modules.voice.ports.outbound import DialOutcome, PartnerPreview
 from voiceai.modules.voice.repository import VoicePlaceCallRepository
 from voiceai.modules.voice.service import VoiceCallService
+from voiceai.modules.voice.tests.test_place_call import _Definitions
 
 BASE = "http://connect.test"
 PREFIX = "/api/v1"
@@ -85,6 +86,7 @@ def _service(
         ),
         outbound=outbound,
         talko_service_base_url=base_url,
+        definitions=_Definitions(),
     )
     return service, outbound
 

@@ -23,7 +23,13 @@ from voiceai.core.db import InMemoryDatabase
 from voiceai.core.environment import Environment
 from voiceai.database.constants import Collections
 from voiceai.database.repository import InMemoryRepository
-from voiceai.modules.voice.errors import PlaceCallError, TalkoPartnerExistsError, UnknownTalkoPartnerError
+from voiceai.database.scoped import TenantScopedRepository
+from voiceai.modules.voice.errors import (
+    PlaceCallError,
+    TalkoPartnerExistsError,
+    UnknownAgentError,
+    UnknownTalkoPartnerError,
+)
 from voiceai.modules.voice.models import (
     PlacedCall,
     TalkoPartnerConfig,
@@ -80,7 +86,22 @@ def _repository() -> VoicePlaceCallRepository:
     )
 
 
-def _service(outbound: _FakeOutbound | None = None) -> tuple[VoiceCallService, _FakeOutbound]:
+_AGENT_CONFIG: dict[str, Any] = {"agent_name": "T"}
+
+
+class _Definitions:
+    """AgentDefinitionPort double: serves a config, or nothing (foreign ids)."""
+
+    def __init__(self, serve: bool = True) -> None:
+        self._serve = serve
+
+    async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        return dict(_AGENT_CONFIG) if self._serve else None
+
+
+def _service(
+    outbound: _FakeOutbound | None = None, definitions: _Definitions | None = None
+) -> tuple[VoiceCallService, _FakeOutbound]:
     """Service wired to a real repository and a fake outbound port."""
     fake = outbound or _FakeOutbound()
     service = VoiceCallService(
@@ -89,6 +110,7 @@ def _service(outbound: _FakeOutbound | None = None) -> tuple[VoiceCallService, _
         logger=logging.getLogger("otobaai.voice.test"),
         place_repository=_repository(),
         outbound=fake,
+        definitions=definitions or _Definitions(),
     )
     return service, fake
 
@@ -117,6 +139,46 @@ async def test_place_call_simulated_inline_completes_and_persists() -> None:
     assert placed.execution_id == "exec-sim"
     assert fake.calls[0]["kind"] == "inline"
     assert fake.calls[0]["variables"] == {}
+
+
+async def test_place_call_rejects_foreign_agent_without_dialing() -> None:
+    """Unknown-or-foreign agent ids fail like unknown partners: no trunk contact."""
+    service, fake = _service(definitions=_Definitions(serve=False))
+
+    with pytest.raises(UnknownAgentError):
+        await service.place_call(
+            payload=PlaceCallRequest(agent_id="foreign-agent", to_number="+919812345678", delay_scale=0)
+        )
+
+    assert fake.calls == []
+
+
+async def test_placed_execution_carries_the_callers_tenant() -> None:
+    """The persisted execution row is stamped by the scoped repository."""
+    db = InMemoryDatabase()
+    scoped_executions = TenantScopedRepository(
+        InMemoryRepository[PlacedCall](db, Collections.EXECUTIONS, PlacedCall), "acme", Collections.EXECUTIONS
+    )
+    scoped_partners = TenantScopedRepository(
+        InMemoryRepository[TalkoPartnerConfig](db, Collections.TALKO_PARTNERS, TalkoPartnerConfig),
+        "acme",
+        Collections.TALKO_PARTNERS,
+    )
+    fake = _FakeOutbound()
+    service = VoiceCallService(
+        manager_factory=lambda *args, **kwargs: None,  # type: ignore[arg-type] # why: unused by place-call paths
+        execution_recorder=lambda *args, **kwargs: None,  # type: ignore[arg-type] # why: same
+        logger=logging.getLogger("otobaai.voice.test"),
+        place_repository=VoicePlaceCallRepository(scoped_executions, scoped_partners),
+        outbound=fake,
+        definitions=_Definitions(),
+    )
+
+    placed = await service.place_call(
+        payload=PlaceCallRequest(agent_id="agent-1", to_number="+919812345678", delay_scale=0)
+    )
+
+    assert placed.tenant_id == "acme"
 
 
 async def test_place_call_talko_uses_record_credentials() -> None:

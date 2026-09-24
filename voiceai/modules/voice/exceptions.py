@@ -9,16 +9,23 @@ own migration steps; these helpers are for NEW code only.
 from __future__ import annotations
 
 from collections.abc import Collection
+from typing import Any
 
 from voiceai.modules.voice import static_methods
 from voiceai.modules.voice.constants import (
+    AGENT_ID_KEY,
     AVAILABLE_LABELS_KEY,
     LABEL_KEY,
     PARTNER_ID_KEY,
     TO_NUMBER_KEY,
     UNKNOWN_LABEL_MESSAGE_TEMPLATE,
 )
-from voiceai.modules.voice.errors import PlaceCallError, UnknownComponentLabelError, UnknownTalkoPartnerError
+from voiceai.modules.voice.errors import (
+    PlaceCallError,
+    UnknownAgentError,
+    UnknownComponentLabelError,
+    UnknownTalkoPartnerError,
+)
 from voiceai.modules.voice.models import TalkoPartnerConfig
 
 __all__ = ["ensure_label_known"]
@@ -49,7 +56,32 @@ def ensure_label_known(label: str, available: Collection[str]) -> str:
     return label
 
 
-__all__ += ["ensure_recipient_dialable", "ensure_talko_partner_known"]
+__all__ += ["ensure_agent_known", "ensure_recipient_dialable", "ensure_talko_partner_known"]
+
+
+def ensure_agent_known(agent_id: str, config: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the agent definition, or raise fail-closed on unknown ids.
+
+    The definitions port is tenant-scoped: unknown and foreign ids both read
+    as missing, so a cross-tenant dial fails here with no oracle, never
+    reaching the trunk (spec 0021, M2).
+
+    Args:
+        agent_id: The requested agent definition id.
+        config: The scoped port's definition payload, or `None`.
+
+    Returns:
+        The definition payload, guaranteed present.
+
+    Raises:
+        UnknownAgentError: When no visible definition exists for `agent_id`.
+    """
+    if config is None:
+        raise UnknownAgentError(
+            f"Unknown agent {agent_id!r}.",
+            details={AGENT_ID_KEY: agent_id},
+        )
+    return config
 
 
 def ensure_talko_partner_known(partner_id: str, record: TalkoPartnerConfig | None) -> TalkoPartnerConfig:

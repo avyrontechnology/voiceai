@@ -23,7 +23,11 @@ from voiceai.common.errors import NotFoundError
 from voiceai.modules.voice import static_methods
 from voiceai.modules.voice.constants import PARTNER_ID_KEY, PROVIDER_TALKO
 from voiceai.modules.voice.errors import PlaceCallError, TalkoPartnerExistsError
-from voiceai.modules.voice.exceptions import ensure_recipient_dialable, ensure_talko_partner_known
+from voiceai.modules.voice.exceptions import (
+    ensure_agent_known,
+    ensure_recipient_dialable,
+    ensure_talko_partner_known,
+)
 from voiceai.modules.voice.helpers import talko_partner_view
 from voiceai.modules.voice.models import (
     PlacedCall,
@@ -118,6 +122,7 @@ class VoiceCallService:
         place_repository: PlaceCallRepository | None = None,
         outbound: OutboundDialPort | None = None,
         talko_service_base_url: str = "",
+        definitions: Any = None,  # why: AgentDefinitionPort; None keeps place-call uncomposed
     ) -> None:
         """Wire the service's collaborators (composition happens in ``register()``).
 
@@ -132,6 +137,9 @@ class VoiceCallService:
             outbound: Outbound-dial port (spec 0008); `None` likewise fails closed.
             talko_service_base_url: Talko-service base for partner-DID fetch
                 (spec 0009; from `Environment`, never the request).
+            definitions: The agents module's definition port, tenant-scoped by
+                the container (spec 0021, M2); `None` keeps place-call failing
+                closed instead of dialing blind.
         """
         self._manager_factory = manager_factory
         self._execution_recorder = execution_recorder
@@ -140,6 +148,7 @@ class VoiceCallService:
         self._place_repository = place_repository
         self._outbound = outbound
         self._talko_service_base_url = talko_service_base_url
+        self._definitions = definitions
 
     async def run_call(
         self,
@@ -257,7 +266,10 @@ class VoiceCallService:
         repo = self._require_place_store()
         if self._outbound is None:
             raise PlaceCallError("Outbound calling is not wired for this service.")
+        if self._definitions is None:
+            raise PlaceCallError("Agent definitions are not wired for this service.")
         digits = ensure_recipient_dialable(payload.to_number)
+        ensure_agent_known(payload.agent_id, await self._definitions.get_agent(payload.agent_id))
         api_key = payload.talko_api_key
         caller_did = static_methods.normalize_did_digits(payload.from_number)
         api_base: str | None = None

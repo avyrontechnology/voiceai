@@ -162,6 +162,8 @@ DEFAULT_DELAY_SCALE: Final[float] = 0.5
 #: Detail keys for client-safe validation failures (identifiers only).
 PARTNER_ID_KEY: Final[str] = "partner_id"
 TO_NUMBER_KEY: Final[str] = "to_number"
+#: Error-detail key naming the addressed agent (spec 0021, M2).
+AGENT_ID_KEY: Final[str] = "agent_id"
 
 # --- Talko partner connect + multi-DID (spec 0009) -----------------------------------
 #: Preview route: validate a partner key and fetch its DIDs without persisting.
