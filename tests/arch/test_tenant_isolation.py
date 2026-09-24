@@ -31,7 +31,11 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/database/base.py",  # spec 0020, M1b: the tenant_id field itself
         "voiceai/database/constants.py",  # spec 0020, M1b: TENANT_ID_FIELD literal
         "voiceai/database/scoped.py",  # spec 0020, M1b: the scoping choke point itself
+        "voiceai/modules/auth/models/invite.py",  # spec 0020, M1b: org-carried invite
+        "voiceai/modules/auth/models/session.py",  # spec 0020, M1b: tenant sync validator
+        "voiceai/modules/auth/models/user.py",  # spec 0020, M1b: tenant sync validator
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping
+        "voiceai/modules/auth/tests/test_tenancy.py",  # spec 0020, M1b: boundary pins
     }
 )
 
@@ -50,6 +54,7 @@ TENANT_KEY_FLAGGED: frozenset[str] = frozenset()
 SYSTEM_SCOPE_FLAGGED: frozenset[str] = frozenset(
     {
         "voiceai/database/scoped.py",
+        "voiceai/core/container.py",  # spec 0020, M1b: auth discovery store
     }
 )
 

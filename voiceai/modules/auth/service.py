@@ -21,6 +21,7 @@ from voiceai.common.logger import get_logger
 from voiceai.common.tenancy import TenantContext
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.errors import (
+    AuthNotFoundError,
     ForbiddenError,
     InvalidCredentialsError,
     InviteInvalidError,
@@ -105,6 +106,25 @@ class AuthService:
         self._store = store
         self._limiter: LoginLimiter = limiter if limiter is not None else LocalLoginLimiter()
         self._jwt = jwt
+
+    @staticmethod
+    def _ensure_same_org(row_org_id: str | None, principal: Principal, what: str) -> None:
+        """Reject a cross-tenant row as not-found (spec 0020, M1b).
+
+        The auth store is the tenant-discovery layer, so it stays unscoped and
+        the service enforces the boundary: a row from another org reads exactly
+        like a missing row — no existence oracle.
+
+        Args:
+            row_org_id: The owning org of the row being touched.
+            principal: The acting caller.
+            what: "User" or "Invite" for the not-found message.
+
+        Raises:
+            AuthNotFoundError: When the row belongs to another org.
+        """
+        if row_org_id != principal.org_id:
+            raise AuthNotFoundError(f"{what} not found")
 
     # -- sessions -----------------------------------------------------------
 
@@ -478,6 +498,7 @@ class AuthService:
         user = await self._store.get_user(principal.user_id)
         if not user or user.disabled:
             raise InvalidCredentialsError("Session required")
+        self._ensure_same_org(user.org_id, principal, "User")
         return user, principal.effective_scopes()
 
     async def redeem_ticket(self, ticket: str | None) -> Principal | None:
@@ -543,6 +564,7 @@ class AuthService:
             email=email.strip().lower(),
             name=name,
             role=role,
+            org_id=principal.org_id,
             token_hash=token_hash(token),
             expires_at=utc_now() + timedelta(seconds=C.INVITE_TTL_S),
             created_by=principal.user_id,
@@ -581,6 +603,7 @@ class AuthService:
             name=name or live.name,
             password_hash=hash_password(password),
             role=live.role,
+            org_id=live.org_id,
         )
         await self._store.save_user(user)
         live.accepted = True
@@ -598,38 +621,44 @@ class AuthService:
         """
         ensure_authenticated(principal)
         ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return [i for i in await self._store.list_invites() if not i.accepted]
+        return [i for i in await self._store.list_invites() if not i.accepted and i.org_id == principal.org_id]
 
     async def delete_invite(self, principal: Principal, invite_id: str) -> None:
         """Revoke an invite (admins only).
 
         Raises:
             ForbiddenError: When the caller is not an admin.
-            AuthNotFoundError: When the invite does not exist.
+            AuthNotFoundError: When the invite does not exist or belongs to
+                another org (no cross-tenant oracle).
         """
         ensure_authenticated(principal)
         ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        if not await self._store.delete_invite(invite_id):
-            ensure_found(None, "Invite not found")
+        invite: Invite = ensure_found(await self._store.get_invite(invite_id), "Invite not found")
+        self._ensure_same_org(invite.org_id, principal, "Invite")
+        await self._store.delete_invite(invite_id)
         await self.audit("invite_revoked", user_id=principal.user_id, email=principal.email, detail=invite_id)
 
     # -- admin --------------------------------------------------------------
 
     async def list_users(self, principal: Principal) -> list[User]:
-        """Return every user (admins only).
+        """Return every user in the caller's org (admins only).
 
         Raises:
             ForbiddenError: When the caller is not an admin.
         """
         ensure_authenticated(principal)
         ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return await self._store.list_users()
+        return [u for u in await self._store.list_users() if u.org_id == principal.org_id]
 
     async def _assert_last_owner_safe(self, target: User) -> None:
-        """Reject de-powering the last active owner (shared by role/delete)."""
+        """Reject de-powering the target org's last active owner (shared by role/delete)."""
         if target.role != "owner" or target.disabled:
             return
-        owners = [u for u in await self._store.list_users() if u.role == "owner" and not u.disabled]
+        owners = [
+            u
+            for u in await self._store.list_users()
+            if u.role == "owner" and not u.disabled and u.org_id == target.org_id
+        ]
         if len(owners) <= 1:
             raise InvalidRequestError("Cannot remove the last active owner")
 
@@ -644,11 +673,13 @@ class AuthService:
 
         Raises:
             ForbiddenError: When the caller is not an owner.
-            AuthNotFoundError: When the target does not exist.
+            AuthNotFoundError: When the target does not exist or belongs to
+                another org (no cross-tenant oracle).
             InvalidRequestError: On self-edit or last-owner removal.
         """
         actor = await self._require_owner(principal)
         target: User = ensure_found(await self._store.get_user(target_id), "User not found")
+        self._ensure_same_org(target.org_id, principal, "User")
         if target.user_id == actor.user_id:
             raise InvalidRequestError("Cannot change your own role")
         await self._assert_last_owner_safe(target)
@@ -669,11 +700,13 @@ class AuthService:
 
         Raises:
             ForbiddenError: When the caller is not an owner.
-            AuthNotFoundError: When the target does not exist.
+            AuthNotFoundError: When the target does not exist or belongs to
+                another org (no cross-tenant oracle).
             InvalidRequestError: On self-delete or last-owner removal.
         """
         actor = await self._require_owner(principal)
         target: User = ensure_found(await self._store.get_user(target_id), "User not found")
+        self._ensure_same_org(target.org_id, principal, "User")
         if target.user_id == actor.user_id:
             raise InvalidRequestError("Cannot delete yourself")
         await self._assert_last_owner_safe(target)
@@ -716,14 +749,14 @@ class AuthService:
         return SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
 
     async def auth_events(self, principal: Principal) -> list[AuthEvent]:
-        """Return recent audit events, newest first (admins only).
+        """Return recent audit events in the caller's org, newest first (admins only).
 
         Raises:
             ForbiddenError: When the caller is not an admin.
         """
         ensure_authenticated(principal)
         ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return await self._store.list_auth_events()
+        return [e for e in await self._store.list_auth_events() if e.tenant_id == principal.org_id]
 
     async def audit(
         self,
@@ -733,8 +766,13 @@ class AuthService:
         email: str | None = None,
         detail: str | None = None,
     ) -> None:
-        """Append one audit row; NEVER fails the operation it records."""
+        """Append one audit row stamped with the subject's tenant; NEVER fails the op."""
         try:
+            tenant_id: str | None = None
+            if user_id is not None:
+                subject = await self._store.get_user(user_id)
+                if subject is not None:
+                    tenant_id = subject.org_id
             await self._store.add_auth_event(
                 AuthEvent(
                     event_id=new_id("evt"),
@@ -743,6 +781,7 @@ class AuthService:
                     email=email,
                     detail=detail,
                     created_at=utc_now(),
+                    tenant_id=tenant_id,
                 )
             )
         except Exception:  # noqa: BLE001 - audit is advisory by design

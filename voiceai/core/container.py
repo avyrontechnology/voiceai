@@ -50,6 +50,12 @@ async def _close_client(client: Any) -> None:
 def _auth_repositories(db_client: Any) -> dict[str, Any]:
     """Build one repository per auth collection on the deployment's database.
 
+    The auth store is the tenant-*discovery* layer (credential → tenant), so its
+    reads must precede any tenant binding: every collection here goes through
+    `system_scope`, and the auth *service* enforces org boundaries above it
+    (spec 0020, M1b). Each `system_scope` call below is an allowlisted sentinel
+    entry, not a quiet default.
+
     Args:
         db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
 
@@ -59,6 +65,7 @@ def _auth_repositories(db_client: Any) -> dict[str, Any]:
     from voiceai.core.db import InMemoryDatabase
     from voiceai.database.constants import Collections
     from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
     from voiceai.modules.auth.models.apikey import ApiKey
     from voiceai.modules.auth.models.audit import AuthEvent
     from voiceai.modules.auth.models.invite import Invite
@@ -67,13 +74,14 @@ def _auth_repositories(db_client: Any) -> dict[str, Any]:
     from voiceai.modules.auth.models.user import User
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    system = TenantScopedRepository.system_scope
     return {
-        "users": factory(db_client, Collections.USERS, User),
-        "sessions": factory(db_client, Collections.SESSIONS, SessionRecord),
-        "invites": factory(db_client, Collections.INVITES, Invite),
-        "keys": factory(db_client, Collections.API_KEYS, ApiKey),
-        "events": factory(db_client, Collections.AUTH_EVENTS, AuthEvent),
-        "revoked": factory(db_client, Collections.REVOKED_TOKENS, RevokedToken),
+        "users": system(factory(db_client, Collections.USERS, User)),
+        "sessions": system(factory(db_client, Collections.SESSIONS, SessionRecord)),
+        "invites": system(factory(db_client, Collections.INVITES, Invite)),
+        "keys": system(factory(db_client, Collections.API_KEYS, ApiKey)),
+        "events": system(factory(db_client, Collections.AUTH_EVENTS, AuthEvent)),
+        "revoked": system(factory(db_client, Collections.REVOKED_TOKENS, RevokedToken)),
     }
 
 
