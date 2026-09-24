@@ -257,6 +257,31 @@ def _build_wallet_service(db_client: Any) -> Any:
     return WalletService(MongoWalletRepository(wallet_repo, ledger_repo, template_repo))
 
 
+def _build_catalog_service(db_client: Any) -> Any:
+    """Build the catalog service over the system-tenant collection view.
+
+    The catalog is platform-global data, so this view binds `SYSTEM_TENANT_ID`
+    explicitly — no ambient request tenant is read, which keeps this provider
+    safe under any lifecycle (spec 0022, slice 1).
+    """
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.catalog.models import CatalogEntry
+    from voiceai.modules.catalog.repository import CatalogRepository
+    from voiceai.modules.catalog.service import CatalogService
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    system_view: Any = TenantScopedRepository(
+        factory(db_client, Collections.PROVIDER_CATALOG, CatalogEntry),
+        SYSTEM_TENANT_ID,
+        Collections.PROVIDER_CATALOG,
+    )
+    return CatalogService(CatalogRepository(system_view))
+
+
 class VoiceAIContainer(containers.DeclarativeContainer):
     """The central dependency injection container for VoiceAI."""
 
@@ -314,6 +339,9 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Wallet Module
     wallet_service = providers.Factory(_build_wallet_service, db_client=db_client)
 
+    # Catalog Module: system-tenant rows, no ambient read — Singleton is safe.
+    catalog_service = providers.Singleton(_build_catalog_service, db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -354,6 +382,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
     container.wire(
         modules=[
             "voiceai.modules.auth.controller",
+            "voiceai.modules.catalog.controller",
             "voiceai.modules.health.controller",
             "voiceai.modules.agents.controller",
             "voiceai.modules.voice.controller",

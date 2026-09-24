@@ -8,6 +8,7 @@ from voiceai.tooling.backfill_tenant_id import (
     DEFAULT_STAMPED_COLLECTIONS,
     ORG_SOURCED_COLLECTIONS,
     SKIPPED_COLLECTIONS,
+    SYSTEM_STAMPED_COLLECTIONS,
     USER_JOINED_COLLECTIONS,
     derive_tenant,
     needs_backfill,
@@ -21,6 +22,7 @@ def test_every_collection_is_censused() -> None:
         | {collection for collection, _ in USER_JOINED_COLLECTIONS}
         | set(DEFAULT_STAMPED_COLLECTIONS)
         | set(SKIPPED_COLLECTIONS)
+        | set(SYSTEM_STAMPED_COLLECTIONS)
     )
     assert ruled == {collection.value for collection in Collections}
 
@@ -48,6 +50,13 @@ def test_tenantless_history_stamps_default_and_denylist_skips() -> None:
     assert derive_tenant("wallets", {}) == DEFAULT_TENANT_ID
     assert derive_tenant("agents", {}) == DEFAULT_TENANT_ID
     assert derive_tenant("revoked_tokens", {}) is None
+
+
+def test_system_seeded_collections_assert_system() -> None:
+    """Seeder-owned global rows verify as system, never rewritten (spec 0022)."""
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID
+
+    assert derive_tenant("provider_catalog", {}) == SYSTEM_TENANT_ID
 
 
 def test_unknown_collections_fail_loudly() -> None:

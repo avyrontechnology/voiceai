@@ -25,11 +25,13 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from voiceai.common.constants import DEFAULT_TENANT_ID
+from voiceai.common.tenancy import SYSTEM_TENANT_ID
 
 __all__ = [
     "DEFAULT_STAMPED_COLLECTIONS",
     "ORG_SOURCED_COLLECTIONS",
     "SKIPPED_COLLECTIONS",
+    "SYSTEM_STAMPED_COLLECTIONS",
     "USER_JOINED_COLLECTIONS",
     "derive_tenant",
     "needs_backfill",
@@ -58,6 +60,10 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
 
 #: Collections never tenant-stamped (global security infrastructure).
 SKIPPED_COLLECTIONS: Final[tuple[str, ...]] = ("revoked_tokens",)
+
+#: Collections pre-stamped to the system tenant by their seeder (spec 0022):
+#: the backfill asserts them, never rewrites them.
+SYSTEM_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = ("provider_catalog",)
 
 
 def needs_backfill(document: Mapping[str, Any]) -> bool:
@@ -97,6 +103,8 @@ def derive_tenant(
     """
     if collection in SKIPPED_COLLECTIONS:
         return None
+    if collection in SYSTEM_STAMPED_COLLECTIONS:
+        return SYSTEM_TENANT_ID
     if collection in ORG_SOURCED_COLLECTIONS:
         org_id = document.get("org_id")
         return org_id if isinstance(org_id, str) and org_id else DEFAULT_TENANT_ID

@@ -32,6 +32,9 @@ class Collections(str, Enum):
     REVOKED_TOKENS = "revoked_tokens"
     #: Agent prompt blobs (greenfield T3 replaces CWD-relative `agent_data/` files).
     AGENT_PROMPTS = "agent_prompts"
+    #: Provider catalog rows (spec 0022, M-catalog): system-tenant modality /
+    #: provider / model documents the agent builder dropdowns read.
+    PROVIDER_CATALOG = "provider_catalog"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:
