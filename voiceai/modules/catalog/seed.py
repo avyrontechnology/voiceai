@@ -69,6 +69,72 @@ def _maya_voices() -> list[CatalogVoice]:
     ]
 
 
+def _openai_realtime_voices() -> list[CatalogVoice]:
+    """OpenAI Realtime voice set, verified against the official API docs.
+
+    Source: OpenAI Realtime conversations guide — alloy, ash, ballad, coral,
+    echo, sage, shimmer, verse, marin, cedar (marin/cedar recommended).
+    Genders are unstated in the docs, so they stay `None` rather than guessed.
+    """
+    return [
+        CatalogVoice(name=name, language="en")
+        for name in (
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar",
+        )
+    ]
+
+
+def _gemini_live_voices() -> list[CatalogVoice]:
+    """Gemini Live voice set with official genders (Google Cloud TTS table).
+
+    Source: Google Cloud Gemini-TTS voice table (Name|Gender) + the Live API
+    language/voice doc (30 voice options). Genders below are the documented
+    ones, not inferred.
+    """
+    table: tuple[tuple[str, str], ...] = (
+        ("Zephyr", "feminine"),
+        ("Puck", "masculine"),
+        ("Charon", "masculine"),
+        ("Kore", "feminine"),
+        ("Fenrir", "masculine"),
+        ("Leda", "feminine"),
+        ("Orus", "masculine"),
+        ("Aoede", "feminine"),
+        ("Callirrhoe", "feminine"),
+        ("Autonoe", "feminine"),
+        ("Enceladus", "masculine"),
+        ("Iapetus", "masculine"),
+        ("Umbriel", "masculine"),
+        ("Algieba", "masculine"),
+        ("Despina", "feminine"),
+        ("Erinome", "feminine"),
+        ("Laomedeia", "feminine"),
+        ("Schedar", "masculine"),
+        ("Achird", "masculine"),
+        ("Sadachbia", "masculine"),
+        ("Achernar", "feminine"),
+        ("Gacrux", "feminine"),
+        ("Zubenelgenubi", "masculine"),
+        ("Sadaltager", "masculine"),
+        ("Algenib", "masculine"),
+        ("Alnilam", "masculine"),
+        ("Rasalgethi", "masculine"),
+        ("Pulcherrima", "feminine"),
+        ("Vindemiatrix", "feminine"),
+        ("Sulafat", "feminine"),
+    )
+    return [CatalogVoice(name=name, gender=gender, language="en") for name, gender in table]
+
+
 _MAYA_LANGUAGES: list[str] = ["hi", "bn", "gu", "kn", "ml", "mr", "or", "pa", "ta", "te", "en", "auto"]
 
 #: One table row's options (all optional; the table below stays readable).
@@ -116,11 +182,11 @@ _SEED_TABLE: tuple[tuple[str, str, str, _RowOptions], ...] = (
     ("tts", "pixa", "luna-tts", {}),
     ("tts", "maya", "Maya 2 Native", {"languages": _MAYA_LANGUAGES, "voices": _maya_voices()}),
     ("tts", "kalpa", "kalpa-tts-multilingual-beta-v0.1", {"models_open": True, "voices": [_voice("Kiara")]}),
-    # --- S2S: closed realtime sets ----------------------------------------------
-    ("s2s", "openai_realtime", "gpt-realtime-2.1", {}),
-    ("s2s", "openai_realtime", "gpt-realtime-2.1-mini", {}),
-    ("s2s", "openai_realtime", "gpt-realtime-2", {}),
-    ("s2s", "gemini_live", "gemini-3.1-flash-live-preview", {}),
+    # --- S2S: closed realtime sets (voices verified from official docs) --------
+    ("s2s", "openai_realtime", "gpt-realtime-2.1", {"voices": _openai_realtime_voices()}),
+    ("s2s", "openai_realtime", "gpt-realtime-2.1-mini", {"voices": _openai_realtime_voices()}),
+    ("s2s", "openai_realtime", "gpt-realtime-2", {"voices": _openai_realtime_voices()}),
+    ("s2s", "gemini_live", "gemini-3.1-flash-live-preview", {"voices": _gemini_live_voices()}),
     # --- LLM: pinned first-party lists; LiteLLM-routed namespaces stay open ----
     ("llm", "openai", "gpt-4o", {}),
     ("llm", "openai", "gpt-4o-mini", {}),

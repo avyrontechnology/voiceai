@@ -57,3 +57,37 @@ def test_populated_sample_urls_are_https() -> None:
         for voice in entry.voices:
             if voice.sample_url is not None:
                 assert voice.sample_url.startswith("https://"), voice.name
+
+
+def _voices_for(provider: str, model: str) -> list[str]:
+    """Voice names on one catalog row (empty when the row is missing)."""
+    for entry in SEED_ENTRIES:
+        if entry.provider == provider and entry.model == model:
+            return [voice.name for voice in entry.voices]
+    return []
+
+
+def test_openai_realtime_voices_match_the_official_docs() -> None:
+    """The 10 documented Realtime voices ride every realtime model row."""
+    expected = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]
+    for model in ("gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"):
+        assert _voices_for("openai_realtime", model) == expected
+
+
+def test_gemini_live_voices_match_the_official_table() -> None:
+    """The 30 documented Live voices ride the Gemini Live row, genders included."""
+    voices = _voices_for("gemini_live", "gemini-3.1-flash-live-preview")
+
+    assert len(voices) == 30
+    assert set(voices) >= {"Kore", "Puck", "Charon", "Fenrir", "Zephyr", "Sulafat", "Vindemiatrix"}
+
+    def _gender(name: str) -> str | None:
+        for entry in SEED_ENTRIES:
+            if entry.provider == "gemini_live":
+                for voice in entry.voices:
+                    if voice.name == name:
+                        return voice.gender
+        return None
+
+    assert _gender("Kore") == "feminine"
+    assert _gender("Charon") == "masculine"
