@@ -1,73 +1,35 @@
-"""Agent-level schema: welcome message, shared validators, and the top-level agent models.
+"""Agent-level schema: the top-level agent models.
 
-Moved verbatim from ``voiceai/models.py`` lines 21-41 and 700-739 (spec 0002, step A2);
-only import statements changed. The module is split around a deliberately late import:
-the shared helpers defined at the top are imported by ``pipeline``/``brains``, while
-``Task`` below needs ``tools`` — which itself imports ``pipeline`` and ``brains``. The
-package ``__init__`` imports this module first, so the cycle always resolves with the
-helpers already bound.
+Shared leaves (welcome text, localized text, validators) live in
+``models/base.py`` (spec 0019 broke the ``agent → tools → brains → agent``
+cycle there); this module re-exports them so existing ``models.agent.X``
+import paths keep resolving.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TypeVar
-
 from pydantic import BaseModel, Field, field_validator
 
-from voiceai.modules.agents.constants import MODEL_REASONING_EFFORT_MAP
+from voiceai.modules.agents.models.base import (
+    AGENT_WELCOME_MESSAGE,
+    LocalizedText,
+    validate_attribute,
+    validate_reasoning_effort_for_model,
+)
 
-AGENT_WELCOME_MESSAGE = "This call is being recorded for quality assurance and training. Please speak now."
-
-# A message that is either a single string or a per-language {lang_code: text} map.
-LocalizedText = str | dict[str, str]
-
-_T = TypeVar("_T")
-
-
-def validate_attribute(value: _T, allowed_values: Sequence[str], value_type: str = "provider") -> _T:
-    """Reject a value outside its allowed set with the legacy error text.
-
-    Args:
-        value: The candidate value (typically a provider name).
-        allowed_values: Every accepted value.
-        value_type: Label used in the error message.
-
-    Returns:
-        The value unchanged when it is allowed.
-
-    Raises:
-        ValueError: When the value is not in ``allowed_values``.
-    """
-    if value not in allowed_values:
-        raise ValueError(f"Invalid value for {value_type}:'{value}' provided. Supported values: {allowed_values}.")
-    return value
+__all__ = [
+    "AGENT_WELCOME_MESSAGE",
+    "AgentModel",
+    "ConversationConfig",
+    "LocalizedText",
+    "Task",
+    "validate_attribute",
+    "validate_reasoning_effort_for_model",
+]
 
 
-def validate_reasoning_effort_for_model(model: str, reasoning_effort: str) -> None:
-    """Reject a reasoning effort a GPT model does not support; non-GPT models pass through.
-
-    Args:
-        model: Model name, optionally provider-prefixed ("azure/gpt-5").
-        reasoning_effort: The requested effort value.
-
-    Raises:
-        ValueError: When the model's supported-effort list exists and excludes the value.
-    """
-    if "gpt" not in model:
-        return
-
-    if "/" in model:
-        model = model.split("/")[-1]
-
-    supported = MODEL_REASONING_EFFORT_MAP.get(model, None)
-    if supported is not None and reasoning_effort not in supported:
-        raise ValueError(f"reasoning_effort '{reasoning_effort}' is not supported for model '{model}'.")
-
-
-# Late on purpose: ``tools`` (needed only by ``Task`` below) transitively imports
-# ``pipeline`` and ``brains``, which import the helpers defined above — see the module
-# docstring for the cycle contract.
+# ``tools`` (needed only by ``Task`` below) transitively imports ``pipeline``
+# and ``brains``; all three now resolve through the leaf ``models/base.py``.
 from voiceai.modules.agents.models.tools import ToolsChainModel, ToolsConfig  # noqa: E402
 
 

@@ -19,6 +19,7 @@ MODULE: ModuleDef = ModuleDef(
     owner_squad="squad-billing",
     slack_channel="#squad-billing",
     runbook_path="voiceai/modules/wallet/RUNBOOK.md",
+    max_lines=6000,
 )
 
 __all__ = [

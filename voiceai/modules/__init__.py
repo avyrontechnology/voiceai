@@ -24,6 +24,8 @@ class ModuleDef:
         owner_squad: Owning squad, e.g. ``squad-voice``.
         slack_channel: Contact channel, e.g. ``#squad-voice``.
         runbook_path: Repo-relative path to the module runbook.
+        max_lines: Hard ceiling on total Python lines under the module dir
+            (spec 0019, enforced by test_size_budgets.py; only ratchets down).
     """
 
     name: str
@@ -31,6 +33,7 @@ class ModuleDef:
     owner_squad: str = ""
     slack_channel: str = ""
     runbook_path: str = ""
+    max_lines: int = 0
 
 
 # Imported below the definition on purpose: each module builds its ``MODULE`` from ``ModuleDef``,

@@ -21,7 +21,7 @@ from voiceai.enums import (
     TranscriberProvider,
 )
 from voiceai.modules.agents.constants import MODEL_REASONING_EFFORT_MAP
-from voiceai.modules.agents.models.agent import validate_attribute, validate_reasoning_effort_for_model
+from voiceai.modules.agents.models.base import validate_attribute, validate_reasoning_effort_for_model
 
 
 class PollyConfig(BaseModel):

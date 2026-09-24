@@ -26,6 +26,7 @@ from voiceai.common.errors import (
 )
 from voiceai.common.exceptions import ensure, ensure_found, ensure_valid
 from voiceai.common.ids import new_id
+from voiceai.common.keys import tenant_key
 from voiceai.common.logger import configure_logging, get_logger, get_request_id, set_request_id
 from voiceai.common.pagination import Page, PaginationParams, paginate
 from voiceai.common.responses import (
@@ -89,6 +90,7 @@ __all__ = [
     "register_exception_handlers",
     "set_request_id",
     "success_response",
+    "tenant_key",
     "to_ist",
     "utc_now",
 ]

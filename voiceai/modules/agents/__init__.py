@@ -25,6 +25,7 @@ MODULE: ModuleDef = ModuleDef(
     owner_squad="squad-agents",
     slack_channel="#squad-agents",
     runbook_path="voiceai/modules/agents/RUNBOOK.md",
+    max_lines=14000,
 )
 
 __all__ = [

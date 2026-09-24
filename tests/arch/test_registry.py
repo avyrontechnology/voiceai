@@ -29,3 +29,9 @@ def test_registry_entries_carry_ownership() -> None:
         assert module.owner_squad, f"{module.name}: owner_squad is empty"
         assert module.runbook_path, f"{module.name}: runbook_path is empty"
         assert module.runbook_path.startswith("voiceai/modules/"), module.runbook_path
+
+
+def test_registry_entries_carry_positive_line_budget() -> None:
+    """Every entry declares a hard line ceiling (spec 0019, test_size_budgets.py enforces it)."""
+    for module in ALL_MODULES:
+        assert module.max_lines > 0, f"{module.name}: max_lines is not set"

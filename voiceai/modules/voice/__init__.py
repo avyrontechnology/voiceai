@@ -65,6 +65,8 @@ MODULE: ModuleDef = ModuleDef(
     owner_squad="squad-voice",
     slack_channel="#squad-voice",
     runbook_path="voiceai/modules/voice/RUNBOOK.md",
+    # Interim ceiling (spec 0019): M2/M3/M5 split this module; only ratchets down.
+    max_lines=46000,
 )
 
 __all__ = [

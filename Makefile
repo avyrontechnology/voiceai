@@ -12,7 +12,7 @@ ARCH_SELECT = E,W,F,I,B,UP,S,ANN,D1
 ARCH_IGNORE = ANN401,D107
 ARCH_EXCLUDE = "*/tests/*"
 
-.PHONY: setup check lint lint-arch type test test-all sec fmt cov
+.PHONY: setup check lint lint-arch type test test-all sec fmt cov docs dup cov-module test-module
 
 setup:
 	uv venv .venv --python 3.10
@@ -60,6 +60,23 @@ cov:
 
 fmt:
 	$(RUFF) format $(ARCH_DIRS) $(ARCH_TESTS)
+
+docs:
+	$(PY) voiceai/tooling/render_docs.py --out docs
+
+dup:
+	$(PY) voiceai/tooling/dup_blocks.py
+
+# Per-module scope: make test MODULE=agents / make cov MODULE=wallet.
+# MODULE must name a directory under voiceai/modules.
+test-module:
+	@test -d voiceai/modules/$(MODULE) || (echo "unknown module: $(MODULE)" && exit 1)
+	$(PY) -m pytest -q voiceai/modules/$(MODULE)
+
+cov-module:
+	@test -d voiceai/modules/$(MODULE) || (echo "unknown module: $(MODULE)" && exit 1)
+	$(PY) -m pytest -q voiceai/modules/$(MODULE) \
+		--cov=voiceai/modules/$(MODULE) --cov-report=term-missing:skip-covered --cov-fail-under=85
 
 check: lint lint-arch type test sec
 	@echo "check: all gates green"

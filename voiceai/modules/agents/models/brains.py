@@ -28,7 +28,7 @@ from voiceai.modules.agents.constants import (
     AGENT_TYPE_MULTIAGENT,
     AGENT_TYPE_SIMPLE_LLM,
 )
-from voiceai.modules.agents.models.agent import LocalizedText, validate_reasoning_effort_for_model
+from voiceai.modules.agents.models.base import LocalizedText, validate_reasoning_effort_for_model
 from voiceai.modules.agents.models.rag import RagConfig, VectorStore
 
 

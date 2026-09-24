@@ -1,10 +1,9 @@
 """The full agent-definition schema, re-exported explicitly (spec 0002, step A2).
 
-Import order is load-bearing: ``agent`` must load first. It defines the shared helpers,
-then late-imports ``tools`` — which pulls ``pipeline`` and ``brains`` (and ``rag``) while
-``agent`` is partially initialized but its helpers are already bound. Importing any other
-submodule first would hit the cycle before those helpers exist. The alphabetical isort
-order happens to coincide; do not reorder.
+Shared leaves live in ``models/base.py`` (spec 0019 broke the old
+``agent → tools → brains → agent`` cycle there), so import order is no longer
+load-bearing beyond the usual leaf-first practice. The alphabetical isort order
+is kept as-is; do not reorder without reason.
 
 This package imports zero engine code (``voiceai.transcriber`` and friends stay out of
 ``sys.modules`` — canary-asserted); the legacy ``voiceai/models.py`` shim layers the
@@ -12,11 +11,13 @@ engine re-exports back on top for old consumers.
 """
 
 from voiceai.modules.agents.models.agent import (
-    AGENT_WELCOME_MESSAGE,
     AgentModel,
     ConversationConfig,
-    LocalizedText,
     Task,
+)
+from voiceai.modules.agents.models.base import (
+    AGENT_WELCOME_MESSAGE,
+    LocalizedText,
     validate_attribute,
     validate_reasoning_effort_for_model,
 )

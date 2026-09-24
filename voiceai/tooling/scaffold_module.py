@@ -57,7 +57,7 @@ def _validate(name: str) -> str:
 def _render_init(name: str) -> str:
     """Render the package __init__ with MODULE + narrow __all__."""
     return (
-        f'""" {name} module (scaffolded by scripts/scaffold_module.py, spec 0000)."""\n'
+        f'""" {name} module (scaffolded by voiceai/tooling/scaffold_module.py)."""\n'
         "\n"
         "from __future__ import annotations\n"
         "\n"
@@ -69,6 +69,7 @@ def _render_init(name: str) -> str:
         "    name=MODULE_NAME,\n"
         "    router=router,\n"
         f'    runbook_path="voiceai/modules/{name}/RUNBOOK.md",\n'
+        "    max_lines=8000,  # tighten to the measured total before first merge (spec 0019)\n"
         ")\n"
         "\n"
         '__all__ = ["MODULE"]\n'
