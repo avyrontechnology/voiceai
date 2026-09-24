@@ -115,7 +115,7 @@ _SEED_TABLE: tuple[tuple[str, str, str, _RowOptions], ...] = (
     ("tts", "rime", "mistv2", {"models_open": True}),
     ("tts", "pixa", "luna-tts", {}),
     ("tts", "maya", "Maya 2 Native", {"languages": _MAYA_LANGUAGES, "voices": _maya_voices()}),
-    ("tts", "kalpa", "default", {"models_open": True}),
+    ("tts", "kalpa", "kalpa-tts-multilingual-beta-v0.1", {"models_open": True, "voices": [_voice("Kiara")]}),
     # --- S2S: closed realtime sets ----------------------------------------------
     ("s2s", "openai_realtime", "gpt-realtime-2.1", {}),
     ("s2s", "openai_realtime", "gpt-realtime-2.1-mini", {}),

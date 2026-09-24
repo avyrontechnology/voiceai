@@ -23,8 +23,16 @@ from voiceai.modules.catalog.models import CatalogEntry
 from voiceai.modules.catalog.static_methods import is_valid_language
 
 
-def _entry(modality: str, provider: str, model: str, models_open: bool = False) -> CatalogEntry:
+def _entry(
+    modality: str,
+    provider: str,
+    model: str,
+    models_open: bool = False,
+    voices: list[dict[str, str]] | None = None,
+) -> CatalogEntry:
     """One catalog row for the stub (natural key built by hand)."""
+    from voiceai.modules.catalog.models import CatalogVoice
+
     return CatalogEntry(
         catalog_id=f"{modality}:{provider}:{model}",
         modality=modality,  # type: ignore[arg-type]  # why: test literals, same discipline as the seed table
@@ -32,6 +40,7 @@ def _entry(modality: str, provider: str, model: str, models_open: bool = False) 
         model=model,
         languages=["en"],
         models_open=models_open,
+        voices=[CatalogVoice(name=voice["name"], language=voice.get("language", "en")) for voice in voices or []],
     )
 
 
@@ -45,6 +54,8 @@ class _Catalog:
             _entry("llm", "openai", "gpt-4o"),
             _entry("llm", "groq", "llama-3.3-70b-versatile", models_open=True),
             _entry("s2s", "openai_realtime", "gpt-realtime-2.1"),
+            _entry("tts", "sarvam", "bulbul:v2", voices=[{"name": "anushka"}, {"name": "arya"}]),
+            _entry("tts", "elevenlabs", "eleven_turbo_v2_5", models_open=True, voices=[]),
         ]
 
     async def entries(self) -> list[CatalogEntry]:
@@ -155,3 +166,48 @@ def test_walk_reports_closed_model_mismatch() -> None:
 
     assert len(problems) == 1
     assert "gpt-realtime-2.1" in problems[0]
+
+
+def test_walk_accepts_a_curated_synthesizer_row() -> None:
+    """Model, voice, and language resolve against the matched row."""
+    config = _raw_config(
+        _raw_task_with(
+            synthesizer={
+                "provider": "sarvam",
+                "provider_config": {"model": "bulbul:v2", "voice": "anushka", "language": "hi"},
+            }
+        )
+    )
+
+    assert audit_provider_config(config, _rows(), is_valid_language) == []
+
+
+def test_walk_reports_foreign_voice_and_bad_synth_language() -> None:
+    """Voices outside the curated set fail with names; bad codes fail with paths."""
+    config = _raw_config(
+        _raw_task_with(
+            synthesizer={
+                "provider": "sarvam",
+                "provider_config": {"model": "bulbul:v2", "voice": "morgan", "language": "xx_YY"},
+            }
+        )
+    )
+
+    problems = audit_provider_config(config, _rows(), is_valid_language)
+
+    assert any("morgan" in problem and "anushka" in problem for problem in problems)
+    assert any("xx_YY" in problem and "synthesizer" in problem for problem in problems)
+
+
+def test_walk_skips_voice_check_without_curated_voices() -> None:
+    """Rows without a curated voice set never false-reject (gradual rule)."""
+    config = _raw_config(
+        _raw_task_with(
+            synthesizer={
+                "provider": "elevenlabs",
+                "provider_config": {"model": "eleven_turbo_v2_5", "voice": "anything-goes"},
+            }
+        )
+    )
+
+    assert audit_provider_config(config, _rows(), is_valid_language) == []

@@ -49,3 +49,11 @@ def test_seed_voices_carry_names() -> None:
         for voice in entry.voices:
             assert voice.name, entry.catalog_id
             assert voice.language, voice.name
+
+
+def test_populated_sample_urls_are_https() -> None:
+    """Sample clips are static CDN links: shape-guarded so bad data cannot land."""
+    for entry in SEED_ENTRIES:
+        for voice in entry.voices:
+            if voice.sample_url is not None:
+                assert voice.sample_url.startswith("https://"), voice.name

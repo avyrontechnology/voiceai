@@ -111,4 +111,6 @@ re-runs are idempotent.
 - [x] Slice 1: catalog module + seed (58 rows, all registry keys censused) + read endpoints.
 - [x] Slice 2: write-time validation (provider/model/language; synthesizer
   provider_config shapes deferred to slice 3 with voices) + report-only audit.
-- [ ] Slice 3: samples + UI sync spec.
+- [x] Slice 3: synthesizer model/engine + voice + language validation;
+  sample-URL mechanism + shape guard (curation needs provider assets —
+  tracked gap, not scraped); UI sync in spec 0023.

@@ -177,6 +177,24 @@ def _catalog_index(entries: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str]
     return index
 
 
+def _match_row(
+    index: dict[tuple[str, str], list[Mapping[str, Any]]],
+    *,
+    modality: str,
+    provider: str,
+    model: str,
+) -> Mapping[str, Any] | None:
+    """Return the catalog row for an exact model, else the open-namespace row, else `None`."""
+    rows = index.get((modality, provider), [])
+    for row in rows:
+        if str(row.get("model", "")) == model:
+            return row
+    for row in rows:
+        if row.get("models_open") is True:
+            return row
+    return None
+
+
 def _check_leaf(
     problems: list[str],
     index: dict[tuple[str, str], list[Mapping[str, Any]]],
@@ -185,32 +203,35 @@ def _check_leaf(
     provider: object,
     model: object,
     where: str,
-) -> None:
+) -> Mapping[str, Any] | None:
     """Append a problem unless (modality, provider, model) resolves in the catalog.
 
     Closed rows must match exactly; `models_open` rows accept any non-empty
     model (suggestions, not a closed set). Unknown providers fail with the
     valid values — a typo must never reach the realtime path.
+
+    Returns:
+        The matched row (for voice checks downstream), or `None` on any problem.
     """
     if not isinstance(provider, str) or not provider:
         problems.append(f"{where}: missing {modality} provider")
-        return
+        return None
     rows = index.get((modality, provider), [])
     if not rows:
         valid = sorted({key[1] for key in index if key[0] == modality})
         problems.append(f"{where}: unknown {modality} provider {provider!r} (valid: {', '.join(valid)})")
-        return
+        return None
     if not isinstance(model, str) or not model:
         problems.append(f"{where}: missing {modality} model for provider {provider!r}")
-        return
-    known = {str(row.get("model", "")) for row in rows}
-    if model in known:
-        return
-    if any(row.get("models_open") is True for row in rows):
-        return
-    problems.append(
-        f"{where}: unknown {modality} model {model!r} for provider {provider!r} (valid: {', '.join(sorted(known))})"
-    )
+        return None
+    row = _match_row(index, modality=modality, provider=provider, model=model)
+    if row is None:
+        known = sorted({str(candidate.get("model", "")) for candidate in rows})
+        problems.append(
+            f"{where}: unknown {modality} model {model!r} for provider {provider!r} (valid: {', '.join(known)})"
+        )
+        return None
+    return row
 
 
 def _check_language(
@@ -221,6 +242,64 @@ def _check_language(
         return
     if not isinstance(code, str) or not is_language_valid(code):
         problems.append(f"{where}: malformed language code {code!r}")
+
+
+#: Synthesizer providers whose config carries `engine` instead of `model` (Polly).
+_ENGINE_MODEL_PROVIDERS: Final[frozenset[str]] = frozenset({"polly"})
+
+
+def _check_voice(
+    problems: list[str],
+    row: Mapping[str, Any],
+    voice: object,
+    where: str,
+) -> None:
+    """Append a problem unless the voice resolves in the matched row.
+
+    Gradual rule (spec 0022, slice 3): rows without curated voices skip the
+    check silently (never false-reject); rows WITH voices require an exact
+    match unless `voices_open` (open voice marketplaces).
+    """
+    if not isinstance(voice, str) or not voice:
+        problems.append(f"{where}: missing voice")
+        return
+    catalog_voices = row.get("voices", [])
+    names = [str(item.get("name", "")) for item in catalog_voices if isinstance(item, Mapping)]
+    if not names:
+        return
+    if voice in names:
+        return
+    if row.get("voices_open") is True:
+        return
+    problems.append(f"{where}: unknown voice {voice!r} (valid: {', '.join(sorted(names))})")
+
+
+def _audit_synthesizer(
+    problems: list[str],
+    index: dict[tuple[str, str], list[Mapping[str, Any]]],
+    is_language_valid: Callable[[str], bool],
+    synthesizer: Mapping[str, Any],
+    where: str,
+) -> None:
+    """Audit one synthesizer block: model/engine, voice, and language (slice 3).
+
+    Provider names are schema-strict already; this resolves the model (or
+    Polly's `engine`), the voice against the matched row's curated set, and a
+    present language code.
+    """
+    provider = synthesizer.get("provider")
+    provider_config = synthesizer.get("provider_config")
+    if not isinstance(provider_config, Mapping):
+        return
+    if isinstance(provider, str) and provider in _ENGINE_MODEL_PROVIDERS:
+        model = provider_config.get("engine")
+    else:
+        model = provider_config.get("model")
+    row = _check_leaf(problems, index, modality="tts", provider=provider, model=model, where=f"{where}.synthesizer")
+    if row is None:
+        return
+    _check_voice(problems, row, provider_config.get("voice"), f"{where}.synthesizer")
+    _check_language(problems, is_language_valid, provider_config.get("language"), f"{where}.synthesizer")
 
 
 def _check_languages(
@@ -268,14 +347,14 @@ def audit_provider_config(
     entries: Sequence[Mapping[str, Any]],
     is_language_valid: Callable[[str], bool],
 ) -> list[str]:
-    """Audit one dumped agent config against catalog rows (pure, spec 0022 slice 2).
+    """Audit one dumped agent config against catalog rows (pure, spec 0022).
 
     Walks every task's `tools_config`: transcriber model + languages, LLM
-    leaves (provider AND model — the schema leaves `Llm.provider` free), and
-    the S2S model. Synthesizer `provider_config` shapes (model/voice) land in
-    slice 3 with the voice curation; synthesizer/transcriber/S2S provider
-    names are already schema-strict. Returns problem strings (empty means
-    valid) — callers raise their own module error, so this stays import-clean:
+    leaves (provider AND model — the schema leaves `Llm.provider` free), the
+    S2S model, and the synthesizer provider_config (model/engine + voice
+    against the matched row's curated set + language). Pipeline provider names
+    are already schema-strict. Returns problem strings (empty means valid) —
+    callers raise their own module error, so this stays import-clean:
     catalog rows arrive as plain mappings and the language predicate injects.
 
     Args:
@@ -313,6 +392,9 @@ def audit_provider_config(
             )
             _check_language(problems, is_language_valid, transcriber.get("language"), f"{where}.transcriber")
             _check_languages(problems, is_language_valid, transcriber.get("language_hints"), f"{where}.transcriber")
+        synthesizer = tools.get("synthesizer")
+        if isinstance(synthesizer, Mapping):
+            _audit_synthesizer(problems, index, is_language_valid, synthesizer, where)
         llm_agent = tools.get("llm_agent")
         if llm_agent is not None:
             _audit_llm_leaves(problems, index, llm_agent, f"{where}.llm_agent")
