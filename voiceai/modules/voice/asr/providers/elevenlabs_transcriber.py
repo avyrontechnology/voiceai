@@ -6,7 +6,8 @@ import json
 import os
 import time
 import traceback
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import websockets
@@ -61,20 +62,20 @@ class ElevenLabsTranscriber(BaseTranscriber):
         self.language = language
         self.stream = stream
         self.provider = telephony_provider
-        self.sender_task = None
+        self.sender_task: asyncio.Task[None] | None = None
         self.model = model
         self.sampling_rate = 16000
         self.encoding = encoding
         self.api_key = kwargs.get("transcriber_key", os.getenv("ELEVENLABS_API_KEY"))
         self.elevenlabs_host = os.getenv("ELEVENLABS_API_HOST", "api.elevenlabs.io")
         self.transcriber_output_queue = output_queue
-        self.transcription_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
         self.transcription_cursor = 0.0
         self.interruption_signalled = False
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
+        self.connection_start_time: float | None = None
         self.audio_frame_duration = 0.0
         self.connected_via_dashboard = kwargs.get("enforce_streaming", True)
 
@@ -85,7 +86,7 @@ class ElevenLabsTranscriber(BaseTranscriber):
         self.include_language_detection = include_language_detection
 
         # Keyterm biasing: comma-separated config string -> array of terms (Scribe takes no weights)
-        self.keyterms = []
+        self.keyterms: list[str] = []
         if keywords and isinstance(keywords, str):
             self.keyterms = [kw.strip() for kw in keywords.split(",") if kw.strip()]
             if len(self.keyterms) > ELEVENLABS_REALTIME_MAX_KEYTERMS:
@@ -106,26 +107,26 @@ class ElevenLabsTranscriber(BaseTranscriber):
         self.curr_message = ""
         self.finalized_transcript = ""
         self.final_transcript = ""
-        self.current_turn_start_time = None
-        self.current_turn_id = None
-        self.websocket_connection = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: int | None = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.connection_error = None
-        self.speech_start_time = None
-        self.speech_end_time = None
-        self.current_turn_interim_details = []
-        self.audio_frame_timestamps = []
+        self.connection_error: str | None = None
+        self.speech_start_time: float | None = None
+        self.speech_end_time: float | None = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []
         self.turn_counter = 0
 
         # Latency tracking
-        self.last_audio_send_time = None
+        self.last_audio_send_time: float | None = None
 
         # Timeout tracking for stuck utterances. 2.0s ≈ 2× scribe's partial cadence
         # (~1s between partials in prod), so a slightly late partial doesn't trigger a
         # mid-utterance force-finalize, while a genuinely stuck commit is cut at ~2s not 5s.
-        self.last_interim_time = None
+        self.last_interim_time: float | None = None
         self.interim_timeout = kwargs.get("interim_timeout", 2.0)
-        self.utterance_timeout_task = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
     def get_elevenlabs_ws_url(self) -> Any:
         """Build the ElevenLabs WebSocket URL with query parameters"""
@@ -410,7 +411,7 @@ class ElevenLabsTranscriber(BaseTranscriber):
             logger.error(f"Error in sender_stream: {e}")
             raise
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """Receive and process messages from ElevenLabs WebSocket"""
         async for msg in ws:
             try:
@@ -583,7 +584,8 @@ class ElevenLabsTranscriber(BaseTranscriber):
         """Establish websocket connection to ElevenLabs"""
         try:
             websocket_url = self.get_elevenlabs_ws_url()
-            additional_headers = {"xi-api-key": self.api_key}
+            # cast: a missing key reaches connect as None and fails there, exactly as today.
+            additional_headers = cast("dict[str, str]", {"xi-api-key": self.api_key})
 
             logger.info(f"Attempting to connect to ElevenLabs websocket: {websocket_url}")
 

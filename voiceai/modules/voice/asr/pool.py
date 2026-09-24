@@ -540,7 +540,8 @@ class TranscriberPool:
         """Duration of the longest buffered detector segment (0.0 if absent)."""
         if self._lid is None or not hasattr(self._lid, "buffer_max_segment_seconds"):
             return 0.0
-        return self._lid.buffer_max_segment_seconds()
+        max_segment: float = self._lid.buffer_max_segment_seconds()
+        return max_segment
 
     async def reconnect_active(self) -> bool:
         """Reconnect the ACTIVE transcriber in place after its connection died.
@@ -689,7 +690,8 @@ class TranscriberPool:
         lid = self._lid
         if lid is None:
             return None
-        return lid.audio_seconds_fed()
+        fed_seconds: float | None = lid.audio_seconds_fed()
+        return fed_seconds
 
     async def cleanup(self) -> None:
         """Clean up all transcribers, cancel pool tasks, and stop LID tap."""

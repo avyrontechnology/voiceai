@@ -502,12 +502,11 @@ class GladiaTranscriber(BaseTranscriber):
                     self.audio_submitted = True
                     self.audio_submission_time = time.time()
                     self.current_request_id = self.generate_request_id()
-                    cast("dict[str, Any]", self.meta_info)["request_id"] = self.current_request_id
+                    self.meta_info["request_id"] = self.current_request_id
                     try:
                         if not self.current_turn_start_time:
                             self.current_turn_start_time = timestamp_ms()
-                            turn_meta = cast("dict[str, Any]", self.meta_info)
-                            self.current_turn_id = turn_meta.get("turn_id") or turn_meta.get("request_id")
+                            self.current_turn_id = self.meta_info.get("turn_id") or self.meta_info.get("request_id")
                     except Exception:  # noqa: S110 — verbatim best-effort (R8)
                         pass
 

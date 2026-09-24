@@ -5,7 +5,8 @@ import json
 import os
 import time
 import traceback
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import websockets
 from dotenv import load_dotenv
@@ -82,32 +83,32 @@ class SonioxTranscriber(BaseTranscriber):
         # Utterance timeout — force-finalize if Soniox never sends endpoint after last interim
         _interim_timeout = kwargs.get("interim_timeout")
         self.interim_timeout = float(_interim_timeout) if _interim_timeout is not None else 8.0
-        self.utterance_timeout_task = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
         # Connection + task state
-        self.websocket_connection = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.sender_task = None
-        self.transcription_task = None
-        self.connection_error = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.connection_error: str | None = None
 
         # Per-stream audio bookkeeping (reset on each (re)connect in transcribe())
         self.audio_submitted = False
         self.num_frames = 0
-        self.connection_start_time = None
+        self.connection_start_time: float | None = None
         # (frame_start_s, frame_end_s, send_ts_ms) per audio frame — maps a token's audio
         # position back to when that audio was sent, for per-result transcriber latency.
-        self.audio_frame_timestamps = []
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []
 
         # Per-turn transcript state
         self.final_transcript = ""
-        self.current_turn_id = None
-        self.current_turn_start_time = None
-        self._turn_first_speech_epoch_ms = None
-        self.current_turn_interim_details = []
+        self.current_turn_id: int | None = None
+        self.current_turn_start_time: float | None = None
+        self._turn_first_speech_epoch_ms: float | None = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
         self.turn_counter = 0
-        self.last_interim_time = None
-        self._last_detected_language = None
+        self.last_interim_time: float | None = None
+        self._last_detected_language: str | None = None
 
     def _resolve_audio_params(self) -> None:
         """Set encoding, sample rate and frame duration from the telephony/web I/O provider."""
@@ -288,7 +289,7 @@ class SonioxTranscriber(BaseTranscriber):
                 return send_timestamp
         return None
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """Parse the Soniox token stream into speech_started / interim / transcript events."""
         async for message in ws:
             try:
@@ -358,9 +359,10 @@ class SonioxTranscriber(BaseTranscriber):
                     if final and not self.is_transcript_sent_for_processing:
                         logger.info(f"Soniox endpoint reached, yielding transcript: {final}")
                         self._build_finalized_turn_latency(final)
-                        self.meta_info["user_stop_offset_ms"] = self.user_stop_offset_ms
+                        stop_meta = cast("dict[str, Any]", self.meta_info)
+                        stop_meta["user_stop_offset_ms"] = self.user_stop_offset_ms
                         if self._last_detected_language:
-                            self.meta_info["transcriber_detected_language"] = self._last_detected_language
+                            stop_meta["transcriber_detected_language"] = self._last_detected_language
                         yield create_ws_data_packet({"type": "transcript", "content": final}, self.meta_info)
                         self._reset_turn_state()
                     else:
@@ -397,9 +399,10 @@ class SonioxTranscriber(BaseTranscriber):
         except Exception as e:
             logger.error(f"Soniox force-finalize: error building turn latencies: {e}")
 
-        self.meta_info["user_stop_offset_ms"] = self.user_stop_offset_ms
+        force_meta = cast("dict[str, Any]", self.meta_info)
+        force_meta["user_stop_offset_ms"] = self.user_stop_offset_ms
         if self._last_detected_language:
-            self.meta_info["transcriber_detected_language"] = self._last_detected_language
+            force_meta["transcriber_detected_language"] = self._last_detected_language
 
         data = {"type": "transcript", "content": transcript_to_send, "force_finalized": True}
         logger.info(f"Soniox force-finalized transcript after timeout: {transcript_to_send}")
@@ -439,7 +442,7 @@ class SonioxTranscriber(BaseTranscriber):
         self.connection_on = False
         if self.utterance_timeout_task is not None:
             self.utterance_timeout_task.cancel()
-            self.utterance_timeout_task = None
+        self.utterance_timeout_task = None
         if self.sender_task is not None:
             self.sender_task.cancel()
         if self.websocket_connection is not None:
@@ -547,7 +550,7 @@ class SonioxTranscriber(BaseTranscriber):
             if self.sender_task is not None:
                 self.sender_task.cancel()
 
-            meta = dict(getattr(self, "meta_info", None) or {})
+            meta: dict[str, Any] = dict(getattr(self, "meta_info", None) or {})
             if self.connection_error:
                 meta["connection_error"] = self.connection_error
             await self.push_to_transcriber_queue(create_ws_data_packet("transcriber_connection_closed", meta))

@@ -5,6 +5,7 @@ import json
 import os
 import time
 import traceback
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import websockets
@@ -65,35 +66,35 @@ class PixaTranscriber(BaseTranscriber):
         self.transcriber_output_queue = output_queue
 
         # Task handles
-        self.transcription_task = None
-        self.sender_task = None
-        self.heartbeat_task = None
-        self.utterance_timeout_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
         # State tracking
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
+        self.connection_start_time: float | None = None
         self.audio_frame_duration = 0.0
 
         # Transcript state
         self.final_transcript = ""
-        self.websocket_connection = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.meta_info = {}
-        self.connection_error = None
+        self.meta_info: dict[str, Any] = {}
+        self.connection_error: str | None = None
 
         # Turn/latency tracking
-        self.current_turn_start_time = None
-        self.current_turn_id = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: str | None = None
         self.turn_latencies = []
-        self.first_result_latency_ms = None
+        self.first_result_latency_ms: float | None = None
         self.turn_counter = 0
-        self.turn_first_result_latency = None
+        self.turn_first_result_latency: float | None = None
 
         # Since Pixa has no VAD, use is_final-based turn detection
-        self.last_interim_time = None
+        self.last_interim_time: float | None = None
         self.interim_timeout = kwargs.get("interim_timeout", 5.0)  # Default 5 seconds
 
         # Configure audio params based on telephony provider
@@ -146,7 +147,7 @@ class PixaTranscriber(BaseTranscriber):
         }
 
         attempt = 0
-        last_err = None
+        last_err: Exception | None = None
 
         logger.info(f"Attempting to connect to Pixa WebSocket: {ws_url}")
 
@@ -238,7 +239,7 @@ class PixaTranscriber(BaseTranscriber):
             traceback.print_exc()
             raise
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """
         Receive and process messages from Pixa WebSocket.
 

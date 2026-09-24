@@ -140,7 +140,8 @@ class OpenAITranscriber(BaseTranscriber):
             audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
             gcd = int(np.gcd(in_rate, 24000))
             resampled_np = resample_poly(audio_np, 24000 // gcd, in_rate // gcd)
-            return np.clip(resampled_np, -32768, 32767).astype(np.int16).tobytes()
+            resampled_fallback: bytes = np.clip(resampled_np, -32768, 32767).astype(np.int16).tobytes()
+            return resampled_fallback
 
     @staticmethod
     def _rms(pcm_bytes: bytes) -> float:

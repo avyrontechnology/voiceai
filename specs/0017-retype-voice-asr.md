@@ -60,3 +60,7 @@ Single merge. No flags, no migrations.
 - [x] `voice.tts.*` override removed (spec 0014).
 - [x] `voice.session.*` override removed (spec 0016).
 - [x] `voice.asr.*` override removed (this spec — scoping fully paid down).
+- [x] Closeout verified: `make check` green (1392 passed, mypy 0 over 390 files,
+  bandit clean) with zero `ignore_errors` remaining; third-party stub gaps
+  adjudicated per file, none blanket-ignored. `docs/CHECKPOINT.md` resume table
+  retired with this note.

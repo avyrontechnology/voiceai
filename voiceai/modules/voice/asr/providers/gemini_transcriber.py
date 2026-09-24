@@ -6,7 +6,8 @@ import json
 import os
 import time
 import traceback
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import websockets
 from dotenv import load_dotenv
@@ -86,12 +87,12 @@ class GeminiTranscriber(BaseTranscriber):
 
         self._resolve_audio_params()
 
-        self.websocket_connection = None
+        self.websocket_connection: Any = None  # why: websockets ClientConnection crosses the seam untyped here
         self.connection_authenticated = False
-        self.sender_task = None
-        self.transcription_task = None
-        self.utterance_timeout_task = None
-        self.connection_error = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
+        self.connection_error: str | None = None
         self.audio_submitted = False
         self._eos_received = False
         # Gemini Live reports no billed duration, so bill on the audio actually streamed.
@@ -100,12 +101,12 @@ class GeminiTranscriber(BaseTranscriber):
         # Per-turn transcript state
         self.final_transcript = ""
         self.running_interim = ""
-        self.current_turn_id = None
-        self.current_turn_start_time = None
-        self._turn_first_speech_epoch_ms = None
-        self.current_turn_interim_details = []
+        self.current_turn_id: int | None = None
+        self.current_turn_start_time: float | None = None
+        self._turn_first_speech_epoch_ms: float | None = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
         self.turn_counter = 0
-        self.last_interim_time = None
+        self.last_interim_time: float | None = None
 
     def _resolve_audio_params(self) -> None:
         """Set encoding and sample rate from the telephony/web I/O provider (task_manager also
@@ -298,12 +299,12 @@ class GeminiTranscriber(BaseTranscriber):
     def _finalized_transcript_packet(self, final: Any) -> Any:
         """Build the end-of-turn transcript packet and reset for the next turn."""
         self._finalize_turn_latency(final)
-        self.meta_info["user_stop_offset_ms"] = self.user_stop_offset_ms
+        cast("dict[str, Any]", self.meta_info)["user_stop_offset_ms"] = self.user_stop_offset_ms
         packet = create_ws_data_packet({"type": "transcript", "content": final}, self.meta_info)
         self._reset_turn_state()
         return packet
 
-    async def receiver(self, ws: Any) -> None:
+    async def receiver(self, ws: Any) -> AsyncGenerator[Any, None]:
         """Map Gemini serverContent onto speech_started / interim / transcript / speech_ended.
 
         The transcribe-live model streams interimInputTranscription (a cumulative partial) and then
@@ -388,7 +389,8 @@ class GeminiTranscriber(BaseTranscriber):
                     text = self.final_transcript.strip() or self.running_interim.strip()
                     logger.warning(f"Gemini utterance timeout, force-finalizing turn {self.current_turn_id}")
                     self._finalize_turn_latency(text)
-                    self.meta_info["user_stop_offset_ms"] = self.user_stop_offset_ms
+                    finalized_meta = cast("dict[str, Any]", self.meta_info)
+                    finalized_meta["user_stop_offset_ms"] = self.user_stop_offset_ms
                     data = {"type": "transcript", "content": text, "force_finalized": True}
                     await self.push_to_transcriber_queue(create_ws_data_packet(data, self.meta_info))
                     self._reset_turn_state()
@@ -507,7 +509,7 @@ class GeminiTranscriber(BaseTranscriber):
                 self.utterance_timeout_task.cancel()
             if self.sender_task is not None:
                 self.sender_task.cancel()
-            meta = dict(getattr(self, "meta_info", None) or {})
+            meta: dict[str, Any] = dict(getattr(self, "meta_info", None) or {})
             meta["transcriber_duration"] = round(self.audio_duration_s, 4)
             if self.connection_error:
                 meta["connection_error"] = self.connection_error

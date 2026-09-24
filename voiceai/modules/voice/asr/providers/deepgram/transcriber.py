@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 from urllib.parse import quote
 
 import aiohttp
@@ -122,8 +123,8 @@ class DeepgramTranscriber(BaseTranscriber):
         self.speech_end_time: float | None = None
         self._turn_first_speech_epoch_ms: int | None = None  # epoch ms of first SpeechStarted per turn
         self._turn_pending = False  # True after SpeechStarted until first real interim confirms speech
-        self.current_turn_interim_details = []
-        self.audio_frame_timestamps = []  # List of (frame_start, frame_end, send_timestamp)
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []
         # Wall-clock epoch-ms send time of the audio behind the latest transcript content
         # in the current flux turn — per-turn proxy for "user stopped speaking" (flux has
         # no per-word timestamps). Read at EndOfTurn for user_speech_end_epoch_ms.
@@ -209,7 +210,7 @@ class DeepgramTranscriber(BaseTranscriber):
         """Return the transcriber meta info."""
         return _dg_nova.get_meta_info(self)
 
-    async def sender(self, ws: Any = None) -> None:
+    async def sender(self, ws: Any = None) -> AsyncGenerator[Any, None]:
         """Stream queued audio to the socket (non-streaming legs)."""
         # Async generator: re-yield (the B11b _llm_stream precedent).
         async for item in _dg_nova.sender(self, ws):
@@ -219,7 +220,7 @@ class DeepgramTranscriber(BaseTranscriber):
         """Stream queued audio to the socket."""
         return await _dg_nova.sender_stream(self, ws)
 
-    async def receiver(self, ws: Any) -> None:
+    async def receiver(self, ws: Any) -> AsyncGenerator[Any, None]:
         """Consume responses into transcript packets."""
         async for item in _dg_nova.receiver(self, ws):
             yield item
@@ -236,7 +237,7 @@ class DeepgramTranscriber(BaseTranscriber):
         """Release stuck flux turns on timeout."""
         return await _dg_flux.monitor_flux_turn_timeout(self)
 
-    async def receiver_flux(self, ws: Any) -> None:
+    async def receiver_flux(self, ws: Any) -> AsyncGenerator[Any, None]:
         """Consume flux responses into transcript packets."""
         async for item in _dg_flux.receiver_flux(self, ws):
             yield item
@@ -273,6 +274,16 @@ class DeepgramTranscriber(BaseTranscriber):
         else:
             logger.warning("Missing start or duration in Deepgram message, cannot update transcription cursor")
         return self.transcription_cursor
+
+    def set_transcription_cursor(self, data: Any) -> Any:
+        """Public seam for the split session bodies (spec 0017).
+
+        `nova_session.py` functions take `self: DeepgramTranscriber` but live
+        outside the class body, so the implicit `self.__x` mangling does not
+        apply to them — they called the explicitly-mangled private name, which
+        static analysis cannot resolve. This alias is the same call.
+        """
+        return self.__set_transcription_cursor(data)
 
     def _mark_last_interim_final(self, latency_ms: Any = None) -> None:
         """Mark the last interim entry as final and optionally update its latency.
@@ -372,7 +383,7 @@ class DeepgramTranscriber(BaseTranscriber):
                                 async def drain_metadata() -> None:
                                     """Drain the post-close Metadata message."""
                                     async for _ in self.receiver(deepgram_ws):
-                                        if "deepgram_duration" in self.meta_info:
+                                        if "deepgram_duration" in cast("dict[str, Any]", self.meta_info):
                                             return
 
                                 try:
@@ -424,7 +435,7 @@ class DeepgramTranscriber(BaseTranscriber):
             if self.meta_info is not None and "deepgram_duration" in self.meta_info:
                 self.meta_info["transcriber_duration"] = self.meta_info["deepgram_duration"]
 
-            meta = dict(getattr(self, "meta_info", None) or {})
+            meta: dict[str, Any] = dict(getattr(self, "meta_info", None) or {})
             if self.connection_error:
                 meta["connection_error"] = self.connection_error
             await self.push_to_transcriber_queue(create_ws_data_packet("transcriber_connection_closed", meta))

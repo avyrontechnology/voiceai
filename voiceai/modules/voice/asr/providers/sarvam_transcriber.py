@@ -268,7 +268,8 @@ class SarvamTranscriber(BaseTranscriber):
             down = in_sr // gcd
             resampled_np = resample_poly(audio_np, up, down)
             resampled_np = np.clip(resampled_np, -32768, 32767).astype(np.int16)
-            return resampled_np.tobytes()
+            resampled: bytes = resampled_np.tobytes()
+            return resampled
         except Exception:
             return raw_audio
 

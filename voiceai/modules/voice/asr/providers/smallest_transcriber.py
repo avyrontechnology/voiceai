@@ -5,7 +5,8 @@ import json
 import os
 import time
 import traceback
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import websockets
@@ -49,7 +50,7 @@ class SmallestTranscriber(BaseTranscriber):
         encoding: str = "linear16",
         sampling_rate: str = "16000",
         model: str = "pulse",
-        keywords: str = None,
+        keywords: str | None = None,
         word_timestamps: bool = True,
         process_interim_results: str = "true",
         **kwargs: Any,
@@ -92,17 +93,17 @@ class SmallestTranscriber(BaseTranscriber):
         self.connection_error: str | None = None
 
         # Tasks
-        self.transcription_task = None
-        self.sender_task = None
-        self.heartbeat_task = None
-        self.utterance_timeout_task = None
+        self.transcription_task: asyncio.Task[None] | None = None
+        self.sender_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+        self.utterance_timeout_task: asyncio.Task[None] | None = None
 
         # Audio tracking
         self.audio_submitted = False
-        self.audio_submission_time = None
+        self.audio_submission_time: float | None = None
         self.num_frames = 0
-        self.connection_start_time = None
-        self.audio_frame_timestamps = []  # List of (frame_start, frame_end, send_timestamp)
+        self.connection_start_time: float | None = None
+        self.audio_frame_timestamps: list[tuple[float, float, float]] = []  # (frame_start, frame_end, send_timestamp)
 
         # Transcript state management
         self.final_transcript = ""
@@ -110,18 +111,18 @@ class SmallestTranscriber(BaseTranscriber):
 
         # Turn tracking
         self.turn_counter = 0
-        self.current_turn_start_time = None
-        self.current_turn_id = None
-        self.current_turn_interim_details = []
-        self.speech_start_time = None
-        self.speech_end_time = None
+        self.current_turn_start_time: float | None = None
+        self.current_turn_id: int | None = None
+        self.current_turn_interim_details: list[dict[str, Any]] = []
+        self.speech_start_time: float | None = None
+        self.speech_end_time: float | None = None
 
         # Latency tracking
-        self.first_result_latency_ms = None
-        self.total_stream_duration_ms = None
+        self.first_result_latency_ms: float | None = None
+        self.total_stream_duration_ms: float | None = None
 
         # Timeout monitoring (like Deepgram)
-        self.last_interim_time = None
+        self.last_interim_time: float | None = None
         self.interim_timeout = kwargs.get("interim_timeout", 5.0)  # Default 5 seconds
 
     def _configure_audio_params(self) -> None:
@@ -196,7 +197,7 @@ class SmallestTranscriber(BaseTranscriber):
         Establish WebSocket connection to Smallest AI with retry logic.
         """
         attempt = 0
-        last_err = None
+        last_err: Exception | None = None
 
         while attempt < retries:
             try:
@@ -516,7 +517,7 @@ class SmallestTranscriber(BaseTranscriber):
             logger.error(f"Error in sender_stream: {e}")
             raise
 
-    async def receiver(self, ws: ClientConnection) -> None:
+    async def receiver(self, ws: ClientConnection) -> AsyncGenerator[Any, None]:
         """
         Receive and process messages from Smallest AI WebSocket.
 
@@ -567,9 +568,10 @@ class SmallestTranscriber(BaseTranscriber):
                     if self.first_result_latency_ms is None and self.audio_submission_time:
                         first_latency_seconds = now_timestamp - self.audio_submission_time
                         self.first_result_latency_ms = round(first_latency_seconds * 1000)
-                        self.meta_info["transcriber_first_result_latency"] = first_latency_seconds
-                        self.meta_info["transcriber_latency"] = first_latency_seconds
-                        self.meta_info["first_result_latency_ms"] = self.first_result_latency_ms
+                        first_meta = cast("dict[str, Any]", self.meta_info)
+                        first_meta["transcriber_first_result_latency"] = first_latency_seconds
+                        first_meta["transcriber_latency"] = first_latency_seconds
+                        first_meta["first_result_latency_ms"] = self.first_result_latency_ms
 
                     # Track interim details
                     interim_detail = {
@@ -602,8 +604,9 @@ class SmallestTranscriber(BaseTranscriber):
                         # Calculate total duration
                         if self.current_turn_start_time:
                             total_stream_duration = time.time() - (self.current_turn_start_time / 1000)
-                            self.meta_info["transcriber_total_stream_duration"] = total_stream_duration
-                            self.meta_info["transcriber_latency"] = total_stream_duration
+                            duration_meta = cast("dict[str, Any]", self.meta_info)
+                            duration_meta["transcriber_total_stream_duration"] = total_stream_duration
+                            duration_meta["transcriber_latency"] = total_stream_duration
 
                         # Build turn latencies
                         try:
@@ -645,7 +648,8 @@ class SmallestTranscriber(BaseTranscriber):
                 # Check if this is the last message
                 if is_last:
                     logger.info("Received is_last=true, session complete")
-                    self.meta_info["transcriber_duration"] = time.time() - (self.connection_start_time or time.time())
+                    connection_start = self.connection_start_time or time.time()
+                    cast("dict[str, Any]", self.meta_info)["transcriber_duration"] = time.time() - connection_start
                     yield create_ws_data_packet("transcriber_connection_closed", self.meta_info)
                     return
 

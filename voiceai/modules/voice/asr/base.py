@@ -3,7 +3,7 @@
 import json
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -45,9 +45,10 @@ class BaseTranscriber:
 
     def update_meta_info(self) -> None:
         """Refresh the transcriber meta info."""
-        self.meta_info["request_id"] = self.current_request_id if self.current_request_id else None
-        self.meta_info["previous_request_id"] = self.previous_request_id
-        self.meta_info["origin"] = "transcriber"
+        meta = cast("dict[str, Any]", self.meta_info)
+        meta["request_id"] = self.current_request_id if self.current_request_id else None
+        meta["previous_request_id"] = self.previous_request_id
+        meta["origin"] = "transcriber"
 
     @staticmethod
     def generate_request_id() -> Any:
@@ -57,7 +58,7 @@ class BaseTranscriber:
     async def signal_transcription_begin(self, msg: Any) -> Any:
         """Signal that transcription began."""
         send_begin_packet = False
-        self.meta_info["request_id"] = self.current_request_id
+        cast("dict[str, Any]", self.meta_info)["request_id"] = self.current_request_id
 
         if not self.callee_speaking:
             self.callee_speaking = True

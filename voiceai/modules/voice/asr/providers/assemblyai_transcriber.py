@@ -321,7 +321,7 @@ class AssemblyAITranscriber(BaseTranscriber):
                         self.audio_submitted = True
                         self.audio_submission_time = time.time()
                         self.current_request_id = self.generate_request_id()
-                        cast("dict[str, Any]", self.meta_info)["request_id"] = self.current_request_id
+                        self.meta_info["request_id"] = self.current_request_id
                         try:
                             if not self.current_turn_start_time:
                                 self.current_turn_start_time = time.perf_counter()

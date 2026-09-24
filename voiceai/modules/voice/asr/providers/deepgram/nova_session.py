@@ -5,11 +5,10 @@ bodies moved here VERBATIM from ``deepgram_transcriber.py``. Each function takes
 transcriber as its first parameter (kept named ``self``); ``DeepgramTranscriber``
 keeps a thin same-named method per moved body and injects itself on every call, so
 the B1 golden fixtures driving the nova receiver keep passing unchanged. This module
-is the lookup site for the moved bodies' globals (R3). The single compile-time
-name-mangling accommodation (the B5-B11d precedent):
-``self.__set_transcription_cursor`` is spelled
-``self._DeepgramTranscriber__set_transcription_cursor``, exactly what the class body
-always compiled to. Preserved quirks (R8): UtteranceEnd fallback finalization and the
+is the lookup site for the moved bodies' globals (R3). Cross-class private calls go
+through the public `DeepgramTranscriber.set_transcription_cursor` seam (spec 0017)
+instead of the explicitly-mangled private name, which static analysis cannot
+resolve. Preserved quirks (R8): UtteranceEnd fallback finalization and the
 ``traceback.print_exc`` stderr write (rule 3; TODO(spec-0004)). Logs through
 ``otobaai`` (rule 3).
 """
@@ -20,7 +19,8 @@ import asyncio
 import json
 import time
 import traceback
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from websockets.asyncio.client import ClientConnection
@@ -160,12 +160,13 @@ async def get_http_transcription(self: DeepgramTranscriber, audio_data: bytes) -
     }
 
     self.current_request_id = self.generate_request_id()
-    self.meta_info["request_id"] = self.current_request_id
+    http_meta = cast("dict[str, Any]", self.meta_info)
+    http_meta["request_id"] = self.current_request_id
     async with self.session as session:
         async with session.post(self.api_url, data=audio_data, headers=headers) as response:
             response_data = await response.json()
             transcript = response_data["results"]["channels"][0]["alternatives"][0]["transcript"]
-            self.meta_info["transcriber_duration"] = response_data["metadata"]["duration"]
+            cast("dict[str, Any]", self.meta_info)["transcriber_duration"] = response_data["metadata"]["duration"]
             return create_ws_data_packet(transcript, self.meta_info)
 
 
@@ -183,7 +184,7 @@ def get_meta_info(self: DeepgramTranscriber) -> Any:
     return self.meta_info
 
 
-async def sender(self: DeepgramTranscriber, ws: ClientConnection | None = None) -> None:
+async def sender(self: DeepgramTranscriber, ws: ClientConnection | None = None) -> AsyncGenerator[Any, None]:
     """Stream queued audio to the socket (non-streaming legs)."""
     try:
         while True:
@@ -282,7 +283,7 @@ async def sender_stream(self: DeepgramTranscriber, ws: ClientConnection) -> None
         raise
 
 
-async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
+async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> AsyncGenerator[Any, None]:
     """Consume nova responses into transcript packets."""
     async for msg in ws:
         try:
@@ -304,7 +305,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                 logger.info(
                     "VOICEAI_TRACE_DG speech_started dg_turn=%s request_id=%s",
                     self.current_turn_id,
-                    self.meta_info.get("request_id"),
+                    cast("dict[str, Any]", self.meta_info).get("request_id"),
                 )
                 yield create_ws_data_packet("speech_started", self.meta_info)
 
@@ -341,7 +342,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                             }
                         )
                     # Calculate latency using end position (start + duration) for cumulative transcripts
-                    self._DeepgramTranscriber__set_transcription_cursor(msg)
+                    self.set_transcription_cursor(msg)
                     audio_position_end = self.transcription_cursor
                     latency_ms = None
 
@@ -429,10 +430,11 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                         except Exception as e:
                             logger.error(f"Failed to extract transcript from Deepgram response in speech_final: {e}")
                             pass
-                        self.meta_info["user_stop_offset_ms"] = self.endpointing_ms
+                        stamped_meta = cast("dict[str, Any]", self.meta_info)
+                        stamped_meta["user_stop_offset_ms"] = self.endpointing_ms
                         # Always assign (even None) to clear any stale value from a previous turn.
                         # None is safe: interruption_manager guards on it before use.
-                        self.meta_info["user_stop_ts_wall"] = self._compute_last_word_end_wall(msg)
+                        stamped_meta["user_stop_ts_wall"] = self._compute_last_word_end_wall(msg)
                         yield create_ws_data_packet(data, self.meta_info)
 
             elif msg["type"] == "UtteranceEnd":
@@ -446,7 +448,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                     logger.info(
                         "VOICEAI_TRACE_DG emit_utterance_end dg_turn=%s request_id=%s text_len=%s text=%r",
                         self.current_turn_id,
-                        self.meta_info.get("request_id"),
+                        cast("dict[str, Any]", self.meta_info).get("request_id"),
                         len(self.final_transcript.strip()),
                         self.final_transcript.strip()[:120],
                     )
@@ -484,10 +486,11 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                     except Exception as e:
                         logger.error(f"Failed to extract transcript from Deepgram response: {e}")
                         pass
-                    self.meta_info["user_stop_offset_ms"] = self.utterance_end_ms
+                    finalized_meta = cast("dict[str, Any]", self.meta_info)
+                    finalized_meta["user_stop_offset_ms"] = self.utterance_end_ms
                     last_word_end_audio = msg.get("last_word_end")
                     if last_word_end_audio is not None:
-                        self.meta_info["user_stop_ts_wall"] = self.connection_start_time + last_word_end_audio
+                        finalized_meta["user_stop_ts_wall"] = self.connection_start_time + last_word_end_audio
                     yield create_ws_data_packet(data, self.meta_info)
                 else:
                     # Transcript already sent but we still need to notify speech ended
@@ -497,7 +500,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                     )
                     logger.info(
                         "VOICEAI_TRACE_DG emit_speech_ended request_id=%s",
-                        self.meta_info.get("request_id"),
+                        cast("dict[str, Any]", self.meta_info).get("request_id"),
                     )
                     self.speech_start_time = None
                     self.speech_end_time = None
@@ -513,7 +516,7 @@ async def receiver(self: DeepgramTranscriber, ws: ClientConnection) -> None:
                 # Capture duration from final Metadata message (actual audio processed by Deepgram)
                 deepgram_duration = msg.get("duration")
                 if deepgram_duration is not None:
-                    self.meta_info["deepgram_duration"] = deepgram_duration
+                    cast("dict[str, Any]", self.meta_info)["deepgram_duration"] = deepgram_duration
                     logger.info(f"Received Deepgram Metadata with duration: {deepgram_duration}s")
 
         except Exception as e:  # noqa: F841 — verbatim dead local (R8)

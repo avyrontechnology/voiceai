@@ -337,7 +337,7 @@ class GoogleTranscriber(BaseTranscriber):
             requests = self._audio_generator()
 
             try:
-                responses = self.client.streaming_recognize(streaming_config, requests)  # type: ignore[arg-type]  # stubs take one positional; the runtime API takes (config, requests) — verified by inspect (spec 0017)
+                responses = self.client.streaming_recognize(streaming_config, requests)  # type: ignore[call-arg, arg-type]  # stub shapes differ; the runtime API takes (config, requests iterator) — verified by inspect (spec 0017)
                 self.connection_authenticated = True
 
                 # iterate responses synchronously

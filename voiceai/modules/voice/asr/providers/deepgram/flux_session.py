@@ -16,6 +16,7 @@ import asyncio
 import json
 import time
 import traceback
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
 from websockets.asyncio.client import ClientConnection
@@ -118,7 +119,7 @@ async def send_heartbeat_flux(self: DeepgramTranscriber, ws: ClientConnection) -
         raise
 
 
-async def receiver_flux(self: DeepgramTranscriber, ws: ClientConnection) -> None:
+async def receiver_flux(self: DeepgramTranscriber, ws: ClientConnection) -> AsyncGenerator[Any, None]:
     """Consume flux responses into transcript packets."""
     async for msg in ws:
         try:
