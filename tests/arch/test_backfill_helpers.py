@@ -1,6 +1,6 @@
 """Backfill script invariants: offline checks over the migration table (T6)."""
 
-from scripts.backfill_upstash_to_atlas import FAMILIES, MIGRATED, _coerce_dates, _model_for
+from voiceai.tooling.backfill_upstash_to_atlas import FAMILIES, MIGRATED, _coerce_dates, _model_for
 
 
 def test_every_migrated_family_is_censused() -> None:
@@ -44,7 +44,7 @@ def test_coerce_dates_parses_iso_and_leaves_garbage() -> None:
 
 def test_seed_roster_covers_every_role_with_unmailable_addresses() -> None:
     """The seeder roster has one row per role, all on non-routable example.com."""
-    from scripts.seed_users import ROSTER
+    from voiceai.tooling.seed_users import ROSTER
 
     assert [role for _email, _name, role in ROSTER] == ["owner", "admin", "member", "viewer"]
     assert len({email for email, _name, _role in ROSTER}) == len(ROSTER)
