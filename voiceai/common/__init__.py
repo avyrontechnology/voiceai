@@ -22,6 +22,7 @@ from voiceai.common.errors import (
     InvalidRequestError,
     NotFoundError,
     RateLimitedError,
+    TenantNotBoundError,
     UnauthorizedError,
 )
 from voiceai.common.exceptions import ensure, ensure_found, ensure_valid
@@ -43,6 +44,13 @@ from voiceai.common.security import (
     is_safe_outbound_url,
     redact_secrets,
 )
+from voiceai.common.tenancy import (
+    SYSTEM_TENANT_ID,
+    TenantContext,
+    bind_tenant,
+    current_tenant,
+    reset_tenant,
+)
 
 __all__ = [
     "API_PREFIX",
@@ -55,6 +63,8 @@ __all__ = [
     "REQUEST_ID_HEADER",
     "REQUEST_ID_PATTERN",
     "SECRET_KEY_PATTERN",
+    "SYSTEM_TENANT_ID",
+    "TenantContext",
     "UTC",
     "ApiMeta",
     "AppError",
@@ -69,12 +79,15 @@ __all__ = [
     "Page",
     "PaginationParams",
     "RateLimitedError",
+    "TenantNotBoundError",
     "UnauthorizedError",
     "configure_logging",
     "EMAIL_PATTERN",
     "ensure",
     "ensure_found",
     "ensure_valid",
+    "bind_tenant",
+    "current_tenant",
     "epoch_ms",
     "error_payload",
     "error_response",
@@ -88,6 +101,7 @@ __all__ = [
     "parse_iso",
     "redact_secrets",
     "register_exception_handlers",
+    "reset_tenant",
     "set_request_id",
     "success_response",
     "tenant_key",

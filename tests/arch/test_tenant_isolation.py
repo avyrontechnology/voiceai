@@ -26,6 +26,7 @@ SOURCE_ROOTS = (
 TENANT_ID_FLAGGED: frozenset[str] = frozenset(
     {
         "voiceai/common/keys.py",
+        "voiceai/common/tenancy.py",  # spec 0020, M1a: ambient context vocabulary
     }
 )
 

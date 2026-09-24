@@ -41,6 +41,7 @@ __all__ = [
     "InvalidRequestError",
     "NotFoundError",
     "RateLimitedError",
+    "TenantNotBoundError",
     "UnauthorizedError",
 ]
 
@@ -166,6 +167,16 @@ class RateLimitedError(AppError):
     code: ClassVar[ErrorCode] = ErrorCode.RATE_LIMITED
     http_status: ClassVar[int] = HTTP_TOO_MANY_REQUESTS
     retryable: ClassVar[bool] = True
+
+
+class TenantNotBoundError(AppError):
+    """Code asked for the ambient tenant where none was bound (spec 0020, M1a).
+
+    Inherits `INTERNAL_ERROR`/500 semantics: reaching a client means a missing
+    middleware/job-payload binding, i.e. a wiring bug, so the message stays
+    opaque. Deliberately fail-loud — a silent default-tenant fallback would mix
+    tenant data, which no retry can fix.
+    """
 
 
 class DependencyUnavailableError(AppError):
