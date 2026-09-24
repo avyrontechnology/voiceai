@@ -27,6 +27,9 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
     {
         "voiceai/common/keys.py",
         "voiceai/common/tenancy.py",  # spec 0020, M1a: ambient context vocabulary
+        "voiceai/database/base.py",  # spec 0020, M1b: the tenant_id field itself
+        "voiceai/database/constants.py",  # spec 0020, M1b: TENANT_ID_FIELD literal
+        "voiceai/database/scoped.py",  # spec 0020, M1b: the scoping choke point itself
     }
 )
 
@@ -37,6 +40,16 @@ TENANT_KEY_PATTERN = re.compile(r"""["']t:\{""")
 #: Source files allowed to hand-build tenant keys (empty: the one true builder
 #: is ``common.keys.tenant_key``; anything here fails loudly instead).
 TENANT_KEY_FLAGGED: frozenset[str] = frozenset()
+
+#: Source files allowed to call ``system_scope`` (spec 0020, M1b) — the explicit,
+#: greppable exception for tenant *discovery* (credential → tenant resolution,
+#: backfills). Starts with the definition itself; each call site is appended in
+#: the same spec that introduces it, never in advance.
+SYSTEM_SCOPE_FLAGGED: frozenset[str] = frozenset(
+    {
+        "voiceai/database/scoped.py",
+    }
+)
 
 
 def _source_files() -> list[Path]:
@@ -86,4 +99,17 @@ def test_tenant_keys_are_built_only_by_the_one_builder() -> None:
     assert found == TENANT_KEY_FLAGGED, (
         "hand-built tenant keys (use common.keys.tenant_key instead):\n"
         + "\n".join(sorted(found - TENANT_KEY_FLAGGED))
+    )
+
+
+def test_unscoped_access_goes_only_through_system_scope() -> None:
+    """Unscoped repository use is an allowlisted exception, not a quiet default."""
+    found = _files_containing("system_scope")
+    assert found == SYSTEM_SCOPE_FLAGGED, (
+        "unscoped access outside system_scope (update SYSTEM_SCOPE_FLAGGED in the same spec):\n"
+        + "\n".join(f"+ {path}" for path in sorted(found - SYSTEM_SCOPE_FLAGGED))
+        + "\n".join(
+            f"- {path} (migrated — remove from the flagged set)"
+            for path in sorted(SYSTEM_SCOPE_FLAGGED - found)
+        )
     )

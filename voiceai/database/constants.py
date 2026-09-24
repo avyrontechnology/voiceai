@@ -40,6 +40,10 @@ DOCUMENT_NOT_FOUND_MESSAGE: Final[str] = "Document not found"
 DETAIL_COLLECTION: Final[str] = "collection"
 DETAIL_ITEM_ID: Final[str] = "item_id"
 
+#: Document field carrying the isolation boundary (spec 0020, M1b). Scoped
+#: repositories and the backfill reference the field through this, never a literal.
+TENANT_ID_FIELD: Final[str] = "tenant_id"
+
 # Mongo driver timeouts (spec 0003): every operation is bounded (AGENTS.md §4 — a hung
 # database must degrade, never wedge a loop). Wired at client construction so they cover
 # all operations without per-call kwargs the driver may not accept.

@@ -3,6 +3,7 @@
 from voiceai.database.base import BaseFields
 from voiceai.database.constants import Collections
 from voiceai.database.repository import BaseRepository, InMemoryRepository, MotorRepository
+from voiceai.database.scoped import TenantScopedRepository
 
 __all__ = [
     "BaseFields",
@@ -10,4 +11,5 @@ __all__ = [
     "Collections",
     "InMemoryRepository",
     "MotorRepository",
+    "TenantScopedRepository",
 ]
