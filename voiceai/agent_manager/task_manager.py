@@ -187,6 +187,7 @@ from voiceai.modules.voice.session.lifecycle import report as _voice_report
 # wav_bytes_to_pcm, get_synth_audio_format, resample, update_prompt_with_context,
 # get_md5_hash, select_message_by_language): monkeypatch string paths for those target
 # voiceai.modules.voice.session.{welcome,events}.<name>.
+from voiceai.modules.voice.session import chat as _voice_chat
 from voiceai.modules.voice.session import dtmf as _voice_dtmf
 from voiceai.modules.voice.session import events as _voice_events
 from voiceai.modules.voice.session import welcome as _voice_welcome
@@ -455,51 +456,18 @@ class TaskManager(BaseManager):
     async def _forward_browser_text(self, text, role, asr_turn_id=None):
         """Forward one transcript line to the Live Talk / chat panel.
 
-        Browser legs only; telephony has no transcript panel and the dashboard
-        flow ignores these frames. Never raises — a transcript must not kill a call.
-        asr_turn_id lets the panel update one bubble per caller turn instead of
-        appending every cumulative re-emission.
+        Moved verbatim to `voiceai.modules.voice.session.chat` (spec 0032);
+        this delegator keeps legacy callers stable.
         """
-        if not text or not str(text).strip():
-            return
-        if not self._is_browser_leg():
-            return
-        # Bounded recent-set: eager speculative turns and the confirming real turn
-        # stage identical text (also survives __new__-built managers in tests).
-        sent = getattr(self, "_forwarded_chat_texts", None)
-        if sent is None:
-            sent = self._forwarded_chat_texts = []
-        if str(text).strip() in sent:
-            return
-        output = (self.tools or {}).get("output")
-        if output is None or getattr(output, "handle", None) is None:
-            return
-        packet = create_ws_data_packet(
-            str(text), {"type": "text", "role": role, "sequence_id": -1, "asr_turn_id": asr_turn_id}
-        )
-        try:
-            await output.handle(packet)
-        except Exception as e:
-            logger.debug(f"Browser transcript forward failed: {e}")
-            return
-        logger.info(f"Browser-leg chat reply forwarded | role={role} chars={len(str(text))}")
-        sent.append(str(text).strip())
-        del sent[:-50]
+        return await _voice_chat.forward_browser_text(self, text, role, asr_turn_id)
 
     async def _drain_pending_chat_forward(self):
-        """Flush staged agent replies to the browser transcript panel."""
-        if not self._is_browser_leg():
-            return
-        pending = getattr(self, "_pending_chat_forward", None) or []
-        self._pending_chat_forward = []
-        for text in pending:
-            await self._forward_browser_text(text, "agent")
+        """Flush staged agent replies to the browser transcript panel.
 
-    # def __is_knowledge_agent(self):
-    #     if self.task_config["task_type"] == "webhook":
-    #         return False
-    #     agent_type = self.task_config['tools_config']["llm_agent"].get("agent_type", None)
-    #     return agent_type == "knowledge_agent"
+        Moved verbatim to `voiceai.modules.voice.session.chat` (spec 0032);
+        this delegator keeps legacy callers stable.
+        """
+        return await _voice_chat.drain_pending_chat_forward(self)
 
     def _invalidate_response_chain(self):
         return _voice_history.invalidate_response_chain(self)
