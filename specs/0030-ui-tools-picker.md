@@ -75,5 +75,17 @@ version-gate). Legacy retirement is a separate commit after verification.
 
 ## Burn-down
 
-- [ ] Registry hooks + schemas + picker bindings + 400 rendering.
-- [ ] Legacy tools-calls retirement (follow-up commit).
+- [x] Registry hooks + schemas + picker bindings + 400 rendering.
+- [x] Legacy tools-calls retirement (done inline, not as a follow-up —
+  deviation from the rollout plan, recorded here: the legacy `/tools`
+  routes are unmounted on prod and prod Redis holds zero legacy rows,
+  so a degrade-to-legacy path would be dead code. The UI rewrites
+  `services/platform/tools.ts` in place instead of adding
+  `registry-tools.ts` beside it; `src/lib/schemas/tools-registry.ts`
+  likewise folds into `src/lib/schemas/platform.ts`. All behavioral
+  contracts above hold: system/tenant badges, grandfathered deprecated
+  display, attach-by-id PATCH with full-array bodies, webhook-ref
+  dropdown plus per-attachment params editor, `.api_tools` 400 rendering.
+  Form-state plumbing (`agent_config.api_tools` round-trip) additionally
+  guarantees PATCH attachments survive the next PUT save — without it,
+  full-overwrite saves would evaporate attached refs.)
