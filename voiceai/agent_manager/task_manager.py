@@ -216,6 +216,7 @@ from voiceai.modules.voice.session.language import switcher as _voice_switcher
 # voiceai.modules.voice.session.turn.history_sync.<name>.
 from voiceai.modules.voice.session.turn import function_calls as _voice_function_calls
 from voiceai.modules.voice.session.turn import generation as _voice_generation
+from voiceai.modules.voice.session.turn import meta_info as _voice_meta_info
 from voiceai.modules.voice.session.turn import output_loop as _voice_output_loop
 from voiceai.modules.voice.session import composition as _voice_composition
 from voiceai.modules.voice.session.turn import transcript_listener as _voice_listener
@@ -1085,63 +1086,21 @@ class TaskManager(BaseManager):
         return await _voice_history.cleanup_downstream_tasks(self)
 
     def __get_updated_meta_info(self, meta_info=None):
-        # This is used in case there's silence from callee's side
-        if meta_info is None:
-            meta_info = self.tools["transcriber"].get_meta_info()
-            logger.info(f"Metainfo {meta_info}")
-        meta_info_copy = meta_info.copy()
+        """Stamp a fresh response identity onto copied meta info.
 
-        new_sequence_id = self.interruption_manager.get_next_sequence_id()
-        meta_info_copy["sequence_id"] = new_sequence_id
-        # Transcript/tool-call grouping needs a response-turn id that is stable
-        # across all chunks and sub-steps of one response chain, but independent
-        # from audio sequencing. sequence_id is for interruption/audio gating;
-        # chunk_id is for chunking; turn_id is for transcript/history grouping.
-        self._response_turn_id += 1
-        meta_info_copy["turn_id"] = self._response_turn_id
-        response_uid = str(uuid.uuid4())
-        meta_info_copy["response_uid"] = response_uid
-        meta_info_copy["response_group_uid"] = response_uid
-        meta_info_copy.pop("parent_response_uid", None)
-        logger.info(
-            "VOICEAI_TRACE_META new_response seq=%s turn=%s response_uid=%s group_uid=%s request_id=%s origin=%s",
-            meta_info_copy.get("sequence_id"),
-            meta_info_copy.get("turn_id"),
-            meta_info_copy.get("response_uid"),
-            meta_info_copy.get("response_group_uid"),
-            meta_info_copy.get("request_id"),
-            meta_info_copy.get("origin"),
-        )
-
-        return meta_info_copy
+        Moved verbatim to `voiceai.modules.voice.session.turn.meta_info`
+        (spec 0033); this delegator keeps legacy callers (including mangled
+        `_TaskManager__get_updated_meta_info` dispatch) stable.
+        """
+        return _voice_meta_info.get_updated_meta_info(self, meta_info)
 
     def _spawn_followup_meta_info(self, meta_info):
-        followup_meta_info = self.__get_updated_meta_info(meta_info)
-        followup_meta_info["response_group_uid"] = meta_info.get("response_group_uid") or meta_info.get("response_uid")
-        followup_meta_info["parent_response_uid"] = meta_info.get("response_uid")
-        for key in (
-            "chunk_id",
-            "mark_id",
-            "is_first_chunk",
-            "is_first_chunk_of_entire_response",
-            "is_final_chunk_of_entire_response",
-            "end_of_synthesizer_stream",
-            "end_of_llm_stream",
-            "text_synthesized",
-        ):
-            followup_meta_info.pop(key, None)
-        logger.info(
-            "VOICEAI_TRACE_META followup seq=%s turn=%s response_uid=%s group_uid=%s parent_response_uid=%s request_id=%s parent_seq=%s parent_turn=%s",
-            followup_meta_info.get("sequence_id"),
-            followup_meta_info.get("turn_id"),
-            followup_meta_info.get("response_uid"),
-            followup_meta_info.get("response_group_uid"),
-            followup_meta_info.get("parent_response_uid"),
-            followup_meta_info.get("request_id"),
-            meta_info.get("sequence_id"),
-            meta_info.get("turn_id"),
-        )
-        return followup_meta_info
+        """Derive a followup response identity linked to its parent.
+
+        Moved verbatim to `voiceai.modules.voice.session.turn.meta_info`
+        (spec 0033); this delegator keeps legacy callers stable.
+        """
+        return _voice_meta_info.spawn_followup_meta_info(self, meta_info)
 
     def _extract_sequence_and_meta(self, message):
         return _voice_listener.extract_sequence_and_meta(self, message)
