@@ -67,9 +67,9 @@ MODULE: ModuleDef = ModuleDef(
     runbook_path="voiceai/modules/voice/RUNBOOK.md",
     # Interim ceiling (spec 0019): M2/M3/M5 split this module; only ratchets down.
     # Bumped per M5 move (verbatim; net positive until TaskManager regions
-    # retire the legacy side — specs 0032-0035); slices after this one must
+    # retire the legacy side — specs 0032-0036); slices after this one must
     # bring it back down as regions leave TaskManager.
-    max_lines=47000,
+    max_lines=47100,
 )
 
 __all__ = [

@@ -621,24 +621,11 @@ class TaskManager(BaseManager):
     async def __await_stream_sid(self, timeout=10.0):
         """Wait for the carrier's stream id and hand it to the output handler.
 
-        Nothing reaches the caller until the output handler holds this: it drops every
-        packet while stream_sid is None. Returns whether the id arrived in time.
+        Moved verbatim to `voiceai.modules.voice.session.welcome` (spec 0036);
+        this delegator keeps legacy callers (including mangled-name dispatch)
+        stable.
         """
-        # output_handler_set is not part of the wait: __setup_output_handlers runs in __init__,
-        # so it is already true by the time this task exists.
-        logger.info("Waiting for stream_sid before sending the welcome message")
-        try:
-            await asyncio.wait_for(self.tools["input"].stream_sid_ready.wait(), timeout)
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout reached while waiting for stream_sid after {timeout}s")
-            await self.__process_end_of_conversation()
-            return False
-
-        self.stream_sid_ts = time.time() * 1000
-        await self._report_stream_connect()
-        self.stream_sid = self.tools["input"].get_stream_sid()
-        await self.tools["output"].set_stream_sid(self.stream_sid)
-        return True
+        return await _voice_welcome.await_stream_sid(self, timeout=timeout)
 
     async def _s2s_await_stream_sid(self):
         """Claim the stream id for an s2s call, which has no welcome audio to play.

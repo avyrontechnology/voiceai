@@ -67,6 +67,7 @@ logger = get_logger(MODULE_NAME)
 # bodies' lookup site (R3), so tests and monkeypatches address them here.
 __all__ = [
     "WelcomeSession",
+    "await_stream_sid",
     "calculate_audio_duration",
     "convert_to_request_log",
     "create_ws_data_packet",
@@ -125,6 +126,7 @@ class WelcomeSession(Protocol):
 
     # --- legacy session methods the welcome flow calls back into ---
     async def _synthesize(self, packet: Any) -> Any: ...  # noqa: D102
+    async def _report_stream_connect(self) -> Any: ...  # noqa: D102
     async def _TaskManager__await_stream_sid(self, timeout: float = ...) -> Any: ...  # noqa: D102
     async def _TaskManager__synthesize_welcome_audio(self, text: Any) -> Any: ...  # noqa: D102
     async def _TaskManager__process_end_of_conversation(self, web_call_timeout: bool = ...) -> Any: ...  # noqa: D102
@@ -423,3 +425,35 @@ async def handle_init_event(self: WelcomeSession, init_meta_data: Any) -> None:
         self.first_message_task = asyncio.create_task(self._TaskManager__first_message())
     except Exception as e:
         logger.error(f"Error occurred in handling init event - {e}")
+
+
+async def await_stream_sid(session: WelcomeSession, timeout: float = 10.0) -> bool:
+    """Wait for the carrier's stream id and hand it to the output handler.
+
+    Verbatim move of `TaskManager.__await_stream_sid` (spec 0036).
+
+    Nothing reaches the caller until the output handler holds this: it drops every
+    packet while stream_sid is None. Returns whether the id arrived in time.
+
+    Args:
+        session: The live call session (duck-typed `WelcomeSession`).
+        timeout: Seconds to wait before ending the call instead of hanging.
+
+    Returns:
+        Whether the stream id arrived in time.
+    """
+    # output_handler_set is not part of the wait: __setup_output_handlers runs in __init__,
+    # so it is already true by the time this task exists.
+    logger.info("Waiting for stream_sid before sending the welcome message")
+    try:
+        await asyncio.wait_for(session.tools["input"].stream_sid_ready.wait(), timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout reached while waiting for stream_sid after {timeout}s")
+        await session._TaskManager__process_end_of_conversation()
+        return False
+
+    session.stream_sid_ts = time.time() * 1000
+    await session._report_stream_connect()
+    session.stream_sid = session.tools["input"].get_stream_sid()
+    await session.tools["output"].set_stream_sid(session.stream_sid)
+    return True
