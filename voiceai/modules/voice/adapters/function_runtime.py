@@ -38,6 +38,7 @@ from voiceai.constants import LANGUAGE_NAMES as _LEGACY_LANGUAGE_NAMES
 from voiceai.helpers.function_calling_helpers import computed_api_response as _legacy_computed_api_response
 from voiceai.helpers.function_calling_helpers import prepare_api_request as _legacy_prepare_api_request
 from voiceai.helpers.function_calling_helpers import trigger_api as _legacy_trigger_api
+from voiceai.helpers.function_calling_helpers import validate_outbound_url as _legacy_validate_outbound_url
 from voiceai.helpers.utils import convert_to_request_log as _legacy_convert_to_request_log
 from voiceai.helpers.utils import create_ws_data_packet as _legacy_create_ws_data_packet
 from voiceai.helpers.utils import format_messages as _legacy_format_messages
@@ -58,6 +59,7 @@ __all__ = [
     "prepare_api_request",
     "trigger_api",
     "update_prompt_with_context",
+    "validate_outbound_url",
 ]
 
 #: The internal end-call tool's name/key prefix, identical by identity.
@@ -103,4 +105,9 @@ trigger_api: Final[Callable[..., Any]] = _legacy_trigger_api  # why: legacy help
 #: Parses a tool-call HTTP response body into keys/values.
 computed_api_response: Final[Callable[..., Any]] = (
     _legacy_computed_api_response  # why: legacy helper takes free-form response bodies
+)
+
+#: Pre-flight SSRF guard for customer-controlled webhook URLs.
+validate_outbound_url: Final[Callable[..., Any]] = (
+    _legacy_validate_outbound_url  # why: legacy guard takes a raw URL string
 )

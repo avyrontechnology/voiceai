@@ -66,7 +66,9 @@ MODULE: ModuleDef = ModuleDef(
     slack_channel="#squad-voice",
     runbook_path="voiceai/modules/voice/RUNBOOK.md",
     # Interim ceiling (spec 0019): M2/M3/M5 split this module; only ratchets down.
-    max_lines=46000,
+    # Bumped for the spec-0027 webhooks move (verbatim, +175 net); M5 slices
+    # after this one must bring it back down as regions leave TaskManager.
+    max_lines=46500,
 )
 
 __all__ = [

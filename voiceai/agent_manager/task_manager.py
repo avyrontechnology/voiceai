@@ -53,8 +53,6 @@ from voiceai.constants import (
 from voiceai.helpers.function_calling_helpers import (
     trigger_api,
     computed_api_response,
-    prepare_api_request,
-    validate_outbound_url,
 )
 from voiceai.helpers.conversation_history import ConversationHistory
 from .base_manager import BaseManager
@@ -221,6 +219,7 @@ from voiceai.modules.voice.session.turn import output_loop as _voice_output_loop
 from voiceai.modules.voice.session import composition as _voice_composition
 from voiceai.modules.voice.session.turn import transcript_listener as _voice_listener
 from voiceai.modules.voice.session.turn import history_sync as _voice_history
+from voiceai.modules.voice.session import webhooks as _voice_webhooks
 
 # spec-0004 B9a: the process-wide handoff clip cache moved WITH its owning subsystem
 # (rule 1g; flagged at B3) into voiceai.modules.voice.session.language.handoff. These
@@ -308,17 +307,7 @@ class TaskManager(BaseManager):
 
     @staticmethod
     def _sanitize_api_call_headers(headers):
-        if not isinstance(headers, dict):
-            return headers
-
-        redacted_headers = {}
-        sensitive_keys = {"authorization", "proxy-authorization", "x-api-key", "api-key"}
-        for key, value in headers.items():
-            if str(key).lower() in sensitive_keys:
-                redacted_headers[key] = "<redacted>"
-            else:
-                redacted_headers[key] = value
-        return redacted_headers
+        return _voice_webhooks.sanitize_api_call_headers(headers)
 
     def _stamp_llm_latency_dict(
         self,
@@ -332,147 +321,34 @@ class TaskManager(BaseManager):
     ) -> None:
         """Stamp observability fields onto an LLM turn latency dict.
 
-        Called from both the function-call and regular-text branches of
-        __do_llm_generation so the two paths stay in sync automatically.
+        Moved verbatim to `voiceai.modules.voice.session.webhooks` (spec 0027);
+        this delegator keeps legacy callers stable.
         """
-        latency_dict["turn_id"] = meta_info.get("turn_id")
-        latency_dict["llm_start_ms"] = (
-            round(meta_info.get("llm_start_time", 0) * 1000 - self.conversation_start_init_ts, 2)
-            if meta_info.get("llm_start_time")
-            else None
+        return _voice_webhooks.stamp_llm_latency_dict(
+            self,
+            latency_dict,
+            meta_info,
+            actual_input_tokens,
+            actual_output_tokens,
+            actual_reasoning_tokens,
+            actual_cached_tokens,
+            response_text,
         )
-        _t = self.tools.get("transcriber")
-        if hasattr(_t, "transcribers") and hasattr(_t, "active_label"):
-            _t = _t.transcribers.get(_t.active_label, _t)
-        latency_dict["asr_turn_id"] = getattr(_t, "turn_counter", None)
-        latency_dict["model"] = self.llm_config.get("model") if self.llm_config else None
-        latency_dict["input_tokens"] = actual_input_tokens
-        latency_dict["output_tokens"] = actual_output_tokens
-        latency_dict["reasoning_tokens"] = actual_reasoning_tokens
-        latency_dict["cached_tokens"] = actual_cached_tokens
-        if response_text:
-            latency_dict["response_text"] = response_text.strip()
 
     @staticmethod
     def _extract_api_call_runtime_args(resp):
-        excluded_keys = {"model_response", "textual_response"}
-        return {key: copy.deepcopy(value) for key, value in resp.items() if key not in excluded_keys}
+        return _voice_webhooks.extract_api_call_runtime_args(resp)
 
     def _build_call_context(self):
-        """Common call-state fields included in the pre-call webhook payload.
-
-        These mirror the identifiers carried by the platform's customer-facing
-        call-state event webhooks (execution_id/agent_id/provider/numbers) — NOT the
-        transfer-specific or internal fields (call_sid/stream_sid are excluded there).
-        """
-        recipient_data = (self.context_data or {}).get("recipient_data") or {}
-        return {
-            "execution_id": self.run_id,
-            "agent_id": self.assistant_id,
-            "provider": self.tools["input"].io_provider,
-            "from_number": recipient_data.get("from_number"),
-            "to_number": recipient_data.get("to_number"),
-        }
+        return _voice_webhooks.build_call_context(self)
 
     def fire_pre_call_webhook(self, webhook_url, called_fun, resp, meta_info, webhook_param=None):
         """Fire-and-forget pre-call webhook before the tool's main request runs.
 
-        ``params`` = the ``pre_call_webhook_param`` template substituted with the LLM args
-        (else empty). Two delivery modes:
-          * If ``PRE_CALL_WEBHOOK_DISPATCH_URL`` is set, POST {execution_id, webhook_url,
-            params} to it; the backend enriches with the full execution record + params and
-            forwards to the customer's webhook_url.
-          * Otherwise (fallback), POST directly to the customer's webhook_url with
-            params + the common call-state fields.
-        Never blocks or fails the main tool call: background task, errors swallowed.
+        Moved verbatim to `voiceai.modules.voice.session.webhooks` (spec 0027);
+        this delegator keeps legacy callers stable.
         """
-        excluded = {"model_response", "textual_response", "tool_call_id", "resp"}
-        llm_args = {key: copy.deepcopy(value) for key, value in resp.items() if key not in excluded}
-
-        # Default missing %(name)s placeholders to "" so one absent field doesn't crash the
-        # whole substitution and wipe the payload.
-        params = {}
-        if webhook_param:
-            template_str = webhook_param if isinstance(webhook_param, str) else json.dumps(webhook_param)
-            substitution_args = {name: "" for name in re.findall(r"%\((\w+)\)s", template_str)}
-            substitution_args.update(llm_args)
-            try:
-                prepared = prepare_api_request(webhook_param, None, None, **substitution_args)
-                if prepared.get("api_params") is not None:
-                    params = prepared["api_params"]
-            except Exception as exc:
-                logger.warning(f"pre_call_webhook_param substitution failed: {exc}")
-
-        dispatch_url = os.getenv("PRE_CALL_WEBHOOK_DISPATCH_URL")
-        if dispatch_url:
-            # Backend dispatch: it fetches the execution record and merges params.
-            target_url = dispatch_url
-            payload = {"execution_id": self.run_id, "webhook_url": webhook_url, "params": params}
-        else:
-            # Fallback: post directly to the customer URL with params + common call-state fields.
-            target_url = webhook_url
-            payload = {**params, **self._build_call_context()}
-
-        # Record in function_tool_api_call_details so the pre-call webhook lands in the
-        # same per-call S3 record as the other API/tool calls.
-        api_call_detail = self._start_api_call_detail(
-            called_fun=f"{called_fun}:pre_call_webhook",
-            url=target_url,
-            method="POST",
-            param=None,
-            headers={"Content-Type": "application/json"},
-            meta_info=meta_info,
-            runtime_args={"tool_call_id": resp.get("tool_call_id", "")},
-            request_body=json.dumps(payload),
-            api_params=payload,
-        )
-
-        async def send():
-            try:
-                # ``target_url`` is user-controlled only on the direct fallback path;
-                # the dispatch URL is operator-set env config and may be internal.
-                if not dispatch_url:
-                    await validate_outbound_url(target_url)
-                convert_to_request_log(
-                    str(payload),
-                    meta_info,
-                    None,
-                    LogComponent.FUNCTION_CALL,
-                    direction=LogDirection.REQUEST,
-                    run_id=self.run_id,
-                )
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                    # allow_redirects=False: a redirect hop is not re-validated and would
-                    # reopen the SSRF path past the pre-flight check above.
-                    async with session.post(target_url, json=payload, allow_redirects=False) as response:
-                        response_text = await response.text()
-                        logger.info(f"pre_call_webhook response ({response.status}): {response_text}")
-                        convert_to_request_log(
-                            str(response_text),
-                            meta_info,
-                            None,
-                            LogComponent.FUNCTION_CALL,
-                            direction=LogDirection.RESPONSE,
-                            run_id=self.run_id,
-                        )
-                        self._finalize_api_call_detail(
-                            api_call_detail,
-                            response=response_text,
-                            status_code=response.status,
-                            content_type=response.headers.get("Content-Type"),
-                        )
-            except Exception as exc:
-                logger.warning(f"pre_call_webhook to {target_url} failed (ignored): {exc}")
-                self._finalize_api_call_detail(api_call_detail, error=exc)
-
-        # Keep a strong reference so the task isn't garbage-collected before the POST
-        # finishes (the loop only holds a weak ref); drop it once done. Lazy-init the set
-        # so this never depends on __init__ (robust to merge churn).
-        if not hasattr(self, "background_tasks"):
-            self.background_tasks = set()
-        task = asyncio.create_task(send())
-        self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+        return _voice_webhooks.fire_pre_call_webhook(self, webhook_url, called_fun, resp, meta_info, webhook_param)
 
     def _start_api_call_detail(
         self,
@@ -487,60 +363,24 @@ class TaskManager(BaseManager):
         request_body=None,
         api_params=None,
     ):
-        api_call_detail = {
-            "tool_name": called_fun,
-            "tool_call_id": runtime_args.get("tool_call_id", ""),
-            "url": url,
-            "method": method.upper() if isinstance(method, str) else method,
-            "request_template": copy.deepcopy(param),
-            "request_body": copy.deepcopy(request_body),
-            "request_params": copy.deepcopy(api_params if api_params is not None else runtime_args),
-            "runtime_args": copy.deepcopy(runtime_args),
-            "headers": self._sanitize_api_call_headers(copy.deepcopy(headers)),
-            "meta": {
-                "request_id": meta_info.get("request_id"),
-                "sequence_id": meta_info.get("sequence_id"),
-                "turn_id": meta_info.get("turn_id"),
-            },
-            "started_at": datetime.now().isoformat(),
-            "status": "pending",
-            "response_status_code": None,
-            "response_content_type": None,
-            "response_body": None,
-            "response_json": None,
-        }
-        self.function_tool_api_call_details.append(api_call_detail)
-        return api_call_detail
+        return _voice_webhooks.start_api_call_detail(
+            self,
+            called_fun=called_fun,
+            url=url,
+            method=method,
+            param=param,
+            headers=headers,
+            meta_info=meta_info,
+            runtime_args=runtime_args,
+            request_body=request_body,
+            api_params=api_params,
+        )
 
     @staticmethod
     def _finalize_api_call_detail(api_call_detail, response=None, status_code=None, content_type=None, error=None):
-        if api_call_detail is None:
-            return
-
-        completed_at = datetime.now()
-        api_call_detail["completed_at"] = completed_at.isoformat()
-        api_call_detail["latency_ms"] = None
-        started_at = api_call_detail.get("started_at")
-        if started_at:
-            try:
-                started_at_dt = datetime.fromisoformat(started_at)
-                api_call_detail["latency_ms"] = round((completed_at - started_at_dt).total_seconds() * 1000, 2)
-            except ValueError:
-                logger.warning(f"Could not compute api call latency from started_at={started_at}")
-        if error is not None:
-            api_call_detail["status"] = "error"
-            api_call_detail["error"] = str(error)
-        else:
-            api_call_detail["status"] = "completed"
-        api_call_detail["response_status_code"] = status_code
-        api_call_detail["response_content_type"] = content_type
-        api_call_detail["response_body"] = copy.deepcopy(response)
-        try:
-            api_call_detail["response_json"] = (
-                json.loads(response) if isinstance(response, str) else copy.deepcopy(response)
-            )
-        except (TypeError, json.JSONDecodeError):
-            api_call_detail["response_json"] = None
+        return _voice_webhooks.finalize_api_call_detail(
+            api_call_detail, response=response, status_code=status_code, content_type=content_type, error=error
+        )
 
     @property
     def history(self):
