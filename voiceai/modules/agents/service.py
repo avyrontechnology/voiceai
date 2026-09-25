@@ -333,11 +333,11 @@ class AgentService:
 
     @staticmethod
     def _ensure_writable_channels(channels: object) -> None:
-        """Reject non-voice channels until their runtime lands (spec 0028).
+        """Reject channels with no servable runtime (spec 0038, Phase C).
 
         The schema accepts the full channel vocabulary so stored rows stay
-        forward-compatible; the service allowlists what Phase A can actually
-        run. Chat rejects loudly (no dormant data) until Phase C.
+        forward-compatible; the service allowlists what a runtime serves
+        (voice + chat — anything else rejects loudly, no dormant data).
 
         Args:
             channels: The dumped `channels` value.
@@ -350,7 +350,7 @@ class AgentService:
         if rejected:
             raise AgentConfigInvalidError(
                 f"Channels not servable yet: {', '.join(rejected)} "
-                f"(valid: {', '.join(sorted(WRITABLE_CHANNELS))}; chat arrives in Phase C).",
+                f"(valid: {', '.join(sorted(WRITABLE_CHANNELS))}).",
                 details={"channels": rejected, "valid": sorted(WRITABLE_CHANNELS)},
             )
 

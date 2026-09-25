@@ -345,21 +345,44 @@ def _audit_llm_leaves(
             _audit_llm_leaves(problems, index, value, f"{where}[{position}]")
 
 
-def resolve_pipeline_for_task(task: Mapping[str, Any]) -> str:
-    """Resolve a task's active engine path (spec 0028, Phase A).
+def _audit_chat_task(
+    problems: list[str],
+    index: dict[tuple[str, str], list[Mapping[str, Any]]],
+    tools: Mapping[str, Any],
+    where: str,
+) -> None:
+    """Audit a chat-pipeline task: LLM-only with a required brain (spec 0038).
 
-    Explicit `pipeline` wins; absent infers legacy behavior (s2s block on a
-    conversation task → s2s, else asr) — byte-identical to the engine's
-    `__is_s2s` for selector-absent rows.
+    Chat tasks carry no transcriber/synthesizer/s2s — their presence is a
+    problem (media without a media path). The `llm_agent` subtree validates
+    exactly like any other task (provider AND model); its absence is itself
+    a problem (a chat task with no brain cannot run).
+    """
+    for block in ("transcriber", "synthesizer", "s2s"):
+        if isinstance(tools.get(block), Mapping):
+            problems.append(f"{where}: `{block}` block not allowed on a chat-pipeline task (LLM-only)")
+    llm_agent = tools.get("llm_agent")
+    if llm_agent is None:
+        problems.append(f"{where}: chat-pipeline task requires `llm_agent`")
+    else:
+        _audit_llm_leaves(problems, index, llm_agent, f"{where}.llm_agent")
+
+
+def resolve_pipeline_for_task(task: Mapping[str, Any]) -> str:
+    """Resolve a task's active engine path (spec 0028, Phase A; extended 0038).
+
+    Explicit `pipeline` wins (`asr`|`s2s`|`chat`); absent infers legacy
+    behavior (s2s block on a conversation task → s2s, else asr) —
+    byte-identical to the engine's `__is_s2s` for selector-absent rows.
 
     Args:
         task: One dumped task mapping.
 
     Returns:
-        `"asr"` or `"s2s"`.
+        `"asr"`, `"s2s"`, or `"chat"`.
     """
     pipeline = task.get("pipeline")
-    if pipeline in ("asr", "s2s"):
+    if pipeline in ("asr", "s2s", "chat"):
         return str(pipeline)
     tools = task.get("tools_config")
     if task.get("task_type", "conversation") == "conversation" and isinstance(tools, Mapping):
@@ -408,6 +431,9 @@ def audit_provider_config(
             problems.append(f"tasks[{position}]: tools_config must be a mapping")
             continue
         where = f"tasks[{position}]"
+        if resolve_pipeline_for_task(task) == "chat":
+            _audit_chat_task(problems, index, tools, where)
+            continue
         transcriber = tools.get("transcriber")
         if isinstance(transcriber, Mapping):
             _check_leaf(

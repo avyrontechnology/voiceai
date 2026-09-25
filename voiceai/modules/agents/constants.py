@@ -116,8 +116,10 @@ CHANNEL_CHAT: Final[str] = "chat"
 #: Engine path per conversation task.
 PIPELINE_ASR: Final[str] = "asr"
 PIPELINE_S2S: Final[str] = "s2s"
-#: Channels the service accepts on write (spec 0028: voice only in Phase A).
-WRITABLE_CHANNELS: Final[frozenset[str]] = frozenset({CHANNEL_VOICE})
+#: LLM-only text path for chat-channel tasks (spec 0038, Phase C).
+PIPELINE_CHAT: Final[str] = "chat"
+#: Channels the service accepts on write (spec 0038, Phase C: voice + chat).
+WRITABLE_CHANNELS: Final[frozenset[str]] = frozenset({CHANNEL_VOICE, CHANNEL_CHAT})
 #: Engine-dispatch kinds the conversation-brain factory builds (spec 0015): the
 #: task-level `llm_agent.agent_type` values `__get_agent_object` switches on.
 #: `multiagent`/`llm_agent_graph` flow through separate builders, never the factory.

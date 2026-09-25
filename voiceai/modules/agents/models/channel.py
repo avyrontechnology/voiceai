@@ -13,6 +13,7 @@ from voiceai.modules.agents.constants import (
     CHANNEL_CHAT,
     CHANNEL_VOICE,
     PIPELINE_ASR,
+    PIPELINE_CHAT,
     PIPELINE_S2S,
     WRITABLE_CHANNELS,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "CHANNEL_CHAT",
     "CHANNEL_VOICE",
     "PIPELINE_ASR",
+    "PIPELINE_CHAT",
     "PIPELINE_S2S",
     "WRITABLE_CHANNELS",
     "Channel",
@@ -32,4 +34,4 @@ __all__ = [
 Channel = Literal["voice", "chat"]
 
 #: Engine path per conversation task. `None` on a task infers legacy behavior.
-Pipeline = Literal["asr", "s2s"]
+Pipeline = Literal["asr", "s2s", "chat"]
