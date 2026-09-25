@@ -107,8 +107,8 @@ __all__ = [
     "send_preprocessed_audio",
     "static_node_audio_key",
     "synthesize",
+    "wait_for_current_message",
     "wav_bytes_to_pcm",
-    "yield_chunks_from_memory",
 ]
 
 
@@ -158,6 +158,8 @@ class OutputSession(Protocol):
     # --- per-sequence playout ledgers ---
     buffered_output_queue: Any  # why: legacy queue crosses the seam
     _turn_audio_flushed: Any  # why: legacy threading event crosses the seam
+    mark_event_meta_data: Any  # why: legacy mark-event ledger crosses the seam
+    hangup_mark_event_timeout: Any  # why: legacy grace seconds cross the seam
     _sent_audio_sequences: set  # why: legacy id set crosses the seam
     _blocked_sequences: set  # why: legacy id set crosses the seam
     blocked_audio_events: list
@@ -627,3 +629,74 @@ async def inject_and_run_llm(self: OutputSession, injected_message: str) -> None
     except asyncio.CancelledError:
         logger.info("Silence repeat generation cancelled by interruption")
         return
+
+
+async def wait_for_current_message(session: OutputSession) -> None:
+    """Drain synth-pipeline playout by watching mark events (spec 0037).
+
+    Verbatim move of `TaskManager.wait_for_current_message`: flush wait,
+    empty drain, pre-mark skip, plivo two-item quirk, final-chunk break, and
+    the fixed-deadline wait (entry_time-anchored so the deadline cannot
+    recede when Plivo stops ACKing marks).
+
+    Args:
+        session: The live call session (duck-typed `OutputSession`).
+    """
+    try:
+        await asyncio.wait_for(session._turn_audio_flushed.wait(), timeout=3.0)
+    except asyncio.TimeoutError:
+        logger.warning("wait_for_current_message: synth pipeline flush timed out after 3s")
+
+    entry_time = time.time()
+    while not session.conversation_ended:
+        mark_events = session.mark_event_meta_data.mark_event_meta_data
+        mark_items_list = [{"mark_id": k, "mark_data": v} for k, v in mark_events.items()]
+        logger.info(f"current_list: {mark_items_list}")
+
+        if not mark_items_list:
+            break
+
+        first_item = mark_items_list[0]["mark_data"]
+        if len(mark_items_list) == 1 and first_item.get("type") == "pre_mark_message":
+            break
+
+        # plivo mark_event bug
+        if len(mark_items_list) == 2:
+            second_item = mark_items_list[1]["mark_data"]
+            if (
+                first_item.get("type") == "agent_hangup"
+                and first_item.get("text_synthesized") == ""
+                and second_item.get("type") == "pre_mark_message"
+            ):
+                break
+
+        if first_item.get("text_synthesized") and first_item.get("is_final_chunk") is True:
+            break
+
+        # Use entry_time (not time.time()) so the deadline is a fixed point in the
+        # future rather than one that recedes with each iteration. Without this,
+        # `remaining = sum(durations) + hangup_mark_event_timeout` never reaches 0
+        # when Plivo stops ACKing marks, causing an indefinite spin.
+        remaining_durations = [
+            v.get("duration", 0)
+            for v in mark_events.values()
+            if v.get("type") != "pre_mark_message" and v.get("sent_ts")
+        ]
+        expected_play_end = (entry_time + sum(remaining_durations)) if remaining_durations else entry_time
+        deadline = expected_play_end + session.hangup_mark_event_timeout
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            logger.warning(
+                f"wait_for_current_message timed out: {len(mark_events)} marks unflushed, "
+                f"expected_play_end was {expected_play_end - entry_time:.1f}s after entry, "
+                f"grace {session.hangup_mark_event_timeout}s exceeded"
+            )
+            break
+
+        session.mark_event_meta_data.mark_changed.clear()
+        try:
+            await asyncio.wait_for(session.mark_event_meta_data.mark_changed.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            pass
+    return

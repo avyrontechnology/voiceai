@@ -1096,79 +1096,14 @@ class TaskManager(BaseManager):
         return await _voice_output_loop.agent_hangup_observer(self, is_agent_hangup)
 
     async def wait_for_current_message(self):
-        try:
-            await asyncio.wait_for(self._turn_audio_flushed.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.warning("wait_for_current_message: synth pipeline flush timed out after 3s")
+        """Drain synth-pipeline playout by watching mark events.
 
-        entry_time = time.time()
-        while not self.conversation_ended:
-            mark_events = self.mark_event_meta_data.mark_event_meta_data
-            mark_items_list = [{"mark_id": k, "mark_data": v} for k, v in mark_events.items()]
-            logger.info(f"current_list: {mark_items_list}")
+        Moved verbatim to `voiceai.modules.voice.session.turn.output_loop`
+        (spec 0037); this delegator keeps legacy callers (including instance
+        rebinding in teardown tests) stable.
+        """
+        return await _voice_output_loop.wait_for_current_message(self)
 
-            if not mark_items_list:
-                break
-
-            first_item = mark_items_list[0]["mark_data"]
-            if len(mark_items_list) == 1 and first_item.get("type") == "pre_mark_message":
-                break
-
-            # plivo mark_event bug
-            if len(mark_items_list) == 2:
-                second_item = mark_items_list[1]["mark_data"]
-                if (
-                    first_item.get("type") == "agent_hangup"
-                    and first_item.get("text_synthesized") == ""
-                    and second_item.get("type") == "pre_mark_message"
-                ):
-                    break
-
-            if first_item.get("text_synthesized") and first_item.get("is_final_chunk") is True:
-                break
-
-            # Use entry_time (not time.time()) so the deadline is a fixed point in the
-            # future rather than one that recedes with each iteration. Without this,
-            # `remaining = sum(durations) + hangup_mark_event_timeout` never reaches 0
-            # when Plivo stops ACKing marks, causing an indefinite spin.
-            remaining_durations = [
-                v.get("duration", 0)
-                for v in mark_events.values()
-                if v.get("type") != "pre_mark_message" and v.get("sent_ts")
-            ]
-            expected_play_end = (entry_time + sum(remaining_durations)) if remaining_durations else entry_time
-            deadline = expected_play_end + self.hangup_mark_event_timeout
-
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                logger.warning(
-                    f"wait_for_current_message timed out: {len(mark_events)} marks unflushed, "
-                    f"expected_play_end was {expected_play_end - entry_time:.1f}s after entry, "
-                    f"grace {self.hangup_mark_event_timeout}s exceeded"
-                )
-                break
-
-            self.mark_event_meta_data.mark_changed.clear()
-            try:
-                await asyncio.wait_for(self.mark_event_meta_data.mark_changed.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
-                pass
-        return
-
-    # spec-0004 B8: the DTMF consumer body lives VERBATIM in
-    # voiceai.modules.voice.session.dtmf and the proactive-event bodies
-    # (_listen_events / _wait_for_safe_point / _proactive_generate_for_event /
-    # _generate_proactive) in voiceai.modules.voice.session.events. Each same-named
-    # thin delegator keeps this class the resolution site (instance-attr AsyncMock
-    # overrides, __new__ harnesses and internal self-dispatch) and injects the
-    # session (self, the DtmfSession / EventSession facades) on every call (§3.1
-    # bridge 3). The tm:697 single-consumer guard on the dtmf queue stays at its
-    # __init__ call site above (`dtmf_enabled and not self.__is_s2s()`). The EVENTS
-    # module is now the lookup site for the event bodies' globals
-    # (create_ws_data_packet, get_md5_hash, select_message_by_language,
-    # update_prompt_with_context): monkeypatch string paths for those target
-    # voiceai.modules.voice.session.events.<name>. A delegator is deleted only in
-    # the commit that ports its pinning tests (spec 0004 iron rule).
     async def inject_digits_to_conversation(self) -> None:
         return await _voice_dtmf.inject_digits_to_conversation(self)
 
