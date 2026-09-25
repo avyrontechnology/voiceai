@@ -191,3 +191,30 @@ async def test_fetch_partner_dids_transport_is_dependency_error(monkeypatch) -> 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     with pytest.raises(DependencyUnavailableError):
         await bridge.fetch_partner_dids(talko_api_key="k", talko_api_base_url="https://talko.test/v1")
+
+
+async def test_bridge_passes_the_callers_tenant_to_progression(monkeypatch) -> None:
+    """The queued progression carries an explicit tenant (spec 0026, M4)."""
+    from voiceai.common.tenancy import TenantContext, bind_tenant
+    from voiceai.modules.voice.adapters.outbound import OutboundDialBridge
+
+    seen: dict[str, object] = {}
+
+    class _Registry:
+        def start(self, coro, **kwargs):
+            seen.update(kwargs)
+            coro.close()
+            return None
+
+    async def fake_progress(store: Any, execution_id: str, delay_scale: float) -> None:
+        raise AssertionError("must not run")
+
+    monkeypatch.setattr(bridge, "_legacy_progress_simulated_call", fake_progress)
+    dial_bridge = OutboundDialBridge(tasks=_Registry())  # type: ignore[arg-type]
+    with bind_tenant(TenantContext(tenant_id="acme", request_id="r-1")):
+        outcome = await dial_bridge.start_simulated_call_background(agent_id="a", to_number="919812345678")
+
+    assert outcome.status == "queued"
+    tenant = seen.get("tenant")
+    assert isinstance(tenant, TenantContext)
+    assert tenant.tenant_id == "acme"

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from voiceai.common.tenancy import TenantContext, current_tenant
 from voiceai.core.resilience import TaskRegistry
 from voiceai.modules.voice.ports.outbound import DialOutcome, PartnerPreview
 from voiceai.platform.models import new_id as _legacy_new_id
@@ -140,6 +141,7 @@ async def start_simulated_call_background(
     variables: dict[str, Any] | None = None,
     delay_scale: float = 0.5,
     tasks: TaskRegistry | None = None,
+    tenant: TenantContext | None = None,
 ) -> DialOutcome:
     """Queue one simulated call and progress it in the background.
 
@@ -154,6 +156,8 @@ async def start_simulated_call_background(
         delay_scale: Pacing scale for the background progression.
         tasks: Registry owning the progression task; the module-global one when
             `None` (quickstart/legacy callers outside container wiring).
+        tenant: Explicit tenant for the progression task (spec 0026, M4);
+            inherited ambient when `None`.
 
     Returns:
         The queued-call outcome (the progression updates the legacy row, and
@@ -173,6 +177,7 @@ async def start_simulated_call_background(
     (tasks or _background_tasks).start(
         _legacy_progress_simulated_call(store, execution.execution_id, delay_scale),
         name=f"simulated-call-{execution.execution_id}",
+        tenant=tenant,
     )
     return DialOutcome(
         execution_id=execution.execution_id,
@@ -255,7 +260,12 @@ class OutboundDialBridge:
         variables: dict[str, Any] | None = None,
         delay_scale: float = 0.5,
     ) -> DialOutcome:
-        """Queue one simulated call; progression continues in the background."""
+        """Queue one simulated call; progression continues in the background.
+
+        The caller's tenant binds explicitly (spec 0026, M4) — fail-loud
+        outside a binding, since background tenant work without one is a
+        wiring bug.
+        """
         return await start_simulated_call_background(
             agent_id=agent_id,
             to_number=to_number,
@@ -263,6 +273,7 @@ class OutboundDialBridge:
             variables=variables,
             delay_scale=delay_scale,
             tasks=self._tasks,
+            tenant=current_tenant(),
         )
 
 

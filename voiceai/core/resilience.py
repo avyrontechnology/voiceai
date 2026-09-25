@@ -20,6 +20,7 @@ from collections.abc import Coroutine
 from typing import Any, Final
 
 from voiceai.common.logger import get_logger
+from voiceai.common.tenancy import TenantContext, bind_tenant
 
 __all__ = ["TaskRegistry"]
 
@@ -42,21 +43,39 @@ class TaskRegistry:
         """Return the number of currently retained (unfinished) tasks."""
         return len(self._tasks)
 
-    def start(self, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> asyncio.Task[Any]:
+    def start(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        *,
+        name: str | None = None,
+        tenant: TenantContext | None = None,
+    ) -> asyncio.Task[Any]:
         """Schedule `coro` as a retained, named background task.
 
         Args:
             coro: The coroutine to run to completion (or cancellation).
             name: Log-visible task name; defaults to the coroutine's qualified name.
+            tenant: Explicit tenant bound for the task's lifetime (spec 0026,
+                M4) — for work spawned outside any request binding (retries,
+                workers, lifespan). `None` inherits the ambient context as
+                today (engine pumps and call-scoped work need nothing more).
 
         Returns:
             The created task, retained until it finishes.
         """
+        if tenant is not None:
+            coro = self._bind_tenant(coro, tenant)
         task: asyncio.Task[Any] = asyncio.create_task(coro, name=name or getattr(coro, "__qualname__", "task"))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         task.add_done_callback(self._report_failure)
         return task
+
+    @staticmethod
+    async def _bind_tenant(coro: Coroutine[Any, Any, Any], tenant: TenantContext) -> None:
+        """Run `coro` with `tenant` ambient (explicit wins over ambient)."""
+        with bind_tenant(tenant):
+            await coro
 
     @staticmethod
     def _report_failure(task: asyncio.Task[Any]) -> None:

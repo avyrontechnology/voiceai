@@ -46,6 +46,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/catalog/tests/test_service.py",  # spec 0022: stamp pins
         "voiceai/modules/voice/controller.py",  # spec 0021, M2: channel tenant binding
         "voiceai/modules/voice/tests/test_controller.py",  # spec 0021, M2: gate pins
+        "voiceai/modules/voice/tests/test_outbound_bridge.py",  # spec 0026: tenant pass-through pin
         "voiceai/modules/voice/tests/test_place_call.py",  # spec 0021, M2: dial ownership pins
         "voiceai/modules/voices/models.py",  # spec 0025: tenant-scoped voice rows
         "voiceai/modules/voices/tests/test_service.py",  # spec 0025: isolation pins

@@ -1,4 +1,4 @@
-"""TaskRegistry: retention, failure logging, and shutdown cancellation (T4)."""
+"""TaskRegistry: retention, failure logging, shutdown cancellation, tenancy (T4 + spec 0026)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 
 import pytest
 
+from voiceai.common.tenancy import TenantContext, bind_tenant, current_tenant, reset_tenant
 from voiceai.core.resilience import TaskRegistry
 
 
@@ -72,3 +73,37 @@ async def test_aclose_is_safe_empty_and_twice() -> None:
     await registry.aclose()
     await registry.aclose()
     assert len(registry) == 0
+
+
+def _context(tenant_id: str) -> TenantContext:
+    """A minimal ambient context for one tenant."""
+    return TenantContext(tenant_id=tenant_id, request_id="test")
+
+
+async def test_explicit_tenant_binds_for_the_task_lifetime() -> None:
+    """Work spawned outside requests runs under its explicit tenant (spec 0026)."""
+    reset_tenant()
+    registry = TaskRegistry()
+    seen: list[str] = []
+
+    async def _work() -> None:
+        seen.append(current_tenant().tenant_id)
+
+    await registry.start(_work(), tenant=_context("acme"))
+    assert seen == ["acme"]
+    await registry.aclose()
+
+
+async def test_omitted_tenant_inherits_ambient() -> None:
+    """Call-scoped spawns keep today's inherit-ambient behavior (spec 0026)."""
+    registry = TaskRegistry()
+    seen: list[str] = []
+
+    async def _work() -> None:
+        seen.append(current_tenant().tenant_id)
+
+    with bind_tenant(_context("globex")):
+        await registry.start(_work())
+    assert seen == ["globex"]
+    await registry.aclose()
+    reset_tenant()
