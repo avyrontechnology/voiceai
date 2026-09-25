@@ -95,4 +95,5 @@ hook (catalog precedent: version-aware `ensure_seeded`).
   `pre_call_webhook_ref` on the params entry (not a top-level `webhook_refs[]`
   — it sits where the runtime reads the URL); `list_tools` valid-values feed
   the 400s; deprecated rows resolve (pickers filter in Slice 3).
-- [ ] Slice 3: UI sync spec.
+- [x] Slice 3: UI sync in spec 0030 (registry hooks, picker bindings,
+  legacy retirement plan).
