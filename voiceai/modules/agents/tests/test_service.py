@@ -128,6 +128,7 @@ def build_service(
     llm: FakeLlm | None = None,
     guard: GuardSpy | None = None,
     catalog: Any | None = None,
+    tools: Any | None = None,
 ) -> AgentService:
     """Assemble a service around fakes, defaulting each collaborator."""
     return AgentService(
@@ -138,6 +139,7 @@ def build_service(
         extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,
         logger=logging.getLogger("otobaai.test.agents"),
         catalog=catalog,
+        tools=tools,
     )
 
 

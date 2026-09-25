@@ -14,6 +14,11 @@ class APIParams(BaseModel):
     pre_call_message: Optional[Union[str, dict]] = None
     pre_call_webhook_url: Optional[str] = None
     pre_call_webhook_param: Optional[Union[str, dict]] = None
+    # Shared webhook reference (spec 0029 slice 2): a `webhook:*` tool id
+    # resolved at agent write time into the two fields above. Survives
+    # validation so the agents service can stamp it; the engine reads only
+    # the stamped URL/params.
+    pre_call_webhook_ref: Optional[str] = None
     # Graph-agent tool scope; None == GLOBAL. NODE limits visibility to ``nodes``.
     scope: Optional[ToolScope] = None
     nodes: Optional[List[str]] = None

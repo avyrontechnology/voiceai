@@ -183,7 +183,7 @@ def _build_agent_prompt_store(db_client: Any) -> Any:
     return MongoAgentPrompts(_scoped_collection(db_client, Collections.AGENT_PROMPTS, AgentPrompts))
 
 
-def _build_agent_service(definitions: Any, prompt_store: Any, catalog: Any) -> Any:
+def _build_agent_service(definitions: Any, prompt_store: Any, catalog: Any, tools: Any) -> Any:
     from voiceai.modules.agents.adapters.llm import (
         EXTRACTION_SYSTEM_PROMPT,
         ensure_extraction_model_configured,
@@ -210,6 +210,7 @@ def _build_agent_service(definitions: Any, prompt_store: Any, catalog: Any) -> A
         extraction_system_prompt=EXTRACTION_SYSTEM_PROMPT,
         logger=get_logger("agents"),
         catalog=catalog,
+        tools=tools,
     )
 
 
@@ -365,6 +366,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Catalog Module: system-tenant rows, no ambient read — Singleton is safe.
     catalog_service = providers.Singleton(_build_catalog_service, db_client)
 
+    # Tools Module providers live here (above agents): the agent service
+    # resolves shared tool refs through the tools service.
+    tools_service = providers.Factory(_build_tools_service, db_client)
+
     # Agents Module: per-request collection views (spec 0020, M1b). These must
     # stay Factory, never Singleton: a shared instance would pin the first
     # request's tenant on every later request. The driver handles underneath
@@ -377,6 +382,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         definitions=agent_definitions,
         prompt_store=agent_session_store,
         catalog=catalog_service,
+        tools=tools_service,
     )
 
     # Voice Module
@@ -395,11 +401,6 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Voices Module: per-request tenant view (spec 0025). Factory, never
     # Singleton — same pinning hazard as the other scoped views.
     voices_service = providers.Factory(_build_voices_service, db_client, agent_definitions, catalog_service)
-
-    # Tools Module: two views over one collection (spec 0029) — system view
-    # for internal rows (no ambient read, Singleton-safe), scoped view for
-    # tenant CRUD (Factory, per-request binding).
-    tools_service = providers.Factory(_build_tools_service, db_client)
 
 
 async def aclose_container(container: VoiceAIContainer) -> None:

@@ -27,8 +27,9 @@ MODULE: ModuleDef = ModuleDef(
     owner_squad="squad-agents",
     slack_channel="#squad-agents",
     runbook_path="voiceai/modules/agents/RUNBOOK.md",
-    # Bumped for spec-0028 Phase A (channels, pipeline, PATCH); ratchets down after.
-    max_lines=14100,
+    # Bumped for spec-0028 Phase A (channels, pipeline, PATCH) and spec-0029
+    # slice 2 (tool refs + SSRF gate + tests); ratchets down after.
+    max_lines=14700,
 )
 
 __all__ = [

@@ -7,6 +7,7 @@ raw dicts (LLM leaves at any depth, S2S models, language hints).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -221,3 +222,109 @@ def test_walk_skips_voice_check_without_curated_voices() -> None:
     )
 
     assert audit_provider_config(config, _rows(), is_valid_language) == []
+
+
+class _Tools:
+    """ToolsService double over hand-made rows."""
+
+    def __init__(self) -> None:
+        self._rows = {
+            "webhook:notify": SimpleNamespace(
+                name="notify",
+                description="Notify.",
+                parameters={},
+                url="https://hooks.test/notify",
+                method="POST",
+                params_template={"event": "call"},
+            ),
+            "function:book": SimpleNamespace(
+                name="book",
+                description="Book.",
+                parameters={},
+                url="https://api.test/book",
+                method="POST",
+                params_template={},
+            ),
+        }
+
+    async def get_tool(self, tool_id: str):
+        from voiceai.modules.tools.errors import ToolNotFoundError
+
+        try:
+            return self._rows[tool_id]
+        except KeyError:
+            raise ToolNotFoundError(f"Tool {tool_id!r} not found.", details={"tool_id": tool_id})
+
+    async def list_tools(self, *, kind: str | None = None):
+        return [SimpleNamespace(tool_id=tool_id) for tool_id in self._rows]
+
+
+def _agent_with_refs() -> dict:
+    """A dumped config attaching one shared tool + one webhook ref."""
+    return {
+        "tasks": [
+            {
+                "task_type": "conversation",
+                "tools_config": {
+                    "transcriber": {"provider": "deepgram", "model": "nova-3"},
+                    "api_tools": {
+                        "tool_refs": ["function:book"],
+                        "tools_params": {
+                            "book": {"pre_call_webhook_ref": "webhook:notify"},
+                        },
+                    },
+                },
+            }
+        ]
+    }
+
+
+async def test_tool_refs_materialize_and_webhook_refs_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared rows merge into embedded config; webhook refs stamp URL + params."""
+    import voiceai.modules.agents.service as agents_service
+
+    async def _safe(url: str) -> bool:
+        return True
+
+    monkeypatch.setattr(agents_service, "_is_url_safe", _safe)
+    store = FakeDefinitionStore()
+    service = build_service(definitions=store, catalog=_Catalog(), tools=_Tools())
+    model = agent_model(
+        {
+            "tools_config": {
+                "transcriber": {"provider": "deepgram", "model": "nova-3"},
+                "api_tools": {
+                    "tool_refs": ["function:book"],
+                    "tools_params": {"book": {"pre_call_webhook_ref": "webhook:notify"}},
+                },
+            },
+            "toolchain": {"execution": "sequential", "pipelines": []},
+        }
+    )
+
+    result = await service.create_agent(model, None)
+    stored = await store.get_agent(result["agent_id"])
+    assert stored is not None
+    api_tools = stored["tasks"][0]["tools_config"]["api_tools"]
+    assert any(
+        item.get("function", {}).get("name") == "book" for item in api_tools["tools"]
+    )
+    assert api_tools["tools_params"]["book"]["pre_call_webhook_url"] == "https://hooks.test/notify"
+    assert api_tools["tools_params"]["book"]["pre_call_webhook_param"] == {"event": "call"}
+
+
+async def test_unknown_refs_fail_with_paths() -> None:
+    """Missing or foreign refs fail as 400 naming the ref (no oracle)."""
+    service = build_service(definitions=FakeDefinitionStore(), catalog=_Catalog(), tools=_Tools())
+    model = agent_model(
+        {
+            "tools_config": {
+                "transcriber": {"provider": "deepgram", "model": "nova-3"},
+                "api_tools": {"tool_refs": ["function:ghost"], "tools_params": {}},
+            },
+            "toolchain": {"execution": "sequential", "pipelines": []},
+        }
+    )
+
+    with pytest.raises(AgentConfigInvalidError, match="function:ghost"):
+        await service.create_agent(model, None)

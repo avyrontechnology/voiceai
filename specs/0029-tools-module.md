@@ -34,12 +34,16 @@ Agents attach by id; sharing = attaching the same id across agents.
 
 **Slice 2 — webhook kind + agent attach validation.**
 - `webhook` tool kind: `url` + `auth_ref` + `params_template` + timeout;
-  per-agent overrides at attach time (stored on the ref, not the row).
-- Agent attach: `tool_refs[]` / `webhook_refs[]` on task (or agent —
-  task-level, tools bind per task like `tools_config`); write-time
-  resolution (unknown id → 400 with valid values, catalog-style);
-  pre-call webhook path references shared entities by id (engine behavior
-  unchanged — resolution at write/attach, not per-call).
+  per-agent overrides at attach time (stored on the agent record's embedded
+  entries, not the shared row — bare-string refs carry no overrides).
+- Agent attach (task-level, tools bind per task like `tools_config`):
+  `tool_refs[]` on `api_tools`, plus `pre_call_webhook_ref` on
+  `tools_params` entries (the key sits where the runtime reads the URL —
+  there is no top-level `webhook_refs[]`); write-time resolution (unknown
+  id → 400 with valid values, catalog-style); ref-attached endpoints pass
+  the SSRF pre-flight fail-closed (identifiers only); pre-call webhook path
+  references shared entities by id (engine behavior unchanged — resolution
+  at write/attach, not per-call).
 
 **Slice 3 — UI sync spec.**
 - Builder tool-picker bindings (separate spec file, UI track).
@@ -79,5 +83,16 @@ hook (catalog precedent: version-aware `ensure_seeded`).
 ## Burn-down
 
 - [x] Slice 1: tools module + internal seed (4 rows) + CRUD + dual-view service.
-- [ ] Slice 2: webhook kind + agent attach validation.
+- [x] Slice 2: webhook kind + agent attach validation — `tool_refs[]`
+  materialize into `tools`/`tools_params` at write (embedded wins ties),
+  `pre_call_webhook_ref` in `tools_params` entries stamps URL + params
+  template, unknown/foreign ids 400 with visible ids (no oracle), ref-attached
+  endpoints pass the SSRF pre-flight fail-closed (identifiers only;
+  pre-existing embedded URLs grandfathered), pure-internal rows stamp no null
+  URL, unwired compositions warn-and-skip. Wording alignments: per-agent
+  overrides live in embedded/`tools_params` entries (the shared row is never
+  touched — bare-string refs carry no overrides); the webhook key is
+  `pre_call_webhook_ref` on the params entry (not a top-level `webhook_refs[]`
+  — it sits where the runtime reads the URL); `list_tools` valid-values feed
+  the 400s; deprecated rows resolve (pickers filter in Slice 3).
 - [ ] Slice 3: UI sync spec.

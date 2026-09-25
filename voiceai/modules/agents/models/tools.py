@@ -45,6 +45,11 @@ class ToolModel(BaseModel):
     tools: str | list[ToolDescription | ToolDescriptionLegacy] | None = Field(
         default=None, description="List of tool definitions or a string reference to tools."
     )
+    tool_refs: list[str] = Field(
+        default_factory=list,
+        description="Shared tool ids attached from the tools registry (spec 0029 slice 2); "
+        "materialized into `tools`/`tools_params` at write, embedded entries winning ties.",
+    )
     tools_params: dict[str, APIParams] = Field(
         ..., description="Configuration mapping for API endpoints these tools might call."
     )

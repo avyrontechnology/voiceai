@@ -46,6 +46,7 @@ class ToolDefinition(BaseFields):
     method: str = "POST"
     auth_ref: str | None = None
     timeout_s: int = 10
+    params_template: dict = Field(default_factory=dict)  # why: webhook params templates are free-form JSON
     deprecated: bool = False
     requires_tenant_key: bool = False
     tools_version: int = 1
