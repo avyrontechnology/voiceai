@@ -11,7 +11,7 @@ from typing import TypeVar
 from voiceai.modules.agents.constants import AGENT_ID_KEY, AGENT_NOT_FOUND_MESSAGE
 from voiceai.modules.agents.errors import AgentConfigInvalidError, AgentNotFoundError
 
-__all__ = ["ensure_agent_exists", "ensure_valid_agent_payload"]
+__all__ = ["ensure_agent_exists", "ensure_patchable", "ensure_valid_agent_payload"]
 
 T = TypeVar("T")
 
@@ -52,3 +52,19 @@ def ensure_valid_agent_payload(condition: bool, message: str) -> None:
     """
     if not condition:
         raise AgentConfigInvalidError(message)
+
+
+def ensure_patchable(body: dict[str, object]) -> None:
+    """Reject empty or self-contradictory PATCH bodies (spec 0028 slice 2).
+
+    Args:
+        body: The patch body dump (`exclude_unset` — absent keys invisible).
+
+    Raises:
+        AgentConfigInvalidError: When the body carries nothing to apply, or
+            addresses tasks both wholesale and per-index.
+    """
+    if not body:
+        raise AgentConfigInvalidError("Empty patch: nothing to apply.")
+    if "tasks" in body and "tasks_patch" in body:
+        raise AgentConfigInvalidError("Supply `tasks` or `tasks_patch`, not both.")

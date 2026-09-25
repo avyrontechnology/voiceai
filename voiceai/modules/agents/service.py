@@ -15,10 +15,12 @@ client (defense in depth — production always wires the Mongo store since T3).
 from __future__ import annotations
 
 from asyncio import Semaphore, gather
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from logging import Logger
 from typing import Any, Final
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from voiceai.common.errors import DependencyUnavailableError
 from voiceai.modules.agents.constants import (
@@ -38,10 +40,11 @@ from voiceai.modules.agents.constants import (
     WRITABLE_CHANNELS,
 )
 from voiceai.modules.agents.errors import AgentConfigInvalidError, AgentNotFoundError, PromptStoreError
-from voiceai.modules.agents.exceptions import ensure_agent_exists
+from voiceai.modules.agents.exceptions import ensure_agent_exists, ensure_patchable
 from voiceai.modules.agents.models import AgentModel
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
-from voiceai.modules.agents.static_methods import audit_provider_config
+from voiceai.modules.agents.schemas import AgentsContract
+from voiceai.modules.agents.static_methods import apply_agent_patch, audit_provider_config
 
 __all__ = ["AgentService"]
 
@@ -53,6 +56,27 @@ _TASK_TYPE_KEY: Final[str] = "task_type"
 _TOOLS_CONFIG_KEY: Final[str] = "tools_config"
 _LLM_AGENT_KEY: Final[str] = "llm_agent"
 _EXTRACTION_DETAILS_KEY: Final[str] = "extraction_details"
+
+
+def _extraction_details_of(task: Mapping[str, Any] | None) -> str | None:
+    """Read one task's extraction details defensively (spec 0028 slice 2).
+
+    Args:
+        task: A dumped task mapping, or anything else.
+
+    Returns:
+        The details string, or `None` when the path is absent or misshapen.
+    """
+    if not isinstance(task, Mapping):
+        return None
+    tools = task.get(_TOOLS_CONFIG_KEY)
+    if not isinstance(tools, Mapping):
+        return None
+    agent = tools.get(_LLM_AGENT_KEY)
+    if not isinstance(agent, Mapping):
+        return None
+    details = agent.get(_EXTRACTION_DETAILS_KEY)
+    return details if isinstance(details, str) else None
 _EXTRACTION_JSON_KEY: Final[str] = "extraction_json"
 _MISSING_EXTRACTION_DETAILS_DEFAULT: Final[str] = ""
 
@@ -374,6 +398,81 @@ class AgentService:
             self._prompt_store.save_prompts(agent_id, prompts),
         )
         return {AGENT_ID_KEY: agent_id, STATE_KEY: AGENT_STATE_UPDATED}
+
+    async def patch_agent(self, agent_id: str, patch: AgentsContract.PatchAgentRequest) -> dict[str, Any]:
+        """Merge a partial update into an agent (spec 0028 slice 2).
+
+        Load (tenant-scoped) → merge (pure) → full strict validate → full
+        catalog walk → conditional extraction regen → atomic save. Failed
+        validation writes nothing.
+
+        Args:
+            agent_id: The bare-UUID agent id being patched.
+            patch: The validated partial body.
+
+        Returns:
+            `{"agent_id": agent_id, "state": "updated"}` (PUT parity).
+
+        Raises:
+            AgentNotFoundError: When no record exists (the controller swallows
+                this into the legacy 500, PUT parity).
+            AgentConfigInvalidError: On structural problems, schema failures,
+                or catalog/allowlist violations (400 with problems + values).
+        """
+        store = self._require_definitions()
+        body = patch.model_dump(exclude_unset=True)
+        ensure_patchable(body)
+        stored = ensure_agent_exists(await store.get_agent(agent_id), agent_id)
+        merged, prompts, clear_prompts, merge_problems = apply_agent_patch(stored, body)
+        if merge_problems:
+            raise AgentConfigInvalidError("; ".join(merge_problems), details={"problems": merge_problems})
+        try:
+            config = AgentModel.model_validate(merged)
+        except ValidationError as exc:
+            raise AgentConfigInvalidError(str(exc), details={"agent_id": agent_id}) from exc
+        new_data = config.model_dump()
+        new_data[ASSISTANT_STATUS_KEY] = ASSISTANT_STATUS_UPDATED
+        await self._validate_providers(new_data)
+        self._logger.info(_LOG_UPDATING_AGENT, agent_id)
+        jobs = self._changed_extraction_jobs(stored, new_data)
+        if jobs:
+            self._require_extraction_model()
+            for index, extraction_prompt in await self._generate_extraction_batch(jobs):
+                new_data[TASKS_KEY][index][_TOOLS_CONFIG_KEY][_LLM_AGENT_KEY][_EXTRACTION_JSON_KEY] = (
+                    extraction_prompt
+                )
+        writes = [store.save_agent(agent_id, new_data)]
+        if prompts is not None or clear_prompts:
+            writes.append(self._prompt_store.save_prompts(agent_id, prompts))
+        await gather(*writes)
+        return {AGENT_ID_KEY: agent_id, STATE_KEY: AGENT_STATE_UPDATED}
+
+    @staticmethod
+    def _changed_extraction_jobs(old: dict[str, Any], new: dict[str, Any]) -> list[tuple[int, str]]:
+        """Collect extraction regen jobs whose details changed (index-aligned).
+
+        Args:
+            old: The stored definition dump.
+            new: The merged definition dump.
+
+        Returns:
+            `(index, details)` pairs needing fresh extraction prompts.
+        """
+        jobs: list[tuple[int, str]] = []
+        old_tasks = old.get(TASKS_KEY, [])
+        new_tasks = new.get(TASKS_KEY, [])
+        if not isinstance(old_tasks, list) or not isinstance(new_tasks, list):
+            return jobs
+        for index, task in enumerate(new_tasks):
+            if not isinstance(task, dict) or task.get(_TASK_TYPE_KEY) != TASK_TYPE_EXTRACTION:
+                continue
+            details = _extraction_details_of(task)
+            if details is None:
+                continue
+            before = old_tasks[index] if index < len(old_tasks) and isinstance(old_tasks[index], dict) else {}
+            if _extraction_details_of(before) != details:
+                jobs.append((index, details))
+        return jobs
 
     async def delete_agent(self, agent_id: str) -> dict[str, Any]:  # why: quickstart wire shape is a raw dict
         """Delete an agent's definition together with its prompt payload.

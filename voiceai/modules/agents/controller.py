@@ -27,12 +27,13 @@ from voiceai.modules.agents.errors import AgentNotFoundError, AgentsError
 from voiceai.modules.agents.schemas import AgentsContract
 from voiceai.modules.agents.service import AgentService
 
-__all__ = ["CreateAgentPayload", "router"]
+__all__ = ["CreateAgentPayload", "PatchAgentPayload", "router"]
 
 router = APIRouter(tags=[MODULE_NAME])
 
 #: Alias keeping handler signatures readable; the canonical shape is the contract.
 CreateAgentPayload = AgentsContract.CreateAgentRequest
+PatchAgentPayload = AgentsContract.PatchAgentRequest
 
 #: Operator-facing message of the swallowed 404; the client sees only the opaque 500 envelope.
 _SWALLOWED_NOT_FOUND_MESSAGE: Final[str] = "Agent lookup failed"
@@ -102,6 +103,21 @@ async def update_agent(agent_id: str, payload: CreateAgentPayload, service: Serv
     """
     try:
         updated = await service.update_agent(agent_id, payload.agent_config, payload.agent_prompts)
+    except AgentNotFoundError as exc:
+        raise _swallowed_not_found(exc, agent_id) from exc
+    return success_response(updated)
+
+
+@router.patch(AGENT_BY_ID_PATH)
+@inject
+async def patch_agent(agent_id: str, payload: PatchAgentPayload, service: ServiceDep) -> JSONResponse:
+    """Merge a partial update into an agent; answers `{"agent_id", "state": "updated"}` (spec 0028).
+
+    Raises:
+        AgentsError: For a missing agent — the swallowed-404 quirk, PATCH included.
+    """
+    try:
+        updated = await service.patch_agent(agent_id, payload)
     except AgentNotFoundError as exc:
         raise _swallowed_not_found(exc, agent_id) from exc
     return success_response(updated)

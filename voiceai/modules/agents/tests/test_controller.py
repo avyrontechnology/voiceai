@@ -278,3 +278,39 @@ async def test_unconfigured_store_answers_503_not_a_crash(no_store_client):
     assert body["ok"] is False
     assert body["error"]["code"] == ErrorCode.DEPENDENCY_UNAVAILABLE.value
     assert body["error"]["retryable"] is True
+
+
+# --- PATCH -------------------------------------------------------------------------------
+
+
+async def test_patch_round_trips_merged_config(agents_client):
+    """PATCH renames through the envelope; a later GET shows the merge."""
+    created = await agents_client.post(AGENT_URL, json=CREATE_PAYLOAD)
+    assert created.status_code == HTTP_CREATED
+    agent_id = created.json()["data"]["agent_id"]
+
+    patched = await agents_client.patch(agent_url(agent_id), json={"agent_name": "Renamed"})
+
+    assert patched.status_code == HTTP_OK
+    assert patched.json()["data"] == {"agent_id": agent_id, "state": "updated"}
+    read = await agents_client.get(agent_url(agent_id))
+    assert read.json()["data"]["agent_name"] == "Renamed"
+
+
+async def test_patch_missing_agent_answers_swallowed_500(agents_client):
+    """Missing ids follow the swallowed-404 quirk, PATCH included."""
+    response = await agents_client.patch(agent_url(MISSING_ID), json={"agent_name": "X"})
+
+    assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
+    assert response.json()["ok"] is False
+
+
+async def test_patch_empty_body_is_a_400(agents_client):
+    """A body with nothing to apply fails fast with problems."""
+    created = await agents_client.post(AGENT_URL, json=CREATE_PAYLOAD)
+    agent_id = created.json()["data"]["agent_id"]
+
+    response = await agents_client.patch(agent_url(agent_id), json={})
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False

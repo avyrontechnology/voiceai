@@ -83,5 +83,6 @@ Additive fields + endpoint; single merge per slice. Rollback is revert.
 
 - [x] Slice 1: schema + validation (channels, pipeline selector, inference
   parity, both-blocks-strict audit, service allowlist).
-- [ ] Slice 2: PATCH endpoint.
+- [x] Slice 2: PATCH endpoint (strict partials, deep-merge, atomic save,
+  conditional extraction regen, swallowed-404 parity).
 - [ ] Slice 3: engine routing.

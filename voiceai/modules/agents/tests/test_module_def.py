@@ -48,7 +48,7 @@ def test_router_mounts_exactly_the_four_legacy_paths():
 
     paths = {route.path for route in agents.MODULE.router.routes if isinstance(route, APIRoute)}
 
-    assert len(agents.MODULE.router.routes) == 6  # GET+PUT+DELETE on /agent/{id} share a path
+    assert len(agents.MODULE.router.routes) == 7  # GET+PUT+PATCH+DELETE on /agent/{id} share a path
     assert paths == {AGENT_PATH, AGENT_BY_ID_PATH, AGENT_PROMPTS_PATH, ALL_AGENTS_PATH}
 
 

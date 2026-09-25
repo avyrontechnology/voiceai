@@ -15,6 +15,7 @@ keys, and for multiagent configs the nested ``task_1.{agent_name}.system_prompt`
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
@@ -29,6 +30,7 @@ from voiceai.modules.agents.constants import (
 )
 
 __all__ = [
+    "apply_agent_patch",
     "audit_provider_config",
     "collect_agent_records",
     "is_agent_key",
@@ -432,3 +434,101 @@ def audit_provider_config(
                 problems, index, modality="s2s", provider=s2s.get("provider"), model=model, where=f"{where}.s2s"
             )
     return problems
+
+
+def _merge_dict(base: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:
+    """Recursively merge a patch mapping into a copy of base (present wins)."""
+    merged = dict(base)
+    for key, value in patch.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, Mapping)
+        ):
+            merged[key] = _merge_dict(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+    return merged
+
+
+def apply_agent_patch(
+    stored: Mapping[str, Any], patch: Mapping[str, Any]
+) -> tuple[dict[str, Any], Any, bool, list[str]]:
+    """Apply a PATCH body to a stored config dump (pure, spec 0028 slice 2).
+
+    Scalars/enums replace when present non-null; nested dicts merge
+    recursively; lists replace wholesale; present-null is a no-op everywhere;
+    clearing uses explicit `clear` ops. Prompts persist separately from the
+    definition, so the prompts action returns apart. Unknown paths are
+    reported, never applied.
+
+    Args:
+        stored: The stored definition dump.
+        patch: The patch body dump (`exclude_unset` — absent keys invisible).
+
+    Returns:
+        `(merged, prompts, clear_prompts, problems)` — the merged dump; the
+        replacement prompts payload (or `None`); whether to null the prompts;
+        and structural problems (empty when the merge applied cleanly —
+        semantic validation happens downstream on the full model).
+    """
+    problems: list[str] = []
+    merged: dict[str, Any] = copy.deepcopy(dict(stored))
+    prompts: Any = None
+    clear_prompts = False
+
+    if "tasks" in patch and "tasks_patch" in patch:
+        return merged, None, False, ["supply `tasks` or `tasks_patch`, not both"]
+    for key in ("agent_name", "agent_type", "agent_welcome_message", "channels"):
+        if key in patch and patch[key] is not None:
+            merged[key] = copy.deepcopy(patch[key])
+
+    if "tasks" in patch:
+        tasks = patch["tasks"]
+        if not isinstance(tasks, list):
+            problems.append("`tasks` must be a list")
+        elif not tasks:
+            problems.append("`tasks` must not be empty")
+        else:
+            merged["tasks"] = copy.deepcopy(tasks)
+
+    for operation in patch.get("tasks_patch", []) or []:
+        if not isinstance(operation, Mapping):
+            problems.append("`tasks_patch` entries must be mappings")
+            continue
+        index = operation.get("task_index")
+        tasks = merged.get("tasks")
+        if not isinstance(index, int) or not isinstance(tasks, list) or not 0 <= index < len(tasks):
+            problems.append(f"task_index {index!r} is out of range")
+            continue
+        task = tasks[index]
+        if not isinstance(task, dict):
+            problems.append(f"tasks[{index}]: must be a mapping")
+            continue
+        updated = dict(task)
+        for field in ("task_type", "pipeline", "tools_config", "toolchain", "task_config"):
+            if field in operation and operation[field] is not None:
+                value = operation[field]
+                if (
+                    field in ("tools_config", "task_config")
+                    and isinstance(updated.get(field), dict)
+                    and isinstance(value, Mapping)
+                ):
+                    updated[field] = _merge_dict(updated[field], value)
+                else:
+                    updated[field] = copy.deepcopy(value)
+        for cleared in operation.get("clear", []) or []:
+            if cleared == "pipeline":
+                updated["pipeline"] = None
+            else:
+                problems.append(f"tasks[{index}].clear: unknown target {cleared!r}")
+        tasks[index] = updated
+
+    if "agent_prompts" in patch and patch["agent_prompts"] is not None:
+        prompts = copy.deepcopy(patch["agent_prompts"])
+    for cleared in patch.get("clear", []) or []:
+        if cleared == "agent_prompts":
+            clear_prompts = True
+        else:
+            problems.append(f"clear: unknown target {cleared!r}")
+    return merged, prompts, clear_prompts, problems
