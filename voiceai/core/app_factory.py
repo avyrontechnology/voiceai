@@ -174,6 +174,14 @@ def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
         except Exception as exc:  # noqa: BLE001 - catalog must never block boot
             boot_logger.warning("catalog seeding skipped: %s", type(exc).__name__)
         try:
+            # Tools seed under a system binding (spec 0029): the service
+            # constructor reads the ambient tenant, and seeding writes system
+            # rows through the system view only.
+            with bind_tenant(TenantContext(tenant_id=SYSTEM_TENANT_ID, request_id="boot")):
+                await container.tools_service().ensure_seeded()
+        except Exception as exc:  # noqa: BLE001 - tools must never block boot
+            boot_logger.warning("tools seeding skipped: %s", type(exc).__name__)
+        try:
             yield
         finally:
             # try/finally: the clients are released even when the lifespan scope is cancelled

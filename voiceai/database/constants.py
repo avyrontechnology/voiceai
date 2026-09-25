@@ -38,6 +38,9 @@ class Collections(str, Enum):
     #: Custom voice library rows (spec 0025, M-voices): tenant-scoped
     #: per-agent voices.
     VOICES = "voices"
+    #: Shareable tool rows (spec 0029, Phase B): system internal tools +
+    #: tenant tools and webhooks.
+    TOOLS = "tools"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

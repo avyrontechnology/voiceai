@@ -283,6 +283,31 @@ def _build_catalog_service(db_client: Any) -> Any:
     return CatalogService(CatalogRepository(system_view))
 
 
+def _build_tools_service(db_client: Any) -> Any:
+    """Build the tool registry over system + scoped views (spec 0029, slice 1)."""
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID, current_tenant
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.models import ToolDefinition
+    from voiceai.modules.tools.repository import ToolsRepository
+    from voiceai.modules.tools.service import ToolsService
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    system: Any = TenantScopedRepository(
+        factory(db_client, Collections.TOOLS, ToolDefinition),
+        SYSTEM_TENANT_ID,
+        Collections.TOOLS,
+    )
+    scoped: Any = TenantScopedRepository(
+        factory(db_client, Collections.TOOLS, ToolDefinition),
+        current_tenant().tenant_id,
+        Collections.TOOLS,
+    )
+    return ToolsService(ToolsRepository(system), ToolsRepository(scoped))
+
+
 def _build_voices_service(db_client: Any, definitions: Any, catalog: Any) -> Any:
     """Build the voice-library service over the ambient tenant's view.
 
@@ -371,6 +396,11 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Singleton — same pinning hazard as the other scoped views.
     voices_service = providers.Factory(_build_voices_service, db_client, agent_definitions, catalog_service)
 
+    # Tools Module: two views over one collection (spec 0029) — system view
+    # for internal rows (no ambient read, Singleton-safe), scoped view for
+    # tenant CRUD (Factory, per-request binding).
+    tools_service = providers.Factory(_build_tools_service, db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -412,6 +442,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
         modules=[
             "voiceai.modules.auth.controller",
             "voiceai.modules.catalog.controller",
+            "voiceai.modules.tools.controller",
             "voiceai.modules.voices.controller",
             "voiceai.modules.health.controller",
             "voiceai.modules.agents.controller",

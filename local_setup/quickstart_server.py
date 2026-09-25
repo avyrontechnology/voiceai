@@ -143,11 +143,16 @@ with bind_tenant(_quickstart_tenant_context(_QUICKSTART_BOOT_REQUEST_ID)):
 
 @asynccontextmanager
 async def _quickstart_lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Seed the provider catalog at boot (spec 0022): never blocks boot."""
+    """Seed the provider catalog + internal tools at boot (specs 0022/0029): never blocks boot."""
     try:
         await _agents_container.catalog_service().ensure_seeded()
     except Exception as exc:  # noqa: BLE001 - catalog must never block boot
         logger.warning("catalog seeding skipped: %s", type(exc).__name__)
+    try:
+        with bind_tenant(_quickstart_tenant_context(DEFAULT_TENANT_ID)):
+            await _agents_container.tools_service().ensure_seeded()
+    except Exception as exc:  # noqa: BLE001 - tools must never block boot
+        logger.warning("tools seeding skipped: %s", type(exc).__name__)
     yield
 
 
