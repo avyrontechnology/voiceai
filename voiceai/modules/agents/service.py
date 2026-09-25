@@ -35,6 +35,7 @@ from voiceai.modules.agents.constants import (
     STATE_KEY,
     TASK_TYPE_EXTRACTION,
     TASKS_KEY,
+    WRITABLE_CHANNELS,
 )
 from voiceai.modules.agents.errors import AgentConfigInvalidError, AgentNotFoundError, PromptStoreError
 from voiceai.modules.agents.exceptions import ensure_agent_exists
@@ -137,6 +138,30 @@ class AgentService:
             raise AgentConfigInvalidError(
                 "; ".join(problems),
                 details={"problems": problems},
+            )
+        self._ensure_writable_channels(data.get("channels", []))
+
+    @staticmethod
+    def _ensure_writable_channels(channels: object) -> None:
+        """Reject non-voice channels until their runtime lands (spec 0028).
+
+        The schema accepts the full channel vocabulary so stored rows stay
+        forward-compatible; the service allowlists what Phase A can actually
+        run. Chat rejects loudly (no dormant data) until Phase C.
+
+        Args:
+            channels: The dumped `channels` value.
+
+        Raises:
+            AgentConfigInvalidError: Naming the rejected channels + valid set.
+        """
+        names = [str(channel) for channel in channels] if isinstance(channels, list) else []
+        rejected = [channel for channel in names if channel not in WRITABLE_CHANNELS]
+        if rejected:
+            raise AgentConfigInvalidError(
+                f"Channels not servable yet: {', '.join(rejected)} "
+                f"(valid: {', '.join(sorted(WRITABLE_CHANNELS))}; chat arrives in Phase C).",
+                details={"channels": rejected, "valid": sorted(WRITABLE_CHANNELS)},
             )
 
     def _require_definitions(self) -> AgentDefinitionPort:

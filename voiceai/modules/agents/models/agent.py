@@ -8,7 +8,7 @@ import paths keep resolving.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from voiceai.modules.agents.models.base import (
     AGENT_WELCOME_MESSAGE,
@@ -16,6 +16,7 @@ from voiceai.modules.agents.models.base import (
     validate_attribute,
     validate_reasoning_effort_for_model,
 )
+from voiceai.modules.agents.models.channel import Channel, Pipeline
 
 __all__ = [
     "AGENT_WELCOME_MESSAGE",
@@ -31,6 +32,11 @@ __all__ = [
 # ``tools`` (needed only by ``Task`` below) transitively imports ``pipeline``
 # and ``brains``; all three now resolve through the leaf ``models/base.py``.
 from voiceai.modules.agents.models.tools import ToolsChainModel, ToolsConfig  # noqa: E402
+
+
+def _default_channels() -> list[Channel]:
+    """Default channel set: every existing row runs on voice (spec 0028)."""
+    return ["voice"]
 
 
 class ConversationConfig(BaseModel):
@@ -117,12 +123,31 @@ class Task(BaseModel):
     task_type: str | None = Field(
         default="conversation", description="Type of the task. E.g., 'conversation', 'extraction', 'summarization'."
     )
+    pipeline: Pipeline | None = Field(
+        default=None,
+        description="Active engine path for a conversation task (`asr`|`s2s`); "
+        "`None` infers legacy behavior. Rejected on non-conversation tasks.",
+    )
     # legacy-parity(spec-0002): default_factory=dict leaves an omitted task_config as a plain
     # {} at runtime (pydantic does not validate defaults) — preserved verbatim, typing quirk included.
     task_config: ConversationConfig = Field(  # type: ignore[assignment]
         default_factory=dict,
         description="Conversation settings, including latency optimizations and termination logic.",
     )
+
+    @model_validator(mode="after")
+    def _reject_pipeline_off_conversation(self) -> Task:
+        """Reject a pipeline selector where no engine path exists (spec 0028).
+
+        Returns:
+            The validated task unchanged.
+
+        Raises:
+            ValueError: When `pipeline` is set on a non-conversation task.
+        """
+        if self.task_type != "conversation" and self.pipeline is not None:
+            raise ValueError("pipeline selector applies only to conversation tasks")
+        return self
 
 
 class AgentModel(BaseModel):
@@ -138,3 +163,20 @@ class AgentModel(BaseModel):
     agent_welcome_message: str | None = Field(
         default=AGENT_WELCOME_MESSAGE, description="First message spoken by the agent upon connecting the call."
     )
+    channels: list[Channel] = Field(
+        default_factory=_default_channels,
+        min_length=1,
+        description="Runtimes this agent serves (spec 0028, Phase A: voice only).",
+    )
+
+    @field_validator("channels")
+    @classmethod
+    def _unique_channels(cls, value: list[Channel]) -> list[Channel]:
+        """Reject duplicated channels (spec 0028).
+
+        Raises:
+            ValueError: When a channel repeats.
+        """
+        if len(set(value)) != len(value):
+            raise ValueError("channels must not repeat")
+        return value

@@ -33,6 +33,7 @@ __all__ = [
     "collect_agent_records",
     "is_agent_key",
     "parse_agent_record",
+    "resolve_pipeline_for_task",
     "select_multiagent_system_prompt",
     "select_task_prompts",
     "task_prompt_key",
@@ -342,6 +343,29 @@ def _audit_llm_leaves(
             _audit_llm_leaves(problems, index, value, f"{where}[{position}]")
 
 
+def resolve_pipeline_for_task(task: Mapping[str, Any]) -> str:
+    """Resolve a task's active engine path (spec 0028, Phase A).
+
+    Explicit `pipeline` wins; absent infers legacy behavior (s2s block on a
+    conversation task → s2s, else asr) — byte-identical to the engine's
+    `__is_s2s` for selector-absent rows.
+
+    Args:
+        task: One dumped task mapping.
+
+    Returns:
+        `"asr"` or `"s2s"`.
+    """
+    pipeline = task.get("pipeline")
+    if pipeline in ("asr", "s2s"):
+        return str(pipeline)
+    tools = task.get("tools_config")
+    if task.get("task_type", "conversation") == "conversation" and isinstance(tools, Mapping):
+        if isinstance(tools.get("s2s"), Mapping):
+            return "s2s"
+    return "asr"
+
+
 def audit_provider_config(
     config: Mapping[str, Any],
     entries: Sequence[Mapping[str, Any]],
@@ -353,9 +377,11 @@ def audit_provider_config(
     leaves (provider AND model — the schema leaves `Llm.provider` free), the
     S2S model, and the synthesizer provider_config (model/engine + voice
     against the matched row's curated set + language). Pipeline provider names
-    are already schema-strict. Returns problem strings (empty means valid) —
-    callers raise their own module error, so this stays import-clean:
-    catalog rows arrive as plain mappings and the language predicate injects.
+    are already schema-strict. BOTH pipeline blocks validate clean on every
+    write (spec 0028 strict) — the inactive block is parked, never exempt.
+    Returns problem strings (empty means valid) — callers raise their own
+    module error, so this stays import-clean: catalog rows arrive as plain
+    mappings and the language predicate injects.
 
     Args:
         config: One agent definition dump (`model_dump`, defaults materialized).

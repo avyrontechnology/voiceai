@@ -15,6 +15,7 @@ from voiceai.modules.agents.errors import (
     AgentsError,
     PromptStoreError,
 )
+from voiceai.modules.agents.models.channel import Channel, Pipeline
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
 from voiceai.modules.agents.runtime import BrainFactory, BrainPort, CachedAgentReader, run_judgments
 from voiceai.modules.agents.service import AgentService
@@ -39,7 +40,9 @@ __all__ = [
     "BrainFactory",
     "BrainPort",
     "CachedAgentReader",
+    "Channel",
     "LlmPort",
+    "Pipeline",
     "PromptStoreError",
     "run_judgments",
 ]

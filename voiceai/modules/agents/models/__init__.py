@@ -42,6 +42,7 @@ from voiceai.modules.agents.models.brains import (
 
 # T3 storage envelopes import only `database.base`, so they cannot join the
 # agent↔tools cycle documented above — alphabetical placement stays load-safe.
+from voiceai.modules.agents.models.channel import Channel, Pipeline
 from voiceai.modules.agents.models.definition import AgentDefinition
 from voiceai.modules.agents.models.pipeline import (
     S2S_PROVIDER_CONFIGS,
@@ -94,6 +95,7 @@ __all__ = [
     "AzureConfig",
     "CallEvent",
     "CartesiaConfig",
+    "Channel",
     "ConversationConfig",
     "DeepgramConfig",
     "Edge",
@@ -119,6 +121,7 @@ __all__ = [
     "Node",
     "OpenAIConfig",
     "OpenAIRealtimeConfig",
+    "Pipeline",
     "PixaConfig",
     "PollyConfig",
     "RagConfig",

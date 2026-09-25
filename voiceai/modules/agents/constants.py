@@ -108,6 +108,16 @@ AGENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 # `AgentModel.agent_type` defaults to "other" — a top-level label, not a dispatch key.
 DEFAULT_AGENT_TYPE: Final[str] = "other"
+
+# --- channels + pipelines (spec 0028, Phase A) -------------------------------------------
+#: Runtimes an agent may serve (Phase A writes voice only; chat rejects until Phase C).
+CHANNEL_VOICE: Final[str] = "voice"
+CHANNEL_CHAT: Final[str] = "chat"
+#: Engine path per conversation task.
+PIPELINE_ASR: Final[str] = "asr"
+PIPELINE_S2S: Final[str] = "s2s"
+#: Channels the service accepts on write (spec 0028: voice only in Phase A).
+WRITABLE_CHANNELS: Final[frozenset[str]] = frozenset({CHANNEL_VOICE})
 #: Engine-dispatch kinds the conversation-brain factory builds (spec 0015): the
 #: task-level `llm_agent.agent_type` values `__get_agent_object` switches on.
 #: `multiagent`/`llm_agent_graph` flow through separate builders, never the factory.
