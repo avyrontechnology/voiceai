@@ -106,6 +106,7 @@ __all__ = [
     "create_ws_data_packet",
     "generate_switch_followup",
     "handle_language_switch",
+    "inject_language_instruction",
     "inject_switch_language_tool",
     "is_alphanumeric_readout",
     "language_directive",
@@ -166,6 +167,9 @@ class SwitcherSession(Protocol):
     kwargs: dict
     conversation_history: Any  # why: legacy ConversationHistory
     interruption_manager: Any  # why: legacy InterruptionManager
+    language_detector: Any  # why: legacy detector (dominant_language attr)
+    language_injection_mode: Any  # why: legacy mode flag (system_only/per_turn)
+    language_instruction_template: Any  # why: legacy template string or None
 
     # --- legacy session methods the bodies call back into ---
     def _should_ignore_transcriber_input(self) -> bool: ...  # noqa: D102
@@ -1181,3 +1185,43 @@ def inject_switch_language_tool(session: SwitcherSession) -> None:
     # setup call site, before this injection.)
     session.kwargs["api_tools"]["tools_params"]["switch_language"] = {}
     logger.info(f"Injected switch_language tool (labels={sorted(labels)})")
+
+
+def inject_language_instruction(session: SwitcherSession, messages: list) -> list:
+    """Inject language instruction into messages based on detected language.
+
+    Verbatim move of `TaskManager._inject_language_instruction` (spec 0034).
+
+    Args:
+        session: The live call session (duck-typed `SwitcherSession`).
+        messages: The LLM message list, mutated in place.
+
+    Returns:
+        The same message list (mutated or passed through untouched).
+    """
+    lang = session.language_detector.dominant_language
+    if not lang or not session.language_injection_mode or not session.language_instruction_template:
+        return messages
+
+    try:
+        lang_name = LANGUAGE_NAMES.get(lang, lang)
+        instruction = session.language_instruction_template.format(language=lang_name) + "\n\n"
+
+        if session.language_injection_mode == "system_only":
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "system":
+                    messages[i]["content"] = instruction + msg["content"]
+                    logger.info(f"[system_only] Injected: {lang_name} ({lang})")
+                    break
+        elif session.language_injection_mode == "per_turn":
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "user":
+                    messages[i]["content"] = instruction + msg["content"]
+            logger.info(
+                f"[per_turn] Injected to {sum(1 for m in messages if m.get('role') == 'user')} "
+                f"user messages: {lang_name} ({lang})"
+            )
+    except Exception as e:
+        logger.error(f"Language injection error: {e}")
+
+    return messages

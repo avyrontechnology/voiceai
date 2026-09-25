@@ -480,32 +480,12 @@ class TaskManager(BaseManager):
         return _voice_history.cancel_in_flight_llm_response(self)
 
     def _inject_language_instruction(self, messages: list) -> list:
-        """Inject language instruction into messages based on detected language."""
-        lang = self.language_detector.dominant_language
-        if not lang or not self.language_injection_mode or not self.language_instruction_template:
-            return messages
+        """Inject language instruction into messages based on detected language.
 
-        try:
-            lang_name = LANGUAGE_NAMES.get(lang, lang)
-            instruction = self.language_instruction_template.format(language=lang_name) + "\n\n"
-
-            if self.language_injection_mode == "system_only":
-                for i, msg in enumerate(messages):
-                    if msg.get("role") == "system":
-                        messages[i]["content"] = instruction + msg["content"]
-                        logger.info(f"[system_only] Injected: {lang_name} ({lang})")
-                        break
-            elif self.language_injection_mode == "per_turn":
-                for i, msg in enumerate(messages):
-                    if msg.get("role") == "user":
-                        messages[i]["content"] = instruction + msg["content"]
-                logger.info(
-                    f"[per_turn] Injected to {sum(1 for m in messages if m.get('role') == 'user')} user messages: {lang_name} ({lang})"
-                )
-        except Exception as e:
-            logger.error(f"Language injection error: {e}")
-
-        return messages
+        Moved verbatim to `voiceai.modules.voice.session.language.switcher`
+        (spec 0034); this delegator keeps legacy callers stable.
+        """
+        return _voice_switcher.inject_language_instruction(self, messages)
 
     def __setup_output_handlers(self, turn_based_conversation, output_queue):
         output_kwargs = {"websocket": self.websocket}
