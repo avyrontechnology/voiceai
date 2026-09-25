@@ -429,3 +429,17 @@ async def test_s2s_parity_with_the_real_init():
     tm = _build(task)
     _assert_parity(cfg, tm)
     assert tm.s2s_config is cfg.s2s_config
+
+
+def test_pipeline_selector_overrides_inference():
+    """Explicit selector wins; absent infers legacy behavior (spec 0028 slice 3)."""
+    both_asr = _s2s_task()
+    both_asr["pipeline"] = "asr"
+    assert _parse(both_asr).is_s2s is False
+
+    asr_task = _task(SIMPLE_AGENT)
+    asr_task["pipeline"] = "s2s"
+    assert _parse(asr_task).is_s2s is True
+
+    assert _parse(_s2s_task()).is_s2s is True
+    assert _parse(_task(SIMPLE_AGENT)).is_s2s is False

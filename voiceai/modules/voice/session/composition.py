@@ -65,6 +65,7 @@ from typing import Any
 
 from voiceai.common.logger import get_logger
 from voiceai.enums import ToolScope
+from voiceai.modules.agents import resolve_pipeline_for_task
 from voiceai.modules.voice.adapters.composition import (
     ACCIDENTAL_INTERRUPTION_PHRASES,
     ConversationHistory,
@@ -297,7 +298,10 @@ def adopt_call_config(self: Any, args: CallArgs) -> CallConfig:  # why: the live
             self.task_config["tools_config"]["input"]["provider"] = "default"
             self.task_config["tools_config"]["output"]["provider"] = "default"
 
-        if self._TaskManager__is_s2s():
+        is_s2s_task = resolve_pipeline_for_task(args.task) == "s2s" and args.task.get(
+            "task_type", "conversation"
+        ) == "conversation"
+        if is_s2s_task:
             # Browser-leg realtime agents carry no telephony handlers (input /
             # output are null in the record). Without this, every direct
             # tools_config["input"]["provider"] access below throws, and no
@@ -492,7 +496,7 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
         # An s2s task starts its own consumer in _run_s2s_conversation. Starting this one
         # too would race it for the same queue, and this one wins by being first: the
         # digits get injected into the transcriber/LLM pipeline an s2s agent does not have.
-        if dtmf_enabled and not self._TaskManager__is_s2s():
+        if dtmf_enabled and not call_config.is_s2s:
             self.tools["input"].is_dtmf_active = True
             self.dtmf_task = asyncio.create_task(self.inject_digits_to_conversation())
 
@@ -606,7 +610,7 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
 def compose_runtime_legs(self: Any, args: CallArgs, call_config: CallConfig) -> None:
     """Dispatch transcriber/synthesizer/llm setup plus the language/llm tail."""
     # setting transcriber and synthesizer in parallel
-    if self._TaskManager__is_s2s():
+    if call_config.is_s2s:
         self._TaskManager__setup_s2s()
     else:
         self._TaskManager__setup_transcriber()

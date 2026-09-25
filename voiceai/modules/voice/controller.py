@@ -131,6 +131,13 @@ async def voice_chat(
         if not agent_config:
             await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
             return
+        channels = agent_config.get("channels", ["voice"]) if isinstance(agent_config, dict) else ["voice"]
+        if "voice" not in channels:
+            # Authorized principal, wrong-channel agent: same shape as
+            # unknown-or-foreign (no oracle, no new codes in Phase A).
+            logger.warning("voice ws denied for agent %s (non-voice channels)", agent_id)
+            await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
+            return
         try:
             await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
         finally:

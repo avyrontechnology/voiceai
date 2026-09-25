@@ -85,4 +85,5 @@ Additive fields + endpoint; single merge per slice. Rollback is revert.
   parity, both-blocks-strict audit, service allowlist).
 - [x] Slice 2: PATCH endpoint (strict partials, deep-merge, atomic save,
   conditional extraction regen, swallowed-404 parity).
-- [ ] Slice 3: engine routing.
+- [x] Slice 3: engine routing (`resolve_pipeline` on the surface,
+  `CallConfig.is_s2s` field, predicate swaps, voice channel gate).

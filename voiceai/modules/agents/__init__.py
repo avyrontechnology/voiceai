@@ -19,6 +19,7 @@ from voiceai.modules.agents.models.channel import Channel, Pipeline
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
 from voiceai.modules.agents.runtime import BrainFactory, BrainPort, CachedAgentReader, run_judgments
 from voiceai.modules.agents.service import AgentService
+from voiceai.modules.agents.static_methods import resolve_pipeline_for_task
 
 MODULE: ModuleDef = ModuleDef(
     name=MODULE_NAME,
@@ -45,5 +46,6 @@ __all__ = [
     "LlmPort",
     "Pipeline",
     "PromptStoreError",
+    "resolve_pipeline_for_task",
     "run_judgments",
 ]

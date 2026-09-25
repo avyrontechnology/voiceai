@@ -220,6 +220,26 @@ async def test_foreign_agent_reads_as_unknown():
     assert service.calls == []
 
 
+async def test_non_voice_agent_reads_as_unknown():
+    """A chat-only agent on the voice socket closes like an unknown id (spec 0028)."""
+
+    class _ChatOnlyDefinitions(_Definitions):
+        async def get_agent(self, agent_id):
+            return {"agent_name": "Chat", "channels": ["chat"]}
+
+    container = _container(flag=True, store=_ChatOnlyDefinitions())
+    service = container.voice_call_service()
+    socket = _Socket(container, TICKET)
+    await voice_chat(
+        websocket=socket,  # type: ignore[arg-type]  # why: offline fake, no extra deps per module docstring
+        agent_id=AGENT_ID,
+        environment=container.environment(),
+        auth=container.auth_service(),
+    )
+    assert socket.close_code == WS_CLOSE_UNKNOWN_AGENT
+    assert service.calls == []
+
+
 async def test_served_agent_runs_through_the_service():
     service = _Service()
     container = _container(flag=True, service=service)

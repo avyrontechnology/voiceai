@@ -37,6 +37,7 @@ from typing import Any
 import pytz
 
 from voiceai.enums import TelephonyProvider
+from voiceai.modules.agents import resolve_pipeline_for_task
 from voiceai.modules.voice.adapters import END_CALL_FUNCTION_PREFIX
 from voiceai.modules.voice.adapters.session import (
     ACCIDENTAL_INTERRUPTION_PHRASES,
@@ -316,6 +317,7 @@ class CallConfig:
     discard_pre_welcome_utterance: Any  # why: raw task-config value
     switch_handoff_messages: Any  # why: the task's own dict by reference, or a fresh {}
     agent_names: Any  # why: the task's own dict by reference, or a fresh {}
+    is_s2s: bool  # pipeline dispatch: selector-resolved (spec 0028), legacy-inferred when absent
 
     @classmethod
     def parse(
@@ -346,8 +348,9 @@ class CallConfig:
         enforce_streaming = kwargs.get("enforce_streaming", False)
         is_web_based_call = kwargs.get("is_web_based_call", False)
         s2s_config = task["tools_config"].get("s2s")
-        # Speech-to-speech classification, verbatim __is_s2s over the parsed values.
-        is_s2s = bool(s2s_config) and task["task_type"] == "conversation"
+        # Pipeline dispatch (spec 0028 slice 3): explicit selector wins, absent
+        # infers legacy behavior — identical to __is_s2s for selector-absent rows.
+        is_s2s = resolve_pipeline_for_task(task) == "s2s" and task["task_type"] == "conversation"
 
         # spec-0004 B4: preserved quirk — the legacy branch (tm:254-259) could only ever
         # re-assign False; reproduced including its KeyError behavior on the same inputs.
@@ -389,6 +392,7 @@ class CallConfig:
             language=DEFAULT_LANGUAGE_CODE,
             transfer_call_params=kwargs.get("transfer_call_params", None),
             s2s_config=s2s_config,
+            is_s2s=is_s2s,
             enforce_streaming=enforce_streaming,
             room_url=kwargs.get("room_url", None),
             is_web_based_call=is_web_based_call,
