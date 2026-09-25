@@ -977,13 +977,12 @@ class TaskManager(BaseManager):
         return factory.build(agent_type, llm, self)
 
     def __setup_s2s(self):
-        """Validate the S2S config. The provider itself is built once prompts are loaded."""
-        self.s2s = S2SConfig(**self.s2s_config)
-        self.s2s_provider_name = self.s2s.provider
-        self.s2s_model = self.s2s.provider_config.model
-        # Not in _run_s2s_conversation: message_task_new sets this and is scheduled first.
-        self._s2s_stream_ready = asyncio.Event()
-        logger.info(f"S2S agent configured | provider={self.s2s_provider_name} model={self.s2s_model}")
+        """Validate the S2S config. The provider itself is built once prompts are loaded.
+
+        Moved verbatim to `voiceai.modules.voice.session.s2s_runner` (spec 0035);
+        this delegator keeps legacy callers stable.
+        """
+        return _voice_s2s_runner.setup_s2s(self)
 
     def __setup_tasks(self, llm=None, agent_type=None, assistant_config=None):
         if self.task_config["task_type"] == "conversation" and not self.__is_multiagent():

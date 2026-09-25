@@ -16,6 +16,7 @@ from voiceai.modules.agents.errors import (
     PromptStoreError,
 )
 from voiceai.modules.agents.models.channel import Channel, Pipeline
+from voiceai.modules.agents.models.pipeline import S2SConfig
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
 from voiceai.modules.agents.runtime import BrainFactory, BrainPort, CachedAgentReader, run_judgments
 from voiceai.modules.agents.service import AgentService
@@ -47,6 +48,7 @@ __all__ = [
     "LlmPort",
     "Pipeline",
     "PromptStoreError",
+    "S2SConfig",
     "resolve_pipeline_for_task",
     "run_judgments",
 ]

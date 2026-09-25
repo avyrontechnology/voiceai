@@ -45,6 +45,7 @@ from typing import Any, Protocol
 
 from voiceai.common.logger import get_logger
 from voiceai.enums import HangupReason, LogComponent, LogDirection, S2SProvider, TelephonyProvider
+from voiceai.modules.agents import S2SConfig
 from voiceai.modules.voice.adapters import END_CALL_FUNCTION_PREFIX, resample
 from voiceai.modules.voice.adapters.llm import LLMError
 from voiceai.modules.voice.adapters.s2s_runtime import (
@@ -122,6 +123,7 @@ class S2SSession(Protocol):
 
     # --- S2S-owned state (lives on the session so __new__ harnesses can seed it) ---
     _s2s_stream_ready: asyncio.Event
+    s2s_config: Any  # why: raw s2s block dict validated by setup_s2s
     _s2s_input: s2s_events.AudioFormat
     _s2s_output: s2s_events.AudioFormat
     _s2s_tool_tasks: set
@@ -883,3 +885,19 @@ async def _s2s_call_api_tool(
         error=response.get("error"),
     )
     return str(response.get("body"))
+
+
+def setup_s2s(session: S2SSession) -> None:
+    """Validate the S2S config. The provider itself is built once prompts are loaded.
+
+    Verbatim move of `TaskManager.__setup_s2s` (spec 0035).
+
+    Args:
+        session: The live call session (duck-typed `S2SSession`).
+    """
+    session.s2s = S2SConfig(**session.s2s_config)
+    session.s2s_provider_name = session.s2s.provider
+    session.s2s_model = session.s2s.provider_config.model
+    # Not in _run_s2s_conversation: message_task_new sets this and is scheduled first.
+    session._s2s_stream_ready = asyncio.Event()
+    logger.info(f"S2S agent configured | provider={session.s2s_provider_name} model={session.s2s_model}")
