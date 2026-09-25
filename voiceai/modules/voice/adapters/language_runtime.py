@@ -35,6 +35,7 @@ from voiceai.constants import LANGUAGE_SWITCH_MAX_HOLD_S as _LEGACY_LANGUAGE_SWI
 from voiceai.constants import LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S as _LEGACY_LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S
 from voiceai.constants import LANGUAGE_SWITCH_SETTLE_MS as _LEGACY_LANGUAGE_SWITCH_SETTLE_MS
 from voiceai.constants import LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S as _LEGACY_LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S
+from voiceai.constants import SWITCH_LANGUAGE_TOOL_DEFINITION as _LEGACY_SWITCH_LANGUAGE_TOOL_DEFINITION
 from voiceai.constants import WEBCALL_TTS_SAMPLE_RATE as _LEGACY_WEBCALL_TTS_SAMPLE_RATE
 from voiceai.helpers.utils import audio_to_mulaw8k as _legacy_audio_to_mulaw8k
 from voiceai.helpers.utils import audio_to_pcm as _legacy_audio_to_pcm
@@ -52,6 +53,7 @@ __all__ = [
     "LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S",
     "LANGUAGE_SWITCH_SETTLE_MS",
     "LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S",
+    "SWITCH_LANGUAGE_TOOL_DEFINITION",
     "SynthesizerPool",
     "TranscriberPool",
     "WEBCALL_TTS_SAMPLE_RATE",
@@ -108,3 +110,6 @@ LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S: Final[float] = _LEGACY_LANGUAGE_SWITCH_SPE
 
 #: The web-call TTS output rate (Hz) the PCM handoff clips are rendered at.
 WEBCALL_TTS_SAMPLE_RATE: Final[int] = _LEGACY_WEBCALL_TTS_SAMPLE_RATE
+
+#: The switch_language tool schema injected for multilingual pools (spec 0031).
+SWITCH_LANGUAGE_TOOL_DEFINITION: Final[dict[str, Any]] = _LEGACY_SWITCH_LANGUAGE_TOOL_DEFINITION

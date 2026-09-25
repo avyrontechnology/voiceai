@@ -58,6 +58,7 @@ and the module logs through ``otobaai`` (rule 3; log content preserved).
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 import time
 import traceback
@@ -71,6 +72,7 @@ from voiceai.modules.voice.adapters.language_runtime import (
     LANGUAGE_SWITCH_DECIDE_TIMEOUT_S,
     LANGUAGE_SWITCH_MIN_SEGMENT_AUDIO_S,
     LANGUAGE_SWITCH_SETTLE_MS,
+    SWITCH_LANGUAGE_TOOL_DEFINITION,
     SynthesizerPool,
     TranscriberPool,
     create_ws_data_packet,
@@ -104,6 +106,7 @@ __all__ = [
     "create_ws_data_packet",
     "generate_switch_followup",
     "handle_language_switch",
+    "inject_switch_language_tool",
     "is_alphanumeric_readout",
     "language_directive",
     "prepare_followup_generation",
@@ -113,6 +116,7 @@ __all__ = [
     "switch_decide_timeout_s",
     "switch_language",
     "switch_settle_ms",
+    "SWITCH_LANGUAGE_TOOL_DEFINITION",
     "trailing_utterance_text",
 ]
 
@@ -159,6 +163,7 @@ class SwitcherSession(Protocol):
 
     # --- collaborators ---
     tools: dict
+    kwargs: dict
     conversation_history: Any  # why: legacy ConversationHistory
     interruption_manager: Any  # why: legacy InterruptionManager
 
@@ -1130,3 +1135,49 @@ class LanguageSwitchCoordinator:
     def handoff_clip_convert(self, synth: Any, audio: Any, mulaw_wire: Any) -> Any:
         """Decode a one-shot render to wire format (see `handoff.handoff_clip_convert`)."""
         return _handoff.handoff_clip_convert(self.session, synth, audio, mulaw_wire)
+
+
+def inject_switch_language_tool(session: SwitcherSession) -> None:
+    """Auto-inject the switch_language tool when multilingual pools are active.
+
+    Verbatim move of `TaskManager.__inject_switch_language_tool` (spec 0031).
+
+    LEGACY flow only (call site gates on __language_switch_enabled): it is the sole
+    switch mechanism there. In the LLM-driven flow the judge is the single switching
+    authority and the main LLM carries no switch tool.
+
+    Args:
+        session: The live call session (duck-typed `SwitcherSession`).
+    """
+    has_pool = isinstance(session.tools.get("transcriber"), TranscriberPool) or isinstance(
+        session.tools.get("synthesizer"), SynthesizerPool
+    )
+    if not has_pool:
+        return
+
+    # Collect available labels from pools
+    labels = set()
+    if isinstance(session.tools.get("transcriber"), TranscriberPool):
+        labels.update(session.tools["transcriber"].labels)
+    if isinstance(session.tools.get("synthesizer"), SynthesizerPool):
+        labels.update(session.tools["synthesizer"].labels)
+
+    # Enrich the tool schema with available labels in the description
+    tool_def = copy.deepcopy(SWITCH_LANGUAGE_TOOL_DEFINITION)
+    custom_description = session.task_config.get("tools_config", {}).get("switch_tool_description")
+    if custom_description:
+        tool_def["function"]["description"] = custom_description
+    lang_prop = tool_def["function"]["parameters"]["properties"]["language"]
+    lang_prop["enum"] = sorted(labels)
+    lang_prop["description"] = f"Language to switch to. Available: {sorted(labels)}"
+
+    if session.kwargs.get("api_tools") is None:
+        session.kwargs["api_tools"] = {"tools": [], "tools_params": {}}
+
+    session.kwargs["api_tools"]["tools"].append(tool_def)
+    # Entry must exist in tools_params so ToolCallAccumulator.build_api_payload
+    # doesn't drop the call, but no pre_call_message — the switch is silent.
+    # (switch_handoff_messages / agent_names are loaded for both flows at the
+    # setup call site, before this injection.)
+    session.kwargs["api_tools"]["tools_params"]["switch_language"] = {}
+    logger.info(f"Injected switch_language tool (labels={sorted(labels)})")

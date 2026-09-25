@@ -723,41 +723,11 @@ class TaskManager(BaseManager):
     def __inject_switch_language_tool(self):
         """Auto-inject the switch_language tool when multilingual pools are active.
 
-        LEGACY flow only (call site gates on __language_switch_enabled): it is the sole
-        switch mechanism there. In the LLM-driven flow the judge is the single switching
-        authority and the main LLM carries no switch tool."""
-        has_pool = isinstance(self.tools.get("transcriber"), TranscriberPool) or isinstance(
-            self.tools.get("synthesizer"), SynthesizerPool
-        )
-        if not has_pool:
-            return
-
-        # Collect available labels from pools
-        labels = set()
-        if isinstance(self.tools.get("transcriber"), TranscriberPool):
-            labels.update(self.tools["transcriber"].labels)
-        if isinstance(self.tools.get("synthesizer"), SynthesizerPool):
-            labels.update(self.tools["synthesizer"].labels)
-
-        # Enrich the tool schema with available labels in the description
-        tool_def = copy.deepcopy(SWITCH_LANGUAGE_TOOL_DEFINITION)
-        custom_description = self.task_config.get("tools_config", {}).get("switch_tool_description")
-        if custom_description:
-            tool_def["function"]["description"] = custom_description
-        lang_prop = tool_def["function"]["parameters"]["properties"]["language"]
-        lang_prop["enum"] = sorted(labels)
-        lang_prop["description"] = f"Language to switch to. Available: {sorted(labels)}"
-
-        if self.kwargs.get("api_tools") is None:
-            self.kwargs["api_tools"] = {"tools": [], "tools_params": {}}
-
-        self.kwargs["api_tools"]["tools"].append(tool_def)
-        # Entry must exist in tools_params so ToolCallAccumulator.build_api_payload
-        # doesn't drop the call, but no pre_call_message — the switch is silent.
-        # (switch_handoff_messages / agent_names are loaded for both flows at the
-        # setup call site, before this injection.)
-        self.kwargs["api_tools"]["tools_params"]["switch_language"] = {}
-        logger.info(f"Injected switch_language tool (labels={sorted(labels)})")
+        Moved verbatim to `voiceai.modules.voice.session.language.switcher`
+        (spec 0031); this delegator keeps legacy callers (including the
+        spec-0004 B9b pin) stable.
+        """
+        return _voice_switcher.inject_switch_language_tool(self)
 
     def _get_voice_name_for_label(self, label):
         """Get agent name for a language label from configured agent_names."""
