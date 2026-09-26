@@ -611,14 +611,6 @@ components:
           title: Number Of Words For Interruption
           description: Minimum number of words detected before triggering a barge-in/interruption.
           default: 1
-        interruption_backoff_period:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Interruption Backoff Period
-          description: Time in milliseconds to ignore further audio immediately after
-            an interruption.
-          default: 100
         hangup_after_LLMCall:
           anyOf:
           - type: boolean
@@ -656,13 +648,6 @@ components:
           title: Backchanneling Start Delay
           description: Delay in seconds before initiating backchanneling behavior.
           default: 5
-        ambient_noise:
-          anyOf:
-          - type: boolean
-          - type: 'null'
-          title: Ambient Noise
-          description: Whether to play synthetic ambient noise in the background.
-          default: false
         call_terminate:
           anyOf:
           - type: integer
@@ -740,6 +725,66 @@ components:
           description: Minimum number of transcribed words to trigger an interim voicemail
             check.
           default: 7
+        recording:
+          type: boolean
+          title: Recording
+          description: Capture enable for the call recording. An explicit True/False
+            wins over the legacy leg-derived default; False keeps today's default
+            of no capture.
+          default: false
+        call_hangup_message:
+          anyOf:
+          - type: string
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Call Hangup Message
+          description: Message spoken when the agent hangs up. A plain string plays
+            as-is; a per-language dict selects by call language.
+        welcome_message_delay:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Welcome Message Delay
+          description: Delay in milliseconds before the welcome message plays.
+            Absent keeps the legacy derivation.
+        interruption_backoff_period:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Interruption Backoff Period
+          description: Quiet window in milliseconds after a barge-in during which
+            further user audio is held. 0 disables the hold.
+          default: 0
+        discard_pre_welcome_utterance:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Discard Pre Welcome Utterance
+          description: Drop user speech that starts before the welcome message finishes.
+          default: false
+        language_injection_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language Injection Mode
+          description: Where to inject the detected-language instruction ('system_only'
+            or 'per_turn'); any other value injects nothing.
+        language_instruction_template:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Language Instruction Template
+          description: Template for the detected-language instruction with a {language}
+            placeholder.
+        end_call_tool_mode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Call Tool Mode
+          description: End-call tool wiring ('primary' or 'primary_with_shadow_hangup');
+            any other value leaves it disarmed.
       type: object
       title: ConversationConfig
     CreateAgentPayload:

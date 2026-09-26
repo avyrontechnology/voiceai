@@ -30,7 +30,8 @@ MODULE: ModuleDef = ModuleDef(
     runbook_path="voiceai/modules/agents/RUNBOOK.md",
     # Bumped for spec-0028 Phase A (channels, pipeline, PATCH) and spec-0029
     # slice 2 (tool refs + SSRF gate + tests); ratchets down after.
-    max_lines=14700,
+    # Bumped for spec-0042 (settings truth schema + tests); ratchets down after.
+    max_lines=14900,
 )
 
 __all__ = [

@@ -277,13 +277,11 @@ Callback endpoint for Plivo to provide XML instructions for streaming audio to t
 | `hangup_after_silence` | integer or null | Time in seconds of silence before the system automatically hangs up the call. |
 | `incremental_delay` | integer or null | Incremental delay in milliseconds used to handle long pauses in conversation. |
 | `number_of_words_for_interruption` | integer or null | Minimum number of words detected before triggering a barge-in/interruption. |
-| `interruption_backoff_period` | integer or null | Time in milliseconds to ignore further audio immediately after an interruption. |
 | `hangup_after_LLMCall` | boolean or null | Whether to automatically hang up after the LLM agent completes its primary goal. |
 | `call_cancellation_prompt` | string or null | Prompt/instruction used to detect if the user wants to cancel or end the call. |
 | `backchanneling` | boolean or null | Enable active listening/backchanneling (e.g., saying 'mm-hmm' while the user speaks). |
 | `backchanneling_message_gap` | integer or null | Minimum gap in seconds between consecutive backchanneling messages. |
 | `backchanneling_start_delay` | integer or null | Delay in seconds before initiating backchanneling behavior. |
-| `ambient_noise` | boolean or null | Whether to play synthetic ambient noise in the background. |
 | `call_terminate` | integer or null | Maximum total call duration in seconds before forced termination. |
 | `use_fillers` | boolean or null | Whether to use filler words ('uh', 'um') before LLM responses to reduce perceived latency. |
 | `trigger_user_online_message_after` | integer or null | Time in seconds of inactivity before prompting the user to see if they are still there. |
@@ -294,6 +292,14 @@ Callback endpoint for Plivo to provide XML instructions for streaming audio to t
 | `voicemail_detection_duration` | number or null | Time window in seconds to detect voicemail signals. |
 | `voicemail_check_interval` | number or null | Minimum time in seconds between interim voicemail checks. |
 | `voicemail_min_transcript_length` | integer or null | Minimum number of transcribed words to trigger an interim voicemail check. |
+| `recording` | boolean | Capture enable for the call recording. An explicit True/False wins over the legacy leg-derived default; False keeps today's default of no capture. |
+| `call_hangup_message` | string or object or null | Message spoken when the agent hangs up. A plain string plays as-is; a per-language dict selects by call language. |
+| `welcome_message_delay` | number or null | Delay in milliseconds before the welcome message plays. Absent keeps the legacy derivation. |
+| `interruption_backoff_period` | integer or null | Quiet window in milliseconds after a barge-in during which further user audio is held. 0 disables the hold. |
+| `discard_pre_welcome_utterance` | boolean or null | Drop user speech that starts before the welcome message finishes. |
+| `language_injection_mode` | string or null | Where to inject the detected-language instruction ('system_only' or 'per_turn'); any other value injects nothing. |
+| `language_instruction_template` | string or null | Template for the detected-language instruction with a {language} placeholder. |
+| `end_call_tool_mode` | string or null | End-call tool wiring ('primary' or 'primary_with_shadow_hangup'); any other value leaves it disarmed. |
 
 
 ### CreateAgentPayload

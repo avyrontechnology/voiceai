@@ -45,6 +45,13 @@ stay preserved: the goodbye-drain poll's 0.5s cadence, the transcriber-stop 2s g
 the backchanneling 8k-vs-synth-rate resample split, and the completion watchdog's
 web-call ``hangup_detail`` stamp AFTER teardown all belong to ``revamp/resilient-core``
 (R8) and are never re-fixed here.
+
+Spec 0042 Slice B intentionally breaks verbatim for one watchdog branch:
+``check_for_completion`` reads the max-duration cap through the defensive
+``_max_call_duration_s`` helper (missing/None/unusable → skip, never crash) and
+extends the cap to telephony legs via the goodbye-preserving
+``_hangup_after_goodbye`` path (the same path the inactivity hangup already uses
+there) instead of the web-only timeout teardown.
 """
 
 from __future__ import annotations
@@ -492,6 +499,30 @@ async def process_call_hangup(self: LifecycleSession) -> None:
     return
 
 
+def _max_call_duration_s(task_config: Any) -> float | None:  # why: legacy task config is an open dict
+    """Read the max-call-duration cap in seconds, or None when unset/disabled (spec 0042 Slice B).
+
+    Defensive on purpose: legacy rows may lack the key, carry None, or hold a
+    non-numeric value — any of those must skip the cap, never crash the
+    watchdog (the legacy web-only guard indexed the key and int()-converted it
+    blindly). Bools are rejected explicitly (isinstance(True, int) would
+    otherwise arm a 1-second cap); zero/negative values disable the cap.
+
+    Args:
+        task_config: The session's task config (expects a nested "task_config" dict).
+
+    Returns:
+        The positive cap in seconds, or None when no cap applies.
+    """
+    inner = (task_config or {}).get("task_config", {}) if isinstance(task_config, dict) else {}
+    raw = inner.get("call_terminate", None) if isinstance(inner, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if raw <= 0:
+        return None
+    return float(raw)
+
+
 async def check_for_completion(self: LifecycleSession) -> None:
     """The completion watchdog: silence recovery, inactivity hangup, goodbye grace.
 
@@ -504,12 +535,32 @@ async def check_for_completion(self: LifecycleSession) -> None:
     while True:
         await asyncio.sleep(2)
 
-        if self.is_web_based_call and time.time() - self.start_time >= int(
-            self.task_config["task_config"]["call_terminate"]
+        # spec-0042 Slice B: the cap parses defensively (missing/None/unusable →
+        # None → skip, never crash the watchdog); the web arm keeps its legacy
+        # timeout teardown, the telephony arm hangs up with goodbye (the same
+        # _hangup_after_goodbye path the inactivity hangup already uses there).
+        max_call_duration_s = _max_call_duration_s(self.task_config)
+        if (
+            self.is_web_based_call
+            and max_call_duration_s is not None
+            and time.time() - self.start_time >= max_call_duration_s
         ):
             logger.info("Hanging up for web call as max time of call has been reached")
             await self._TaskManager__process_end_of_conversation(web_call_timeout=True)
             self.hangup_detail = HangupReason.WEB_CALL_MAX_DURATION_REACHED
+            break
+
+        if (
+            not self.is_web_based_call
+            and max_call_duration_s is not None
+            and time.time() - self.start_time >= max_call_duration_s
+        ):
+            elapsed_s = time.time() - self.start_time
+            logger.info(
+                f"Hanging up telephony call as max time of call has been reached "
+                f"(elapsed={elapsed_s:.0f}s cap={max_call_duration_s:.0f}s)"
+            )
+            await self._hangup_after_goodbye(HangupReason.TELEPHONY_CALL_MAX_DURATION_REACHED)
             break
 
         if self.last_transmitted_timestamp == 0:

@@ -24,6 +24,12 @@ logger, signatures gained complete annotations (rule 6), public methods gained
 docstrings where the legacy file lacked them (rule 7). Bodies verbatim, including
 the ``-1`` reserved background-audio sequence and the recovery-rate semantics
 owned by ``revamp/resilient-core`` (R8, never re-fixed here).
+
+Spec 0042 Slice B intentionally extends the class beyond verbatim: the constructor
+takes ``interruption_backoff_period`` (post-barge-in hold in ms, 0 = off),
+``on_interruption_triggered`` stamps the barge-in wall-clock, and
+``get_audio_send_status`` holds SEND as WAIT while the window elapses. The
+default (0) keeps every existing construction behavior-identical.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ class InterruptionManager:
         accidental_interruption_phrases: list | None = None,
         incremental_delay: int = 900,
         minimum_wait_duration: int = 0,
+        interruption_backoff_period: int = 0,
     ) -> None:
         # User speaking state
         self.callee_speaking: bool = False
@@ -71,6 +78,14 @@ class InterruptionManager:
         self.number_of_words_for_interruption: int = number_of_words_for_interruption
         self.accidental_interruption_phrases: set[str] = set(accidental_interruption_phrases or [])
         self.minimum_wait_duration: int = minimum_wait_duration
+        # spec-0042 Slice B: post-barge-in hold before the agent resumes (ms, 0 = off).
+        # Parsed from conversation_config.interruption_backoff_period in CallConfig and
+        # assigned by composition after the pinned reconfigure; default constructions
+        # keep the legacy behavior (no hold).
+        self.interruption_backoff_period: int = interruption_backoff_period
+        # Wall-clock ms of the last user barge-in; the audio gate holds SEND until the
+        # backoff window after this stamp elapses.
+        self._last_interruption_ts_ms: float | None = None
 
         # Live interruption counters
         self.user_interrupted_agent_count: int = 0
@@ -100,7 +115,8 @@ class InterruptionManager:
         logger.info(
             f"InterruptionManager initialized: "
             f"words_for_interruption={number_of_words_for_interruption}, "
-            f"incremental_delay={incremental_delay}ms"
+            f"incremental_delay={incremental_delay}ms, "
+            f"interruption_backoff_period={interruption_backoff_period}ms"
         )
 
     # ── Audio gate ────────────────────────────────────────────────────────────
@@ -123,7 +139,18 @@ class InterruptionManager:
             logger.info("Audio status=WAIT - user is speaking")
             return "WAIT"
 
-        # Check 3: Grace period (only after first 2 turns to avoid latency on welcome)
+        # Check 3: Post-barge-in backoff (spec 0042 Slice B) - hold the agent's next
+        # audio briefly so a fresh response does not talk over the interrupting caller.
+        if self.interruption_backoff_period > 0 and self._last_interruption_ts_ms is not None:
+            time_since_interruption_ms = time.time() * 1000 - self._last_interruption_ts_ms
+            if time_since_interruption_ms < self.interruption_backoff_period:
+                logger.info(
+                    f"Audio status=WAIT - interruption backoff: {time_since_interruption_ms:.0f}ms / "
+                    f"{self.interruption_backoff_period}ms"
+                )
+                return "WAIT"
+
+        # Check 4: Grace period (only after first 2 turns to avoid latency on welcome)
         if history_length > 2:
             time_since_utterance_end = self.get_time_since_utterance_end()
             if time_since_utterance_end != -1 and time_since_utterance_end < self.incremental_delay:
@@ -236,6 +263,8 @@ class InterruptionManager:
         self.turn_id += 1
         self.user_interrupted_agent_count += 1
         self._awaiting_recovery = True
+        # spec-0042 Slice B: anchor the post-barge-in backoff window the audio gate holds.
+        self._last_interruption_ts_ms = time.time() * 1000
         self._finalize_agent_speaking_session()
         self.invalidate_pending_responses()
 

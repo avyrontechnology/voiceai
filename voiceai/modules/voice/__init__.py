@@ -69,7 +69,8 @@ MODULE: ModuleDef = ModuleDef(
     # Bumped per M5 move (verbatim; net positive until TaskManager regions
     # retire the legacy side — specs 0032-0037); slices after this one must
     # bring it back down as regions leave TaskManager.
-    max_lines=47200,
+    # Bumped for spec-0042 (runtime wiring + recording report + tests).
+    max_lines=48200,
 )
 
 __all__ = [

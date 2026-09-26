@@ -332,6 +332,13 @@ def adopt_call_config(self: Any, args: CallArgs) -> CallConfig:  # why: the live
                 self.task_config["tools_config"]["output"]["provider"] == "default" and self.enforce_streaming
             )  # In this case, this is a websocket connection and we should record
 
+        # spec-0042 Slice B: an explicit recording flag replaces the leg-derived
+        # default on every leg (web included); absent (None) keeps the legacy
+        # derivation above — zero behavior change for existing rows.
+        if call_config.recording is not None:
+            self.should_record = call_config.recording
+            logger.info(f"Explicit recording flag on the task config: should_record={self.should_record}")
+
         self._TaskManager__setup_input_handlers(args.turn_based_conversation, args.input_queue, self.should_record)
     self._TaskManager__setup_output_handlers(args.turn_based_conversation, args.output_queue)
     return call_config
@@ -567,7 +574,6 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
             self.number_of_words_for_interruption = call_config.number_of_words_for_interruption
             self.asked_if_user_is_still_there = False  # Used to make sure that if user's phrase qualifies as acciedental interruption, we don't break the conversation loop  # noqa: E501 — verbatim legacy line (R8)
             self.accidental_interruption_phrases = call_config.accidental_interruption_phrases
-            # self.interruption_backoff_period = 1000 #conversation_config.get("interruption_backoff_period", 300) #this is the amount of time output loop will sleep before sending next audio  # noqa: E501
 
             # Initialize InterruptionManager to centralize interruption logic
             self.interruption_manager = InterruptionManager(
@@ -576,6 +582,11 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
                 incremental_delay=self.incremental_delay,
                 minimum_wait_duration=self.minimum_wait_duration,
             )
+            # spec-0042 Slice B: the constructor call above keeps its pinned kwargs
+            # (tests/test_characterization_task_manager_construction.py owns that
+            # pin — not this slice's file set), so the backoff rides an attribute
+            # assignment with identical runtime effect: the audio gate reads it.
+            self.interruption_manager.interruption_backoff_period = call_config.interruption_backoff_period
 
             # Backchanneling presets are keyed on a synthesizer voice, which s2s has none of.
             self.should_backchannel = call_config.should_backchannel

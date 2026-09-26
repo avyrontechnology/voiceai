@@ -36,10 +36,17 @@ Preserved quirks (all owned by ``revamp/resilient-core`` — R8 — never fixed 
 * ``latency_dict``'s sub-dicts are stripped back to master's field set AFTER
   progression deep-copied the enriched versions — verbatim, including mutating the
   entries ``model_dump()`` may share with the live latency models.
-* `build_conversation_report` emits ``recording_url: None``; the S3 upload of the
-  recording is I/O and stays with the caller (``run()`` today, B13b after the swap).
+* `build_conversation_report` emits ``recording_url: None`` plus the capture-outcome
+  keys ``recording_status`` / ``recording_reason`` (spec 0042 Slice C); the S3 upload
+  of the recording is I/O and stays with the caller (``run()`` today, B13b after the
+  swap), which finalizes the outcome via `apply_recording_upload`.
 * `build_followup_report` logs the summarized data at INFO — a preserved PII quirk
   (AGENTS.md §4): TODO(spec-0005) drop to DEBUG when the platform strangler owns it.
+* PII (spec 0042 Slice C): this module logs identifiers only (call/stream sids, the
+  machine-readable outcome codes) — never audio bytes, transcripts, or payloads. The
+  artifact itself lives in object storage under the call's existing record auth;
+  retention/purge is out of scope here but is named, not silent (see the Slice C
+  report).
 """
 
 from __future__ import annotations
@@ -51,7 +58,18 @@ from typing import Any, Protocol
 
 from voiceai.common.logger import get_logger
 from voiceai.modules.voice.constants import MODULE_NAME
-from voiceai.modules.voice.models import ComponentLatencies
+from voiceai.modules.voice.models import (
+    RECORDING_REASON_AWAITING_UPLOAD,
+    RECORDING_REASON_DISABLED,
+    RECORDING_REASON_NO_AUDIO,
+    RECORDING_REASON_UPLOAD_FAILED,
+    RECORDING_REASON_UPLOADED,
+    RECORDING_STATUS_DISABLED,
+    RECORDING_STATUS_FAILED,
+    RECORDING_STATUS_PENDING_UPLOAD,
+    RECORDING_STATUS_RECORDED,
+    ComponentLatencies,
+)
 from voiceai.modules.voice.static_methods import asr_id_to_int
 
 logger = get_logger(MODULE_NAME)
@@ -59,6 +77,7 @@ logger = get_logger(MODULE_NAME)
 __all__ = [
     "ReportSession",
     "TeardownSnapshot",
+    "apply_recording_upload",
     "build_conversation_report",
     "build_followup_report",
     "snapshot_teardown",
@@ -78,6 +97,16 @@ class ReportSession(Protocol):
     task_config: dict
     call_sid: Any  # why: legacy id attr, str or None
     stream_sid: Any  # why: legacy id attr, str or None
+
+    # --- recording seams (spec 0042 Slice C; read-only, composition-owned) ---
+    # `should_record` is the runtime capture flag composition derives per call
+    # (composition.py:268 default, :329-333 leg derivation; Slice B may let the
+    # explicit `recording` task-config toggle win — this facade reads the flag,
+    # never the derivation). `conversation_recording` is the capture ledger.
+    # Both are declared optional-typed via getattr in the capture: sessions
+    # predating the seam (followup tasks, old fakes) simply read as disabled.
+    should_record: bool
+    conversation_recording: Any  # why: legacy dict-of-lists capture ledger
 
     # --- collaborators the capture reads through ---
     tools: dict
@@ -211,6 +240,11 @@ class TeardownSnapshot:
     voicemail_detected: Any  # why: handler-reported flag
     voicemail_check_count: Any  # why: handler-reported count
 
+    # --- recording capture outcome inputs (spec 0042 Slice C) ---
+    recording_enabled: bool
+    recording_requested: bool | None
+    recording_has_audio: bool
+
     # --- followup-task fields (the non-conversation else branch) ---
     task_type: Any  # why: legacy task_config["task_type"] string
     input_parameters: Any  # why: free-form task input payload
@@ -271,7 +305,139 @@ def _empty_conversation_fields() -> dict[str, Any]:
         "hangup_decision_at": None,
         "voicemail_detected": False,
         "voicemail_check_count": 0,
+        "recording_enabled": False,
+        "recording_requested": None,
+        "recording_has_audio": False,
     }
+
+
+def _recording_has_audio(recording: Any) -> bool:
+    """Whether the capture ledger holds any audio worth uploading (spec 0042 Slice C).
+
+    Inspects ledger SHAPE only (frame counts, byte lengths) — never the audio
+    content itself (PII: no payload leaves this predicate; callers must not log
+    its input).
+
+    Args:
+        recording: The session's ``conversation_recording`` ledger, or ``None``
+            when the session predates the seam.
+
+    Returns:
+        True when at least one output frame or one input byte was captured.
+    """
+    if not isinstance(recording, dict):
+        return False
+    output = recording.get("output")
+    if isinstance(output, list) and len(output) > 0:
+        return True
+    data = recording.get("input")
+    if isinstance(data, dict):
+        data = data.get("data")
+    return bool(data)
+
+
+def _resolve_recording_inputs(session: ReportSession) -> dict[str, Any]:
+    """Resolve the snapshot's recording inputs from the existing seams (spec 0042 Slice C).
+
+    Read-only over seams composition owns (composition.py:268-273 seeds,
+    :329-333 derives): the runtime ``should_record`` flag is the truth about
+    whether capture ran; the explicit ``recording`` task-config toggle (Slice A
+    schema) is recorded as provenance. Precedence mirrors the Slice B runtime
+    rule — the runtime flag wins; the explicit toggle is the fallback only when
+    the session predates the ``should_record`` seam; absent both reads disabled.
+
+    Args:
+        session: The live call session (the legacy TaskManager injects itself).
+
+    Returns:
+        The ``recording_enabled`` / ``recording_requested`` /
+        ``recording_has_audio`` snapshot inputs.
+    """
+    requested: bool | None = None
+    task_block = session.task_config.get("task_config")
+    if isinstance(task_block, dict):
+        toggle = task_block.get("recording")
+        if isinstance(toggle, bool):
+            requested = toggle
+    enabled = getattr(session, "should_record", None)
+    if not isinstance(enabled, bool):
+        enabled = requested if requested is not None else False
+    return {
+        "recording_enabled": enabled,
+        "recording_requested": requested,
+        "recording_has_audio": _recording_has_audio(getattr(session, "conversation_recording", None)),
+    }
+
+
+def _resolve_recording_outcome(snap: TeardownSnapshot) -> tuple[str, str]:
+    """Resolve the build-time capture outcome from the snapshot (spec 0042 Slice C).
+
+    Pure: capture enabled but silent is already a terminal ``failed`` (the
+    teardown-time buffers are final — nothing later can capture more); capture
+    enabled with audio is ``pending_upload`` until the caller finalizes it via
+    `apply_recording_upload` after the S3 upload (that transient value is loud,
+    never a silent missing key — a persisted ``pending_upload`` means the
+    finalizer never ran).
+
+    Args:
+        snap: The teardown capture.
+
+    Returns:
+        The ``(recording_status, recording_reason)`` pair for the report.
+    """
+    if not snap.recording_enabled:
+        return RECORDING_STATUS_DISABLED, RECORDING_REASON_DISABLED
+    if not snap.recording_has_audio:
+        return RECORDING_STATUS_FAILED, RECORDING_REASON_NO_AUDIO
+    return RECORDING_STATUS_PENDING_UPLOAD, RECORDING_REASON_AWAITING_UPLOAD
+
+
+def apply_recording_upload(
+    output: dict[str, Any],
+    *,
+    recording_url: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Finalize the call record's capture outcome after the S3 upload (spec 0042 Slice C).
+
+    The caller's post-build step around ``save_audio_file_to_s3`` (``run()``
+    today, B13b after the swap): a URL finalizes ``recorded``; a reason code
+    (or neither) finalizes ``failed``. The record always ends with
+    ``recording_url`` plus a machine-readable ``recording_status`` /
+    ``recording_reason`` — never a silent missing key, never exception text
+    (callers map exceptions to ``RECORDING_REASON_*`` codes before passing
+    them; ``str(exc)`` in a record is a violation).
+
+    PII: the failure branch logs identifiers only (call/stream sids already on
+    the report, plus the reason code) — never audio, transcripts, or payloads.
+
+    Args:
+        output: The conversation report under finalization; mutated in place
+            and returned for chaining.
+        recording_url: The uploaded artifact URL, or ``None`` when the upload
+            did not produce one.
+        reason: The machine-readable failure code (a ``RECORDING_REASON_*``
+            value); defaults to ``upload_failed`` when the upload produced no
+            URL and no code.
+
+    Returns:
+        The same report dict, with its recording outcome finalized.
+    """
+    if recording_url:
+        output["recording_url"] = recording_url
+        output["recording_status"] = RECORDING_STATUS_RECORDED
+        output["recording_reason"] = RECORDING_REASON_UPLOADED
+        return output
+    output["recording_url"] = None
+    output["recording_status"] = RECORDING_STATUS_FAILED
+    output["recording_reason"] = reason or RECORDING_REASON_UPLOAD_FAILED
+    logger.warning(
+        "recording upload did not land: call_sid=%s stream_sid=%s reason=%s",
+        output.get("call_sid"),
+        output.get("stream_sid"),
+        output["recording_reason"],
+    )
+    return output
 
 
 def _capture_conversation_fields(session: ReportSession, has_asr_tts: bool, has_s2s: bool) -> dict[str, Any]:
@@ -337,6 +503,7 @@ def _capture_conversation_fields(session: ReportSession, has_asr_tts: bool, has_
     fields["hangup_decision_at"] = session.hangup_decision_at
     fields["voicemail_detected"] = session.voicemail_handler.detected
     fields["voicemail_check_count"] = session.voicemail_handler.check_count
+    fields.update(_resolve_recording_inputs(session))
     return fields
 
 
@@ -725,7 +892,11 @@ def build_conversation_report(snap: TeardownSnapshot) -> dict[str, Any]:
     as run() itself does today.
 
     ``recording_url`` is emitted as ``None``: uploading the recording is I/O and stays
-    with the caller (run() today; B13b after the swap).
+    with the caller (run() today; B13b after the swap), which finalizes the outcome
+    via `apply_recording_upload`. ``recording_status`` / ``recording_reason`` always
+    ride along (spec 0042 Slice C — never a silent missing key): ``disabled`` when
+    the capture flag was off, ``failed``/``no_audio_captured`` when it was on but the
+    teardown-time buffers are empty, ``pending_upload`` when audio awaits the caller.
 
     Args:
         snap: The teardown capture (consumed: its referenced rows are mutated).
@@ -743,6 +914,7 @@ def build_conversation_report(snap: TeardownSnapshot) -> dict[str, Any]:
     _promote_progression_turn_ids(output["progression_data"])
     _strip_latency_dict_to_master(output["latency_dict"])
     output["recording_url"] = None
+    output["recording_status"], output["recording_reason"] = _resolve_recording_outcome(snap)
     return output
 
 

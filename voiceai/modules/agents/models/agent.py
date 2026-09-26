@@ -40,7 +40,7 @@ def _default_channels() -> list[Channel]:
 
 
 class ConversationConfig(BaseModel):
-    """Per-task conversation behavior: latency, interruption, silence, and hangup policy."""
+    """Per-task conversation behavior: latency, interruption, silence, hangup policy, and capture."""
 
     optimize_latency: bool | None = Field(
         default=True, description="Whether to aggressively optimize for lower latency across the pipeline."
@@ -55,7 +55,12 @@ class ConversationConfig(BaseModel):
         default=1, description="Minimum number of words detected before triggering a barge-in/interruption."
     )
     interruption_backoff_period: int | None = Field(
-        default=100, description="Time in milliseconds to ignore further audio immediately after an interruption."
+        default=0,
+        description=(
+            "Quiet window in milliseconds after a barge-in during which further "
+            "user audio is held (spec 0042 Slice B wiring in "
+            "voice/session/interruption.py; 0 disables the hold)."
+        ),
     )
     hangup_after_LLMCall: bool | None = Field(
         default=False, description="Whether to automatically hang up after the LLM agent completes its primary goal."
@@ -72,9 +77,6 @@ class ConversationConfig(BaseModel):
     )
     backchanneling_start_delay: int | None = Field(
         default=5, description="Delay in seconds before initiating backchanneling behavior."
-    )
-    ambient_noise: bool | None = Field(
-        default=False, description="Whether to play synthetic ambient noise in the background."
     )
     call_terminate: int | None = Field(
         default=90, description="Maximum total call duration in seconds before forced termination."
@@ -103,6 +105,66 @@ class ConversationConfig(BaseModel):
     )
     voicemail_min_transcript_length: int | None = Field(
         default=7, description="Minimum number of transcribed words to trigger an interim voicemail check."
+    )
+    recording: bool = Field(
+        default=False,
+        description=(
+            "Capture enable for the call recording. An explicit True/False wins over the legacy "
+            "leg-derived default (Slice B: composition derives should_record from the leg when "
+            "this flag is absent); False keeps today's default of no capture."
+        ),
+    )
+    call_hangup_message: str | dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Message spoken when the agent hangs up (spec 0042 Slice A promotion of the hidden "
+            "legacy key; runtime read at voice/session/config.py:378, meaning byte-identical). "
+            "A plain string plays as-is; a per-language dict selects by call language, mirroring "
+            "check_user_online_message."
+        ),
+    )
+    welcome_message_delay: float | None = Field(
+        default=None,
+        description=(
+            "Delay in MILLISECONDS before the welcome message plays (spec 0042 Slice A "
+            "promotion of the hidden legacy key; runtime read at "
+            "voice/session/config.py:405, meaning byte-identical). Absent (None) keeps "
+            "the legacy derivation; use sites guard with `or 0`."
+        ),
+    )
+    discard_pre_welcome_utterance: bool | None = Field(
+        default=False,
+        description=(
+            "Drop user speech that starts before the welcome message finishes (spec 0042 "
+            "promotion of the hidden legacy key; runtime read at "
+            "voice/session/config.py:471, meaning byte-identical)."
+        ),
+    )
+    language_injection_mode: str | None = Field(
+        default=None,
+        description=(
+            "Where to inject the detected-language instruction: 'system_only' (prepend "
+            "to the system prompt) or 'per_turn' (prepend to every user turn); unknown "
+            "values inject nothing (spec 0042 promotion of the hidden legacy key; "
+            "runtime read at voice/session/config.py:440, meaning byte-identical)."
+        ),
+    )
+    language_instruction_template: str | None = Field(
+        default=None,
+        description=(
+            "Template for the detected-language instruction with a {language} "
+            "placeholder (spec 0042 promotion of the hidden legacy key; runtime read "
+            "at voice/session/config.py:441, meaning byte-identical)."
+        ),
+    )
+    end_call_tool_mode: str | None = Field(
+        default=None,
+        description=(
+            "End-call tool wiring: 'primary' or 'primary_with_shadow_hangup' arms the "
+            "model-driven hangup alongside the LLM goal check; any other value "
+            "leaves it disarmed (spec 0042 promotion of the hidden legacy key; "
+            "runtime read at voice/session/config.py:266, meaning byte-identical)."
+        ),
     )
 
     @field_validator("hangup_after_silence", mode="before")

@@ -24,6 +24,16 @@ Preserved quirks (never "fixed" here — behavior-invariant checklist, R7/R12):
   interior whitespace.
 * ``stream`` uses bracket access on ``synthesizer["stream"]``: a synthesizer block
   without the key raises KeyError exactly as before.
+
+Spec 0042 Slice B adds two NEW (non-verbatim) parsed keys after the legacy set:
+
+* ``interruption_backoff_period`` — opt-in post-barge-in hold in milliseconds,
+  coerced to a non-negative int (absent/unusable → 0 = off, the legacy behavior
+  when the key was stored but never read). Composition assigns it onto the
+  reconfigured ``InterruptionManager``; default constructions keep 0.
+* ``recording`` — the explicit capture toggle: True/False when the task config
+  carries the key, None when absent so composition keeps the legacy leg-derived
+  ``should_record`` default (zero behavior change for existing rows).
 """
 
 from __future__ import annotations
@@ -185,6 +195,18 @@ def _welcome_audio(
     return welcome_message_audio, welcome_message_audio_sample_rate, preloaded_welcome_audio
 
 
+def _backoff_ms(raw: Any) -> int:
+    """Coerce the backoff config to a non-negative hold in milliseconds (spec 0042 Slice B).
+
+    Only a positive number enables the hold; absent/None/zero/negative/unusable
+    values answer 0 (off), which reproduces the legacy behavior for rows that
+    stored the key without any runtime ever reading it.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        return 0
+    return int(raw)
+
+
 def _completion_prompt(conversation_config: dict[str, Any], use_llm_to_determine_hangup: Any) -> Any:
     """Build the completion-check prompt (tm:616-626), or None when LLM hangup is off.
 
@@ -318,6 +340,8 @@ class CallConfig:
     switch_handoff_messages: Any  # why: the task's own dict by reference, or a fresh {}
     agent_names: Any  # why: the task's own dict by reference, or a fresh {}
     is_s2s: bool  # pipeline dispatch: selector-resolved (spec 0028), legacy-inferred when absent
+    interruption_backoff_period: int  # spec-0042 Slice B: post-barge-in hold in ms, 0 = off
+    recording: bool | None  # spec-0042 Slice B: explicit capture toggle; None = absent, keep legacy derivation
 
     @classmethod
     def parse(
@@ -369,6 +393,15 @@ class CallConfig:
 
         conversation_config: dict[str, Any] = task.get("task_config", {})
 
+        # spec-0042 Slice B: the explicit capture toggle. None marks "key absent"
+        # so composition keeps the legacy leg-derived should_record default; an
+        # explicit None in the payload is treated the same (defensive: the schema
+        # types the field bool, None should not occur). Deviation note: a bare
+        # .get("recording", False) would conflate absent with explicit-False and
+        # flip leg-derived True to False for every legacy row — the None sentinel
+        # preserves the spec's "absent keeps legacy derivation" requirement.
+        recording_raw = conversation_config.get("recording", None)
+        recording = None if recording_raw is None else bool(recording_raw)
         check_user_online_message_config = conversation_config.get(
             "check_user_online_message", DEFAULT_USER_ONLINE_MESSAGE
         )
@@ -438,4 +471,6 @@ class CallConfig:
             discard_pre_welcome_utterance=conversation_config.get("discard_pre_welcome_utterance", False),
             switch_handoff_messages=task.get("tools_config", {}).get("switch_handoff_messages") or {},
             agent_names=task.get("tools_config", {}).get("agent_names") or {},
+            interruption_backoff_period=_backoff_ms(conversation_config.get("interruption_backoff_period", 0)),
+            recording=recording,
         )

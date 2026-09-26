@@ -45,6 +45,9 @@ FLAGGED_RESIDUALS = {
     "voiceai/modules/voice/session/turn/history_sync.py": "B10",
     "voiceai/modules/voice/session/s2s_runner.py": "B5",
     "voiceai/modules/voice/tts/providers/kalpa_synthesizer.py": "B12b",
+    # spec-0042 integrator: recording capture outcome (+~150). Owns no B-step;
+    # the voice-session split that shrinks it is still to be specced.
+    "voiceai/modules/voice/session/lifecycle/report.py": "spec-0042",
 }
 
 

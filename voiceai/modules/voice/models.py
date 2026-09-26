@@ -13,7 +13,7 @@ until the report builders (step B6) tighten them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,17 @@ __all__ = [
     "LatencyReport",
     "LidDecisionRecord",
     "PlacedCall",
+    "RECORDING_REASON_AWAITING_UPLOAD",
+    "RECORDING_REASON_DISABLED",
+    "RECORDING_REASON_NO_AUDIO",
+    "RECORDING_REASON_UPLOADED",
+    "RECORDING_REASON_UPLOAD_FAILED",
+    "RECORDING_STATUS_DISABLED",
+    "RECORDING_STATUS_FAILED",
+    "RECORDING_STATUS_PENDING_UPLOAD",
+    "RECORDING_STATUS_RECORDED",
+    "RecordingOutcome",
+    "RecordingStatus",
     "TalkoPartnerConfig",
     "TranscriberEvent",
     "TurnMeta",
@@ -332,3 +343,52 @@ class TalkoPartnerConfig(BaseFields):
     default_did: str | None = None
     dids: list[str] = Field(default_factory=list)
     vendor_config_id: str | None = None
+
+
+#: The closed ``recording_status`` vocabulary (`RecordingOutcome.status`).
+RecordingStatus = Literal["recorded", "disabled", "failed", "pending_upload"]
+
+#: Call-record capture outcome, closed vocabulary (spec 0042 Slice C).
+#:
+#: The teardown report always carries ``recording_url`` plus ``recording_status`` /
+#: ``recording_reason`` — never a silent missing key. ``pending_upload`` is the
+#: transient build-time value when capture ran but the caller's S3 upload has not
+#: finalized the record yet (``run()`` finalizes via
+#: ``session.lifecycle.report.apply_recording_upload``); a persisted
+#: ``pending_upload`` means the finalizer never ran and is itself the signal.
+RECORDING_STATUS_RECORDED: Final[RecordingStatus] = "recorded"
+RECORDING_STATUS_DISABLED: Final[RecordingStatus] = "disabled"
+RECORDING_STATUS_FAILED: Final[RecordingStatus] = "failed"
+RECORDING_STATUS_PENDING_UPLOAD: Final[RecordingStatus] = "pending_upload"
+
+#: Machine-readable capture-outcome reasons (spec 0042 Slice C). ``None`` is never
+#: a reason — ``recording_reason`` is always one of these codes, except on a
+#: ``recorded`` outcome where it is ``capture_uploaded``.
+RECORDING_REASON_DISABLED: Final[str] = "recording_disabled"
+RECORDING_REASON_AWAITING_UPLOAD: Final[str] = "awaiting_upload"
+RECORDING_REASON_UPLOADED: Final[str] = "capture_uploaded"
+RECORDING_REASON_UPLOAD_FAILED: Final[str] = "upload_failed"
+RECORDING_REASON_NO_AUDIO: Final[str] = "no_audio_captured"
+
+
+class RecordingOutcome(BaseModel):
+    """The call record's capture-outcome block (spec 0042 Slice C).
+
+    Typed view of the ``recording_url`` / ``recording_status`` / ``recording_reason``
+    keys the teardown report emits on every conversation payload: the artifact URL
+    when capture ran and the upload landed, else explicit ``None`` plus a
+    machine-readable reason (``disabled`` / ``failed`` — never a silent missing
+    key). Retention: the artifact itself lives in object storage under the call's
+    existing record auth; purge is out of scope (named, not built — see the Slice
+    C report) and this model carries no bytes, only identifiers.
+
+    Attributes:
+        recording_url: Artifact URL when capture was enabled and the upload
+            succeeded; ``None`` otherwise (status/reason say why).
+        status: One of the ``RECORDING_STATUS_*`` codes.
+        reason: One of the ``RECORDING_REASON_*`` codes; never ``None``.
+    """
+
+    recording_url: str | None = None
+    status: RecordingStatus = RECORDING_STATUS_DISABLED
+    reason: str = RECORDING_REASON_DISABLED

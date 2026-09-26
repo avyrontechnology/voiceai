@@ -1976,9 +1976,16 @@ class TaskManager(BaseManager):
 
                 output["recording_url"] = None
                 if self.should_record:
-                    output["recording_url"] = await save_audio_file_to_s3(
-                        self.conversation_recording, self.sampling_rate, self.assistant_id, self.run_id
-                    )
+                    try:
+                        output["recording_url"] = await save_audio_file_to_s3(
+                            self.conversation_recording, self.sampling_rate, self.assistant_id, self.run_id
+                        )
+                        # spec-0042 integrator: finalize the Slice C capture outcome at the
+                        # single upload site (B13b owns the swap, not a second call).
+                        output = _voice_report.apply_recording_upload(output, recording_url=output["recording_url"])
+                    except Exception:
+                        logger.error(f"Recording upload failed for run {self.run_id}")
+                        output = _voice_report.apply_recording_upload(output)
             else:
                 output = _voice_report.build_followup_report(_teardown_snap)
 

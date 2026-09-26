@@ -58,7 +58,7 @@ class HealthSession(Protocol):
     tools: dict
     stream_sid_ts: Any  # why: epoch ms stamp or falsy "not yet"
     conversation_start_init_ts: float
-    welcome_message_delay: Any  # why: configured seconds or None
+    welcome_message_delay: Any  # why: configured milliseconds or None (spec 0042 pins ms)
 
     # --- this module's own surface, reached back through the session's delegators ---
     def _active_tool(self, kind: Any) -> Any: ...  # noqa: D102

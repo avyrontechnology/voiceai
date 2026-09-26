@@ -133,9 +133,53 @@ is revert. UI binds in its own track afterwards.
 
 ## Burn-down
 
-- [ ] Slice A: schema (Agent 1).
-- [ ] Slice B: runtime (Agent 2).
-- [ ] Slice C: report artifact (Agent 3).
-- [ ] Slice D: contract pins + docs (Agent 4).
-- [ ] Slice E: spec 0043 draft (Agent 5).
-- [ ] Integrator: drift resolution + gate + report (no commit — Phase D gate held).
+- [x] Slice A: schema (Agent 1) — dead keys deleted, recording + 2 promotions landed.
+- [x] Slice B: runtime (Agent 2) — backoff + recording + telephony call_terminate wired, 37 cases.
+- [x] Slice C: report artifact (Agent 3) — capture-outcome triple + upload finalizer contract.
+- [x] Slice D: contract pins + docs (Agent 4) — 6 mechanical pins, openapi/reference in sync.
+- [x] Slice E: spec 0043 draft (Agent 5) — namespaced passthrough, 3 OPENs, 6-slice burn-down.
+- [x] Integrator: drift resolution + gate + report (no commit — Phase D gate held).
+
+## Integration notes (integrator resolutions, all loud)
+
+- **Backoff restored.** Slice A deleted `interruption_backoff_period` per the
+  delete-default; Slice B then wired it honestly (gate hold in the
+  interruption manager, default 0). Integrator restored the field with
+  consumer pins and flipped Slice A's absence tests to a default-0 pin.
+  `ambient_noise` stays deleted (no honest runtime meaning without
+  `agent_manager/` edits — forbidden).
+- **call_terminate default 90 kept on both legs.** Slice B's extension means
+  telephony rows now cap at the schema default unless configured — the ONE
+  product-visible behavior change in this build (previously uncapped on
+  telephony). Kept per Decision 3 (extend, approved); mitigation is raising
+  the default or per-agent values. Reason code split:
+  `TELEPHONY_CALL_MAX_DURATION_REACHED` added (web member untouched —
+  historical data preserved).
+- **recording default False is explicit, not absent.** Validated writes
+  materialize explicit-False, which overrides leg-derived capture (Slice B's
+  None-sentinel only sees raw-dict paths). Privacy-safe and intended: no
+  capture unless opted in. No user-visible regression — nothing ever
+  surfaced leg-derived capture (the report stub was always `None`).
+- **Three more hidden keys promoted** (Slice A left them open; integrator
+  verified each chain): `discard_pre_welcome_utterance`,
+  `language_injection_mode` / `language_instruction_template`,
+  `end_call_tool_mode` — all `str|bool|None` tolerant (strict Literals would
+  newly reject legacy rows the runtime tolerates today).
+- **welcome_message_delay pinned milliseconds.** `welcome.py` sleeps ms;
+  `health.py`'s "seconds" comment was the only lie (math already consistent
+  under ms) — comment fixed, zero behavior change.
+- **Upload finalizer wired in legacy `run()`.** The single S3 site now calls
+  `apply_recording_upload` (4 lines, existing bridge import, no new edges) —
+  otherwise every recorded call would persist `pending_upload` forever.
+  Narrow exception to the legacy-edit ban, approved here by the integrator.
+- **Literal hygiene skipped.** New config key-name literals stay at their
+  parse sites: no precedent exists (`voice/constants.py` holds wire keys,
+  not config keys) and single-use sites don't trip Rule 8.
+- **Budgets ratcheted, not weakened:** agents 14700→14900, voice
+  47200→48200 (precedent-cited bumps); `lifecycle/report.py` (950 lines)
+  registered in `FLAGGED_RESIDUALS` + `SIZE_DEBT` under spec-0042 (owning
+  split TBD); canonical-file budget untouched (auth split precedent holds).
+- **Spec 0043 review:** namespaced-past-through mechanism approved as
+  drafted; OPEN-1 (agent-wide bag) stays deferred; OPEN-2 bounds are
+  calibratable constants; OPEN-3 correctly assigns the read API to the first
+  consuming spec. Ready to build when scheduled.

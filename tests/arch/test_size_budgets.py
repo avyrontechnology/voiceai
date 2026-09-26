@@ -51,6 +51,9 @@ SIZE_DEBT: dict[str, str] = {
     "voiceai/platform/store.py": "spec-0025",
     "voiceai/helpers/utils.py": "spec-0022",
     "voiceai/modules/voice/tts/providers/kalpa_synthesizer.py": "spec-0022",
+    # spec-0042 integrator: recording capture outcome grew lifecycle/report.py past
+    # 800; the voice-session split that shrinks it is still to be specced.
+    "voiceai/modules/voice/session/lifecycle/report.py": "spec-0042",
 }
 
 #: Kernel ceilings (blueprint target-tree budgets; measured well below today).
