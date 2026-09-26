@@ -309,6 +309,36 @@ def _build_tools_service(db_client: Any) -> Any:
     return ToolsService(ToolsRepository(system), ToolsRepository(scoped))
 
 
+def _build_chat_service(db_client: Any, definitions: Any) -> Any:
+    """Build the chat service over a scoped sessions view (spec 0038, Phase C).
+
+    Called per request (Factory): the tenant binds at construction. The LLM
+    turn runner is the shared single-turn completer (history passes inline
+    each turn, so no sessionful LLM client is needed).
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.chat.adapters.llm import complete_chat_turn
+    from voiceai.modules.chat.models import ChatSession
+    from voiceai.modules.chat.repository import ChatSessionsRepository
+    from voiceai.modules.chat.service import ChatService
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    current = current_tenant().tenant_id
+    scoped: Any = TenantScopedRepository(
+        factory(db_client, Collections.CHAT_SESSIONS, ChatSession),
+        current,
+        Collections.CHAT_SESSIONS,
+    )
+    return ChatService(
+        repository=ChatSessionsRepository(scoped),
+        definitions=definitions,
+        complete=complete_chat_turn,
+    )
+
+
 def _build_voices_service(db_client: Any, definitions: Any, catalog: Any) -> Any:
     """Build the voice-library service over the ambient tenant's view.
 
@@ -369,7 +399,6 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Tools Module providers live here (above agents): the agent service
     # resolves shared tool refs through the tools service.
     tools_service = providers.Factory(_build_tools_service, db_client)
-
     # Agents Module: per-request collection views (spec 0020, M1b). These must
     # stay Factory, never Singleton: a shared instance would pin the first
     # request's tenant on every later request. The driver handles underneath
@@ -384,6 +413,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
         catalog=catalog_service,
         tools=tools_service,
     )
+
+    # Chat Module: per-request tenant view (spec 0038, Phase C). Factory,
+    # never Singleton — same pinning hazard as the other scoped views.
+    chat_service = providers.Factory(_build_chat_service, db_client, agent_definitions)
 
     # Voice Module
     voice_call_service = providers.Factory(

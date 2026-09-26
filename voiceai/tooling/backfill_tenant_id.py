@@ -58,6 +58,7 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "agent_templates",
     "voices",
     "tools",
+    "chat_sessions",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).

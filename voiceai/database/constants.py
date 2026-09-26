@@ -41,6 +41,9 @@ class Collections(str, Enum):
     #: Shareable tool rows (spec 0029, Phase B): system internal tools +
     #: tenant tools and webhooks.
     TOOLS = "tools"
+    #: Per-agent chat sessions (spec 0038, Phase C): tenant-scoped
+    #: text-conversation histories.
+    CHAT_SESSIONS = "chat_sessions"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:
