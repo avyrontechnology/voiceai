@@ -13,7 +13,7 @@ import importlib
 import os
 from collections.abc import Callable, Iterator
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from dependency_injector import providers
@@ -211,7 +211,9 @@ def wired_quickstart(arch_environment: Environment) -> Iterator[tuple[ModuleType
     store = MemoryStore()
     container = build_container(arch_environment)
     container.auth_store.override(providers.Object(store))
-    container.auth_service.override(providers.Object(AuthService(store, jwt=_JWT)))
+    container.auth_service.override(
+        providers.Object(AuthService(cast(auth_module.AuthStorePort, store), jwt=_JWT))
+    )
     state.container = container
     state.platform_store = store
     try:

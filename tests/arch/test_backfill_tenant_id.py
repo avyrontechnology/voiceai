@@ -70,3 +70,65 @@ def test_needs_backfill_flags_missing_and_none_only() -> None:
     assert needs_backfill({}) is True
     assert needs_backfill({"tenant_id": None}) is True
     assert needs_backfill({"tenant_id": "acme"}) is False
+
+
+def test_plan_default_tenant_missing_plans_row() -> None:
+    """A missing default slug plans the tenant row (id minted at insert, not here)."""
+    from voiceai.tooling.backfill_identity import plan_default_tenant
+
+    plan = plan_default_tenant([])
+    assert plan["slug"] == DEFAULT_TENANT_ID
+    assert plan["name"] == "Default"
+    assert plan["plan"] == DEFAULT_TENANT_ID
+    assert plan["status"] == "active"
+    assert "tenant_id" not in plan
+    assert "id" not in plan
+
+
+def test_plan_default_tenant_present_is_noop() -> None:
+    """An existing default slug plans nothing (empty dict = no insert)."""
+    from voiceai.tooling.backfill_identity import plan_default_tenant
+
+    assert plan_default_tenant([DEFAULT_TENANT_ID]) == {}
+    assert plan_default_tenant(["acme", DEFAULT_TENANT_ID]) == {}
+
+
+def test_rewrite_value_matrix() -> None:
+    """Slugs rewrite to hex; system/hex/None/unknown pass through unchanged."""
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID
+    from voiceai.tooling.backfill_identity import rewrite_value
+
+    hex24 = "64f1a2b3c4d5e6f70819293a"
+    hex32 = "a" * 32
+    mapping = {DEFAULT_TENANT_ID: hex24}
+
+    assert rewrite_value(DEFAULT_TENANT_ID, mapping) == hex24
+    assert rewrite_value(SYSTEM_TENANT_ID, mapping) == SYSTEM_TENANT_ID
+    assert rewrite_value(hex24, mapping) == hex24
+    assert rewrite_value(hex32, mapping) == hex32
+    assert rewrite_value(None, mapping) is None
+    assert rewrite_value("unknown-slug", mapping) == "unknown-slug"
+
+
+def test_audit_documents_report_shape() -> None:
+    """Audit reports per-collection ids needing rewrite; skips system/hex/None/unknown."""
+    from voiceai.tooling.backfill_identity import audit_documents
+
+    hex24 = "64f1a2b3c4d5e6f70819293a"
+    mapping = {DEFAULT_TENANT_ID: hex24}
+    documents: dict[str, list[dict[str, str | None]]] = {
+        "users": [
+            {"id": "u-1", "tenant_id": DEFAULT_TENANT_ID},
+            {"id": "u-2", "tenant_id": "system"},
+            {"id": "u-3", "tenant_id": hex24},
+            {"id": "u-4", "tenant_id": None},
+            {"id": "u-5", "tenant_id": "unknown-slug"},
+            {"id": "u-6", "org_id": DEFAULT_TENANT_ID},
+            {"tenant_id": DEFAULT_TENANT_ID},
+        ],
+        "agents": [{"id": "a-1", "tenant_id": DEFAULT_TENANT_ID}],
+        "wallets": [{"id": "w-1", "tenant_id": hex24}],
+    }
+
+    assert audit_documents(documents, mapping) == {"users": ["u-1", "u-6"], "agents": ["a-1"]}
+    assert audit_documents({"users": []}, mapping) == {}

@@ -24,12 +24,14 @@ async def _two_orgs() -> tuple[AuthService, FakeAuthStore, User, User]:
 
     The store is global (discovery layer); org separation lives in the service.
     Users are written straight to the store — signup only ever mints the first.
+    Tenants are object hexes (spec 0040); org strings stay for the deprecated
+    org checks the service still enforces alongside.
     """
     store = FakeAuthStore()
     service = AuthService(store, jwt=_JWT)
     acme, _ = await _signed_up(service, email="owner@acme.test")
     acme.org_id = "acme"
-    acme.tenant_id = "acme"
+    acme.tenant_id = "a" * 24
     await store.save_user(acme)
     globex = User(
         user_id="usr-globex",
@@ -38,6 +40,7 @@ async def _two_orgs() -> tuple[AuthService, FakeAuthStore, User, User]:
         password_hash="x",
         role="owner",
         org_id="globex",
+        tenant_id="b" * 24,
     )
     await store.save_user(globex)
     return service, store, acme, globex
@@ -45,15 +48,19 @@ async def _two_orgs() -> tuple[AuthService, FakeAuthStore, User, User]:
 
 def _principal_for(user: User) -> Principal:
     """Act-as principal for a user (mirrors the session resolver's mapping)."""
-    return _owner_principal(user)
+    principal = _owner_principal(user)
+    principal.tenant_id = user.tenant_id or "default"
+    return principal
 
 
-async def test_models_sync_tenant_from_org() -> None:
-    """Every validation stamps `tenant_id` from `org_id` — writers cannot forget."""
+async def test_tenant_stamping_is_explicit_not_synced() -> None:
+    """No validator syncs tenants (spec 0040): stamping is explicit only."""
     user = User(user_id="u-1", email="u@x.test", password_hash="x", org_id="acme")
 
-    assert user.tenant_id == "acme"
-    assert User.model_validate(user.model_dump()).tenant_id == "acme"
+    assert user.tenant_id is None
+    stamped = User(user_id="u-2", email="v@x.test", password_hash="x", org_id="acme", tenant_id="c" * 24)
+
+    assert User.model_validate(stamped.model_dump()).tenant_id == "c" * 24
 
 
 async def test_list_users_stays_inside_the_callers_org() -> None:
@@ -108,15 +115,15 @@ async def test_last_owner_guard_counts_per_org() -> None:
 
 
 async def test_invite_inherits_the_inviters_org() -> None:
-    """Invites carry the inviter's org; acceptance mints the user inside it."""
+    """Invites carry the inviter's tenant hex; acceptance mints inside it."""
     service, store, acme, _ = await _two_orgs()
 
     invite, raw = await service.invite(_principal_for(acme), "new@acme.test", "New", "member")
 
     assert invite.org_id == "acme"
-    assert invite.tenant_id == "acme"
+    assert invite.tenant_id == "a" * 24
     user, _ = await service.accept_invite(raw, None, "new-pass-1")
-    assert (user.org_id, user.tenant_id) == ("acme", "acme")
+    assert (user.org_id, user.tenant_id) == ("acme", "a" * 24)
     assert store.invites[invite.invite_id].accepted is True
 
 
@@ -140,7 +147,7 @@ async def test_audit_rows_carry_the_subjects_tenant_and_reads_filter() -> None:
     await service.audit("login", user_id=globex.user_id, email=globex.email)
     await service.audit("login_failed", email="nobody@x.test")
 
-    assert [e.tenant_id for e in store.events[-3:]] == ["acme", "globex", None]
+    assert [e.tenant_id for e in store.events[-3:]] == ["a" * 24, "b" * 24, None]
     seen = await service.auth_events(_principal_for(acme))
 
     assert [e.user_id for e in seen] == [acme.user_id]

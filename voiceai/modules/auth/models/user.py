@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from voiceai.common.constants import EMAIL_PATTERN
 from voiceai.database.base import BaseFields
@@ -77,7 +77,13 @@ ROLE_RANK: dict[str, int] = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
 
 
 class User(BaseFields):
-    """Platform user with role and org."""
+    """Platform user with role and tenant.
+
+    `tenant_id` (inherited from `BaseFields`) carries the tenant object hex,
+    stamped explicitly at creation from the acting tenant (spec 0040); the
+    `_sync_tenant_from_org` model validator is retired — nothing derives the
+    tenant from the org anymore. `org_id` stays populated but deprecated.
+    """
 
     user_id: str
     email: str = Field(..., pattern=EMAIL_PATTERN)
@@ -91,17 +97,3 @@ class User(BaseFields):
     #: trails the row. Bumped on role change, password rotation and logout-all, so one
     #: write kills every outstanding access token within its (short) TTL.
     token_version: int = 0
-
-    @model_validator(mode="after")
-    def _sync_tenant_from_org(self) -> User:
-        """Keep the isolation boundary identical to the org (spec 0020, M1b).
-
-        Tenant ids reuse `org_id` verbatim, so the sync lives on the model: every
-        construction and read-back stamps `tenant_id` from `org_id`, and no
-        writer can forget it. The scoped repositories filter on `tenant_id`.
-
-        Returns:
-            The validated user with `tenant_id` set.
-        """
-        self.tenant_id = self.org_id
-        return self

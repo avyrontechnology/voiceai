@@ -70,8 +70,12 @@ def _auth_repositories(db_client: Any) -> dict[str, Any]:
     from voiceai.modules.auth.models.apikey import ApiKey
     from voiceai.modules.auth.models.audit import AuthEvent
     from voiceai.modules.auth.models.invite import Invite
+    from voiceai.modules.auth.models.membership import Membership
+    from voiceai.modules.auth.models.organization import Organization
     from voiceai.modules.auth.models.revoked import RevokedToken
     from voiceai.modules.auth.models.session import SessionRecord
+    from voiceai.modules.auth.models.team import Team
+    from voiceai.modules.auth.models.tenant import Tenant
     from voiceai.modules.auth.models.user import User
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
@@ -83,6 +87,10 @@ def _auth_repositories(db_client: Any) -> dict[str, Any]:
         "keys": system(factory(db_client, Collections.API_KEYS, ApiKey)),
         "events": system(factory(db_client, Collections.AUTH_EVENTS, AuthEvent)),
         "revoked": system(factory(db_client, Collections.REVOKED_TOKENS, RevokedToken)),
+        "tenants": system(factory(db_client, Collections.TENANTS, Tenant)),
+        "organizations": system(factory(db_client, Collections.ORGANIZATIONS, Organization)),
+        "teams": system(factory(db_client, Collections.TEAMS, Team)),
+        "memberships": system(factory(db_client, Collections.MEMBERSHIPS, Membership)),
     }
 
 

@@ -365,10 +365,16 @@ def test_controllers_import_no_repository_or_sibling_internals() -> None:
 
 
 def test_services_import_no_web_layer() -> None:
-    """Services hold business logic: no FastAPI/Starlette/controller imports (spec 0010)."""
+    """Services hold business logic: no FastAPI/Starlette/controller imports (spec 0010).
+
+    Covers the canonical `service.py` and its `service_*.py` slices (spec 0040
+    split the auth service) — a slice escaping the gate would defeat it.
+    """
     violations: list[str] = []
     for path in _python_files(MODULES_ROOT):
-        if path.name != "service.py" or "tests" in path.parts or _is_adapter_file(path):
+        if path.name != "service.py" and not (path.name.startswith("service_") and path.suffix == ".py"):
+            continue
+        if "tests" in path.parts or _is_adapter_file(path):
             continue
         relative = path.relative_to(REPO_ROOT)
         for lineno, target in _import_targets(path, _parse(path)):

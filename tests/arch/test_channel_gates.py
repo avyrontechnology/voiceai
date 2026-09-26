@@ -29,9 +29,11 @@ TICKET_TOUCHED: frozenset[str] = frozenset(
         "voiceai/modules/auth/models/session.py",
         "voiceai/modules/auth/schemas.py",
         "voiceai/modules/auth/service.py",
+        "voiceai/modules/auth/service_base.py",  # spec 0040: kernel mint (ws-ticket kind)
         "voiceai/modules/auth/static_methods.py",
         "voiceai/modules/auth/tests/test_burndown.py",
         "voiceai/modules/auth/tests/test_controller.py",
+        "voiceai/modules/auth/tests/test_identity.py",  # spec 0040: ticket tenancy pin
         "voiceai/modules/auth/tests/test_module_def.py",
         "voiceai/modules/auth/tests/test_service.py",
         "voiceai/modules/voice/constants.py",

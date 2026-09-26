@@ -1,4 +1,8 @@
-"""Auth module definition: registry entry, empty router, ports and constants (C0)."""
+"""Auth module definition: registry entry, router surface, constants (C0).
+
+Port conformance lives in `test_service_seams.py` (member-by-member, with the
+spec-0040 identity tail pinned as intentionally absent from legacy stores).
+"""
 
 from voiceai.modules import ModuleDef
 from voiceai.modules.auth import MODULE
@@ -12,7 +16,6 @@ from voiceai.modules.auth.constants import (
     SESSION_TTL_S,
     WS_TICKET_TTL_S,
 )
-from voiceai.modules.auth.ports import AuthStorePort
 
 
 def test_module_is_a_frozen_module_def_named_auth() -> None:
@@ -23,7 +26,7 @@ def test_module_is_a_frozen_module_def_named_auth() -> None:
 
 
 def test_router_mounts_the_auth_surface_at_c5() -> None:
-    """The controller landed: all fourteen routes ride the module router (C5 + T2 refresh)."""
+    """The controller landed: all routes ride the module router (C5 + T2 refresh + 0040 identity)."""
     assert sorted({getattr(route, "path", "") for route in MODULE.router.routes}) == sorted(
         [
             "/auth/signup",
@@ -31,6 +34,7 @@ def test_router_mounts_the_auth_surface_at_c5() -> None:
             "/auth/refresh",
             "/auth/logout",
             "/auth/me",
+            "/auth/me/teams",
             "/auth/invite",
             "/auth/invites",
             "/auth/invites/{invite_id}",
@@ -41,6 +45,11 @@ def test_router_mounts_the_auth_surface_at_c5() -> None:
             "/auth/password",
             "/auth/ws-ticket",
             "/auth/events",
+            "/auth/tenants",
+            "/auth/organizations",
+            "/auth/teams",
+            "/auth/teams/{team_id}/members",
+            "/auth/teams/{team_id}/members/{user_id}",
         ]
     )
 
@@ -55,11 +64,3 @@ def test_constants_pin_the_legacy_contract() -> None:
         7 * 24 * 3600,
     )
     assert (LOGIN_WINDOW_S, LOGIN_MAX_ATTEMPTS) == (60, 5)
-
-
-def test_legacy_stores_satisfy_the_port_structurally() -> None:
-    """MemoryStore/RedisStore answer the port without importing the module (C0 seam)."""
-    from voiceai.platform.store import MemoryStore, RedisStore
-
-    assert isinstance(MemoryStore(), AuthStorePort)
-    assert isinstance(RedisStore(None), AuthStorePort)

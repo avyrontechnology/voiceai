@@ -47,6 +47,10 @@ USER_JOINED_COLLECTIONS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 #: Collections with no org lineage: single-tenant history → default tenant.
+#: The identity collections (spec 0040) ride along here per the spec-0038
+#: precedent for new collections with no legacy rows: tenant rows carry their
+#: own ObjectId hex as PK and org/team/membership rows stamp `tenant_id` at
+#: creation (required fields), so this rule never matches — harmless.
 DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "agents",
     "agent_prompts",
@@ -59,6 +63,10 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "voices",
     "tools",
     "chat_sessions",
+    "tenants",
+    "organizations",
+    "teams",
+    "memberships",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).

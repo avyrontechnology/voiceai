@@ -12,6 +12,7 @@ from typing import Annotated
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from voiceai.common.constants import PRINCIPAL_STATE_ATTR
 from voiceai.common.errors import AppError
@@ -23,7 +24,7 @@ from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.errors import InvalidCredentialsError
 from voiceai.modules.auth.helpers import public_user
 from voiceai.modules.auth.models.principal import Principal
-from voiceai.modules.auth.models.user import User
+from voiceai.modules.auth.models.user import User, UserRole
 from voiceai.modules.auth.schemas import AuthContract
 from voiceai.modules.auth.service import AuthService, SessionTokens
 
@@ -49,6 +50,35 @@ CreateInviteResponse = AuthContract.CreateInviteResponse
 InviteListResponse = AuthContract.InviteListResponse
 WsTicketResponse = AuthContract.WsTicketResponse
 AuthEventListResponse = AuthContract.AuthEventListResponse
+
+
+class CreateTenantRequest(BaseModel):
+    """Tenant creation body (spec 0040)."""
+
+    slug: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    plan: str = Field(C.DEFAULT_PLAN, min_length=1, max_length=64)
+
+
+class CreateOrganizationRequest(BaseModel):
+    """Organization creation body (spec 0040)."""
+
+    tenant_id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+class CreateTeamRequest(BaseModel):
+    """Team creation body (spec 0040)."""
+
+    org_id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+class AddMembershipRequest(BaseModel):
+    """Team membership creation body (spec 0040)."""
+
+    user_id: str = Field(..., min_length=1)
+    role: UserRole = "member"
 
 
 # -- seams --------------------------------------------------------------------
@@ -400,3 +430,79 @@ async def auth_events(principal: PrincipalDep, service: ServiceDep) -> JSONRespo
     except AppError as exc:
         return _to_http(exc)
     return success_response(AuthEventListResponse(events=events))
+
+
+@router.post("/tenants", status_code=201)
+@inject
+async def create_tenant(
+    payload: CreateTenantRequest, principal: PrincipalDep, service: ServiceDep
+) -> JSONResponse:
+    """Create a tenant; slugs are unique (owners only)."""
+    try:
+        tenant = await service.create_tenant(principal, payload.slug, payload.name, payload.plan)
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(tenant, status_code=201)
+
+
+@router.post("/organizations", status_code=201)
+@inject
+async def create_organization(
+    payload: CreateOrganizationRequest, principal: PrincipalDep, service: ServiceDep
+) -> JSONResponse:
+    """Create an organization under a tenant (owners only)."""
+    try:
+        organization = await service.create_organization(principal, payload.tenant_id, payload.name)
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(organization, status_code=201)
+
+
+@router.post("/teams", status_code=201)
+@inject
+async def create_team(
+    payload: CreateTeamRequest, principal: PrincipalDep, service: ServiceDep
+) -> JSONResponse:
+    """Create a team under an organization (admins only)."""
+    try:
+        team = await service.create_team(principal, payload.org_id, payload.name)
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(team, status_code=201)
+
+
+@router.post("/teams/{team_id}/members", status_code=201)
+@inject
+async def add_membership(
+    team_id: str, payload: AddMembershipRequest, principal: PrincipalDep, service: ServiceDep
+) -> JSONResponse:
+    """Add a user to a team with a per-team role (admins only)."""
+    try:
+        membership = await service.add_membership(principal, team_id, payload.user_id, payload.role)
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(membership, status_code=201)
+
+
+@router.delete("/teams/{team_id}/members/{user_id}")
+@inject
+async def remove_membership(
+    team_id: str, user_id: str, principal: PrincipalDep, service: ServiceDep
+) -> JSONResponse:
+    """Remove a user from a team (admins only)."""
+    try:
+        await service.remove_membership(principal, team_id, user_id)
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(dict(C.OK_BODY))
+
+
+@router.get("/me/teams")
+@inject
+async def list_my_teams(principal: PrincipalDep, service: ServiceDep) -> JSONResponse:
+    """List the caller's teams in the acting tenant."""
+    try:
+        teams = await service.list_user_teams(principal, principal.user_id or "")
+    except AppError as exc:
+        return _to_http(exc)
+    return success_response(teams)

@@ -37,8 +37,22 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/auth/models/invite.py",  # spec 0020, M1b: org-carried invite
         "voiceai/modules/auth/models/session.py",  # spec 0020, M1b: tenant sync validator
         "voiceai/modules/auth/models/user.py",  # spec 0020, M1b: tenant sync validator
+        "voiceai/modules/auth/models/principal.py",  # spec 0040: tenant + team projection
+        "voiceai/modules/auth/models/tenant.py",  # spec 0040: identity program
+        "voiceai/modules/auth/models/organization.py",  # spec 0040: identity program
+        "voiceai/modules/auth/models/team.py",  # spec 0040: identity program
+        "voiceai/modules/auth/models/membership.py",  # spec 0040: identity program
+        "voiceai/modules/auth/controller.py",  # spec 0040: identity CRUD routes
+        "voiceai/modules/auth/ports.py",  # spec 0040: identity store tail
+        "voiceai/modules/auth/repository.py",  # spec 0040: identity store tail
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping
+        "voiceai/modules/auth/service_base.py",  # spec 0040: kernel mint/audit/projection
+        "voiceai/modules/auth/service_admin.py",  # spec 0040: invite/user tenant stamps
+        "voiceai/modules/auth/service_identity.py",  # spec 0040: identity CRUD
         "voiceai/modules/auth/tests/test_tenancy.py",  # spec 0020, M1b: boundary pins
+        "voiceai/modules/auth/tests/test_service.py",  # spec 0040: FakeAuthStore identity tail
+        "voiceai/modules/auth/tests/test_identity.py",  # spec 0040: identity CRUD units
+        "voiceai/modules/auth/tests/test_tenant_context.py",  # spec 0040: resolver tenancy pins
         "voiceai/modules/chat/controller.py",  # spec 0038: tenant-scoped chat reads
         "voiceai/modules/chat/service.py",  # spec 0038: session ownership checks
         "voiceai/modules/chat/tests/test_controller.py",  # spec 0038: isolation pins

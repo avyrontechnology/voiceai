@@ -88,7 +88,7 @@ async def post_chat_message(
         result = await service.post_message(
             session_id=payload.session_id,
             agent_id=agent_id,
-            tenant_id=principal.org_id,
+            tenant_id=principal.tenant_id,
             user_id=principal.user_id,
             email=principal.email,
             content=payload.message,
@@ -112,7 +112,7 @@ async def list_chat_sessions(
     """List this tenant's sessions for one agent, oldest first (bounded)."""
     principal = await _require_caller(request, auth)
     try:
-        sessions = await service.get_history(agent_id, principal.org_id)
+        sessions = await service.get_history(agent_id, principal.tenant_id)
     except AppError as exc:
         return error_response(exc)
     return success_response(wire_chat_history(sessions))

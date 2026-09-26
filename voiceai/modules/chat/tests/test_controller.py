@@ -113,8 +113,13 @@ class _Auth:
 
 
 def _principal() -> Principal:
-    """The session principal the scripted resolver authenticates as."""
-    return Principal(user_id="u-1", email="u@example.com", org_id="acme", role="owner")
+    """The session principal the scripted resolver authenticates as.
+
+    The double mirrors a resolver-built principal for single-org history:
+    the projected tenant coincides with the org slug (spec 0040 resolvers
+    stamp the hex in prod).
+    """
+    return Principal(user_id="u-1", email="u@example.com", org_id="acme", tenant_id="acme", role="owner")
 
 
 def _client(

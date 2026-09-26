@@ -9,6 +9,8 @@ route and every 4xx the service can raise.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from dependency_injector import providers
 from httpx import ASGITransport, AsyncClient
@@ -32,7 +34,9 @@ async def _client(store: MemoryStore | None = None) -> AsyncClient:
     container = build_container(Environment())
     backing = store if store is not None else MemoryStore()
     container.auth_store.override(providers.Object(backing))
-    container.auth_service.override(providers.Object(AuthService(backing, jwt=_JWT)))
+    container.auth_service.override(
+        providers.Object(AuthService(cast(AuthStorePort, backing), jwt=_JWT))
+    )
     app = create_app(env=Environment(), container=container)
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url=BASE)

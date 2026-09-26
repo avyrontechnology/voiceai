@@ -1,4 +1,12 @@
-"""Auth service: every auth use-case, no HTTP anywhere (AGENTS.md rule 1e; T2 greenfield).
+"""Auth service facade: credential lifecycle over admin + identity slices (AGENTS.md rule 1e).
+
+`AuthService` composes `service_admin.AuthAdminMixin` and
+`service_identity.AuthIdentityMixin` over the `service_base.AuthServiceBase`
+kernel: this file holds the credential lifecycle only (session/key/JWT
+resolvers, signup/login/refresh/logout, ticket mint/redeem, `me`), while user
+administration and the identity program live in their slices. Split cited by
+spec 0040 (integrator): the identity program grew this file past the
+800-line canonical budget.
 
 Greenfield deltas (T2): JWT access tokens (stateless, RS256) plus opaque rotating
 refresh rows, dual-written with the legacy Redis sessions until the T7 cutover
@@ -10,146 +18,39 @@ revocation store. Legacy session/ticket/key flows are byte-identical otherwise.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import timedelta, timezone
-from typing import Literal
 
 from voiceai.common.datetime_utils import utc_now
-from voiceai.common.errors import ConflictError, InvalidRequestError
+from voiceai.common.errors import ConflictError
 from voiceai.common.ids import new_id
 from voiceai.common.logger import get_logger
 from voiceai.common.tenancy import TenantContext
 from voiceai.modules.auth import constants as C
-from voiceai.modules.auth.errors import (
-    AuthNotFoundError,
-    ForbiddenError,
-    InvalidCredentialsError,
-    InviteInvalidError,
-)
-from voiceai.modules.auth.exceptions import (
-    ensure_authenticated,
-    ensure_found,
-    ensure_invite_valid,
-    ensure_permitted,
-)
-from voiceai.modules.auth.models.audit import AuthEvent
-from voiceai.modules.auth.models.invite import Invite
+from voiceai.modules.auth.errors import ForbiddenError, InvalidCredentialsError
+from voiceai.modules.auth.exceptions import ensure_authenticated, ensure_permitted
 from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.revoked import RevokedToken
-from voiceai.modules.auth.models.session import SessionRecord
-from voiceai.modules.auth.models.user import User, UserRole
-from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter
-from voiceai.modules.auth.static_methods import (
-    hash_password,
-    issue_access_token,
-    new_token,
-    token_hash,
-    verify_access_token,
-    verify_password,
-)
-from voiceai.modules.auth.utils import LocalLoginLimiter
+from voiceai.modules.auth.models.user import User
+from voiceai.modules.auth.service_admin import AuthAdminMixin
+from voiceai.modules.auth.service_base import JwtSettings as JwtSettings
+from voiceai.modules.auth.service_base import SessionTokens as SessionTokens
+from voiceai.modules.auth.service_identity import AuthIdentityMixin
+from voiceai.modules.auth.static_methods import hash_password, token_hash, verify_access_token, verify_password
 
 __all__ = ["AuthService", "JwtSettings", "SessionTokens"]
 
 logger: logging.Logger = get_logger("auth")
 
 
-@dataclass(frozen=True)
-class JwtSettings:
-    """JWT configuration the service needs (built from `Environment` by the container).
+class AuthService(AuthAdminMixin, AuthIdentityMixin):
+    """Credential lifecycle: resolvers, entry points, logout, tickets, `me`.
 
-    `None` in the service means the JWT flows stay dark (tests, single-proc dev
-    without keys); every JWT method then raises `InvalidRequestError` instead of
-    touching the store, so misconfiguration surfaces loudly rather than minting
-    half a session.
+    User administration rides `AuthAdminMixin`, the identity program rides
+    `AuthIdentityMixin`, and the shared kernel (ctor, guards, minting, audit,
+    tenancy projection) rides `service_base.AuthServiceBase` — all composed
+    here so the public surface (`AuthService`, `JwtSettings`,
+    `SessionTokens`) never moves.
     """
-
-    private_key: str
-    public_key: str
-    issuer: str
-    audience: str
-    access_ttl_s: int
-    refresh_ttl_s: int
-
-
-@dataclass(frozen=True)
-class SessionTokens:
-    """One authenticated moment: legacy compat plus the JWT pair (T2 dual-write).
-
-    `legacy_token` feeds the `otoba_session` cookie until the T7 cutover deletes
-    it; `access_token` is the short-lived JWT (memory only); `refresh_token` is the
-    opaque rotating secret (httpOnly `otoba_refresh` cookie, hash stored).
-    """
-
-    legacy_token: str
-    access_token: str
-    refresh_token: str
-
-
-class AuthService:
-    """Owns signup/login/logout/invites/admin/audit over an injected store.
-
-    Args:
-        store: The auth persistence behind ``AuthStorePort`` (a fake in tests).
-        limiter: The login-throttle seam (spec 0006, E3); `None` keeps the
-            in-process ledger so existing behavior is unchanged.
-        jwt: The JWT configuration, or `None` when the JWT flows stay dark.
-    """
-
-    def __init__(
-        self,
-        store: AuthStorePort,
-        *,
-        limiter: LoginLimiter | None = None,
-        jwt: JwtSettings | None = None,
-    ) -> None:
-        self._store = store
-        self._limiter: LoginLimiter = limiter if limiter is not None else LocalLoginLimiter()
-        self._jwt = jwt
-
-    @staticmethod
-    def _ensure_same_org(row_org_id: str | None, principal: Principal, what: str) -> None:
-        """Reject a cross-tenant row as not-found (spec 0020, M1b).
-
-        The auth store is the tenant-discovery layer, so it stays unscoped and
-        the service enforces the boundary: a row from another org reads exactly
-        like a missing row — no existence oracle.
-
-        Args:
-            row_org_id: The owning org of the row being touched.
-            principal: The acting caller.
-            what: "User" or "Invite" for the not-found message.
-
-        Raises:
-            AuthNotFoundError: When the row belongs to another org.
-        """
-        if row_org_id != principal.org_id:
-            raise AuthNotFoundError(f"{what} not found")
-
-    # -- sessions -----------------------------------------------------------
-
-    async def _new_session(
-        self,
-        user_id: str,
-        org_id: str,
-        *,
-        ttl_s: int,
-        kind: Literal[
-            "session", "ws-ticket"
-        ] = C.SESSION_KIND,  # why: Literal mirrors SessionRecord.kind so mypy pins the ledger
-    ) -> str:
-        """Mint one session row, returning the RAW token (shown once — rule: secret)."""
-        token = new_token()
-        await self._store.save_session(
-            SessionRecord(
-                token_hash=token_hash(token),
-                user_id=user_id,
-                org_id=org_id,
-                kind=kind,
-                expires_at=utc_now() + timedelta(seconds=ttl_s),
-            )
-        )
-        return token
 
     async def _principal_from_session(self, token: str | None) -> Principal | None:
         """Resolve a session token to a principal (tickets never authenticate)."""
@@ -161,10 +62,16 @@ class AuthService:
         user = await self._store.get_user(session.user_id)
         if not user or user.disabled:
             return None
+        if await self._tenant_is_suspended(user):
+            return None
+        tenant_id, teams, team_roles = await self._resolve_tenancy(user)
         return Principal(
             user_id=user.user_id,
             email=user.email,
             org_id=user.org_id,
+            tenant_id=tenant_id,
+            teams=teams,
+            team_roles=team_roles,
             role=user.role,
             auth_type="session",
         )
@@ -190,10 +97,16 @@ class AuthService:
             # user's keys must stop working, mirroring the session resolver.
             # Logged loudly for the C6 audit; legacy keeps the hole till cutover.
             return None
+        if await self._tenant_is_suspended(user):
+            return None
+        tenant_id, teams, team_roles = await self._resolve_tenancy(user)
         return Principal(
             user_id=key.created_by,
             email=user.email if user else None,
             org_id=user.org_id if user else "default",
+            tenant_id=tenant_id,
+            teams=teams,
+            team_roles=team_roles,
             role="viewer",
             auth_type="key",
             scopes=list(key.scopes),
@@ -220,9 +133,12 @@ class AuthService:
             name=name,
             password_hash=hash_password(password),
             role="owner",
+            tenant_id=await self._default_tenant_hex(),
         )
         await self._store.save_user(user)
-        legacy = await self._new_session(user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S)
+        legacy = await self._new_session(
+            user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S, tenant_id=user.tenant_id
+        )
         access, refresh = await self._new_jwt_pair(user)
         await self.audit("signup", user_id=user.user_id, email=user.email, detail="first user (owner)")
         return user, SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
@@ -240,7 +156,7 @@ class AuthService:
             await self.audit("login_failed", email=email.strip().lower())
             raise InvalidCredentialsError("Invalid email or password")
         legacy = await self._new_session(
-            user.user_id, user.org_id, ttl_s=C.REMEMBER_TTL_S if remember else C.SESSION_TTL_S
+            user.user_id, user.org_id, ttl_s=C.REMEMBER_TTL_S if remember else C.SESSION_TTL_S, tenant_id=user.tenant_id
         )
         access, refresh = await self._new_jwt_pair(user)
         user.last_login_at = utc_now()
@@ -280,7 +196,9 @@ class AuthService:
             await self.audit("refresh_reuse_detected", user_id=row.user_id)
             raise InvalidCredentialsError("Session expired, sign in again")
         await self._store.delete_session(row.token_hash)
-        legacy = await self._new_session(user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S)
+        legacy = await self._new_session(
+            user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S, tenant_id=user.tenant_id
+        )
         access, refresh = await self._new_jwt_pair(user)
         await self.audit("refresh", user_id=user.user_id, email=user.email)
         return user, SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
@@ -290,54 +208,6 @@ class AuthService:
         await self._bump_version(user)
         await self._store.save_user(user)
         await self._store.delete_user_sessions(user.user_id)
-
-    def _require_jwt(self) -> JwtSettings:
-        """Return the JWT configuration, failing loudly when the flows stay dark.
-
-        Raises:
-            InvalidRequestError: When no keys are configured — a caller bug or a
-                deployment gap, never a store outage.
-        """
-        if self._jwt is None:
-            raise InvalidRequestError("Token pair issuance is not configured")
-        return self._jwt
-
-    async def _new_jwt_pair(self, user: User) -> tuple[str, str]:
-        """Mint an access JWT plus its opaque refresh row for an authenticated user.
-
-        Args:
-            user: The authenticated row (its `token_version` stamps both tokens).
-
-        Returns:
-            `(access_token, refresh_token_raw)` — the raw refresh is shown once;
-            only its hash is stored, with `kind="refresh"`.
-        """
-        settings = self._require_jwt()
-        moment = utc_now()
-        access = issue_access_token(
-            user_id=user.user_id,
-            org_id=user.org_id,
-            role=user.role,
-            token_version=self._version_of(user),
-            jti=new_token(),
-            issuer=settings.issuer,
-            audience=settings.audience,
-            access_ttl_s=settings.access_ttl_s,
-            private_key=settings.private_key,
-            now=moment,
-        )
-        refresh = new_token()
-        await self._store.save_session(
-            SessionRecord(
-                token_hash=token_hash(refresh),
-                user_id=user.user_id,
-                org_id=user.org_id,
-                kind="refresh",
-                expires_at=moment + timedelta(seconds=settings.refresh_ttl_s),
-                token_version=user.token_version,
-            )
-        )
-        return access, refresh
 
     async def _principal_from_jwt_token(self, secret: str) -> Principal | None:
         """Resolve a JWT access token to a principal (denylist- and version-checked)."""
@@ -353,30 +223,20 @@ class AuthService:
         user = await self._store.get_user(str(claims["sub"]))
         if not user or user.disabled or self._version_of(user) != int(claims["ver"]):
             return None
+        if await self._tenant_is_suspended(user):
+            return None
+        tenant_id, teams, team_roles = await self._resolve_tenancy(user)
         return Principal(
             user_id=user.user_id,
             email=user.email,
             org_id=user.org_id,
+            tenant_id=tenant_id,
+            teams=teams,
+            team_roles=team_roles,
             role=user.role,
             auth_type="session",
             token_id=jti,
         )
-
-    async def _bump_version(self, user: User) -> None:
-        """Stamp the next revocation version onto a user row (caller persists it).
-
-        Legacy platform rows (quickstart's `RedisStore`, retired at T7) predate the
-        stamp: stamping is skipped for them while session sweeps keep revoking, so a
-        mixed deployment degrades to sweep-only revocation instead of crashing.
-        """
-        if "token_version" in type(user).model_fields:
-            user.token_version = self._version_of(user) + 1
-
-    @staticmethod
-    def _version_of(user: User) -> int:
-        """Read a row's revocation stamp, defaulting legacy platform rows to zero."""
-        version = getattr(user, "token_version", 0)
-        return version if isinstance(version, int) else 0
 
     async def logout(self, session_token: str | None, refresh_token: str | None, principal: Principal | None) -> None:
         """Revoke the caller's tokens: legacy session, refresh row, and access JWT id.
@@ -478,7 +338,7 @@ class AuthService:
         if principal is None:
             return None, None
         context = TenantContext(
-            tenant_id=principal.org_id,
+            tenant_id=principal.tenant_id or principal.org_id,
             request_id=request_id,
             principal_id=principal.user_id,
             scopes=frozenset(principal.effective_scopes()),
@@ -488,9 +348,17 @@ class AuthService:
     async def me(self, principal: Principal) -> tuple[User, list[str]]:
         """Return the session caller's record plus effective scopes for /me.
 
+        The tenant check is the spec-0040 hex analogue of the legacy org
+        check: a stamped user's tenant must match the principal's, and a
+        mismatch reads as not-found (no cross-tenant oracle). Pre-identity
+        rows (`tenant_id is None`, migration pending) keep the legacy org
+        boundary so they stay readable until the backfill stamps them.
+
         Raises:
             InvalidCredentialsError: When the caller is a key, anonymous, or its
                 record vanished or was disabled (legacy "Session required").
+            AuthNotFoundError: When the user's tenant (or, pre-identity, org)
+                does not match the principal's.
         """
         ensure_authenticated(principal)
         if principal.auth_type != "session" or not principal.user_id:
@@ -498,11 +366,20 @@ class AuthService:
         user = await self._store.get_user(principal.user_id)
         if not user or user.disabled:
             raise InvalidCredentialsError("Session required")
-        self._ensure_same_org(user.org_id, principal, "User")
+        if user.tenant_id is not None:
+            self._ensure_same_tenant(user.tenant_id, principal, "User")
+        else:
+            self._ensure_same_org(user.org_id, principal, "User")
         return user, principal.effective_scopes()
 
     async def redeem_ticket(self, ticket: str | None) -> Principal | None:
-        """Swap a single-use ws ticket for its principal (or `None`)."""
+        """Swap a single-use ws ticket for its principal (or `None`).
+
+        The redeemed principal carries the same tenant/team projection as the
+        session/key/JWT resolvers (spec 0040): the voice WS controller binds
+        `principal.tenant_id`, so a tenant-less ticket principal would strand
+        the call on the system tenant.
+        """
         if not ticket:
             return None
         session = await self._store.get_session(token_hash(ticket))
@@ -519,10 +396,16 @@ class AuthService:
         user = await self._store.get_user(session.user_id)
         if not user or user.disabled:
             return None
+        if await self._tenant_is_suspended(user):
+            return None
+        tenant_id, teams, team_roles = await self._resolve_tenancy(user)
         return Principal(
             user_id=user.user_id,
             email=user.email,
             org_id=user.org_id,
+            tenant_id=tenant_id,
+            teams=teams,
+            team_roles=team_roles,
             role=user.role,
             auth_type="session",
         )
@@ -540,249 +423,5 @@ class AuthService:
             principal.org_id,
             ttl_s=C.WS_TICKET_TTL_S,
             kind=C.WS_TICKET_KIND,
+            tenant_id=principal.tenant_id,
         )
-
-    # -- invites ------------------------------------------------------------
-
-    async def invite(self, principal: Principal, email: str, name: str | None, role: UserRole) -> tuple[Invite, str]:
-        """Create an invite; HYBRID delivery — the raw token returns to the caller.
-
-        Raises:
-            ForbiddenError: When the caller is not an admin, or grants
-                owner/admin without being owner.
-            ConflictError: When the email is already registered.
-        """
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        if role in ("owner", "admin") and principal.role != "owner":
-            raise ForbiddenError("Only owners can invite owners or admins")
-        if await self._store.get_user_by_email(email.strip().lower()) is not None:
-            raise ConflictError("Email already registered")
-        token = new_token()
-        invite = Invite(
-            invite_id=new_id("inv"),
-            email=email.strip().lower(),
-            name=name,
-            role=role,
-            org_id=principal.org_id,
-            token_hash=token_hash(token),
-            expires_at=utc_now() + timedelta(seconds=C.INVITE_TTL_S),
-            created_by=principal.user_id,
-        )
-        await self._store.save_invite(invite)
-        await self.audit(
-            "invite",
-            user_id=principal.user_id,
-            email=principal.email,
-            detail=f"{invite.email} as {invite.role}",
-        )
-        return invite, token
-
-    async def accept_invite(self, token: str, name: str | None, password: str) -> tuple[User, SessionTokens]:
-        """Redeem an invite token into a user plus a first legacy session and JWT pair.
-
-        Raises:
-            InviteInvalidError: When no live invite matches the token.
-            ConflictError: When the invite email registered meanwhile.
-        """
-        digest = token_hash(token)
-        matched = await self._store.get_invite_by_token_hash(digest)
-        if matched is not None and matched.accepted:
-            matched = None
-        live: Invite = ensure_invite_valid(matched)
-        expires_at = live.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < utc_now():
-            raise InviteInvalidError("Invite invalid or expired")
-        if await self._store.get_user_by_email(live.email) is not None:
-            raise ConflictError("Email already registered")
-        user = User(
-            user_id=new_id("usr"),
-            email=live.email,
-            name=name or live.name,
-            password_hash=hash_password(password),
-            role=live.role,
-            org_id=live.org_id,
-        )
-        await self._store.save_user(user)
-        live.accepted = True
-        await self._store.save_invite(live)
-        legacy = await self._new_session(user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S)
-        access, refresh = await self._new_jwt_pair(user)
-        await self.audit("invite_accepted", user_id=user.user_id, email=user.email, detail=f"as {user.role}")
-        return user, SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
-
-    async def list_invites(self, principal: Principal) -> list[Invite]:
-        """Return pending invites, token hashes never leaving the store (admins only).
-
-        Raises:
-            ForbiddenError: When the caller is not an admin.
-        """
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return [i for i in await self._store.list_invites() if not i.accepted and i.org_id == principal.org_id]
-
-    async def delete_invite(self, principal: Principal, invite_id: str) -> None:
-        """Revoke an invite (admins only).
-
-        Raises:
-            ForbiddenError: When the caller is not an admin.
-            AuthNotFoundError: When the invite does not exist or belongs to
-                another org (no cross-tenant oracle).
-        """
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        invite: Invite = ensure_found(await self._store.get_invite(invite_id), "Invite not found")
-        self._ensure_same_org(invite.org_id, principal, "Invite")
-        await self._store.delete_invite(invite_id)
-        await self.audit("invite_revoked", user_id=principal.user_id, email=principal.email, detail=invite_id)
-
-    # -- admin --------------------------------------------------------------
-
-    async def list_users(self, principal: Principal) -> list[User]:
-        """Return every user in the caller's org (admins only).
-
-        Raises:
-            ForbiddenError: When the caller is not an admin.
-        """
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return [u for u in await self._store.list_users() if u.org_id == principal.org_id]
-
-    async def _assert_last_owner_safe(self, target: User) -> None:
-        """Reject de-powering the target org's last active owner (shared by role/delete)."""
-        if target.role != "owner" or target.disabled:
-            return
-        owners = [
-            u
-            for u in await self._store.list_users()
-            if u.role == "owner" and not u.disabled and u.org_id == target.org_id
-        ]
-        if len(owners) <= 1:
-            raise InvalidRequestError("Cannot remove the last active owner")
-
-    async def _require_owner(self, principal: Principal) -> Principal:
-        """Return the acting principal, gated to owners (401 then 403)."""
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("owner"), "Requires owner role or higher")
-        return principal
-
-    async def set_user_role(self, principal: Principal, target_id: str, role: UserRole) -> User:
-        """Change a user's role, revoking their sessions and access tokens (owners only).
-
-        Raises:
-            ForbiddenError: When the caller is not an owner.
-            AuthNotFoundError: When the target does not exist or belongs to
-                another org (no cross-tenant oracle).
-            InvalidRequestError: On self-edit or last-owner removal.
-        """
-        actor = await self._require_owner(principal)
-        target: User = ensure_found(await self._store.get_user(target_id), "User not found")
-        self._ensure_same_org(target.org_id, principal, "User")
-        if target.user_id == actor.user_id:
-            raise InvalidRequestError("Cannot change your own role")
-        await self._assert_last_owner_safe(target)
-        target.role = role
-        await self._bump_version(target)
-        await self._store.save_user(target)
-        await self._store.delete_user_sessions(target_id)
-        await self.audit(
-            "role_change",
-            user_id=actor.user_id,
-            email=actor.email,
-            detail=f"{target.email} -> {role}",
-        )
-        return target
-
-    async def delete_user(self, principal: Principal, target_id: str) -> None:
-        """Delete a user plus all their sessions (owners only).
-
-        Raises:
-            ForbiddenError: When the caller is not an owner.
-            AuthNotFoundError: When the target does not exist or belongs to
-                another org (no cross-tenant oracle).
-            InvalidRequestError: On self-delete or last-owner removal.
-        """
-        actor = await self._require_owner(principal)
-        target: User = ensure_found(await self._store.get_user(target_id), "User not found")
-        self._ensure_same_org(target.org_id, principal, "User")
-        if target.user_id == actor.user_id:
-            raise InvalidRequestError("Cannot delete yourself")
-        await self._assert_last_owner_safe(target)
-        await self._store.delete_user_sessions(target_id)
-        await self._store.delete_user(target_id)
-        await self.audit("user_deleted", user_id=actor.user_id, email=actor.email, detail=target.email)
-
-    async def change_password(
-        self,
-        principal: Principal,
-        current_password: str,
-        new_password: str,
-    ) -> SessionTokens:
-        """Rotate a session caller's password, re-issuing their tokens.
-
-        Unlike the legacy keep-current-session sweep, rotation always re-issues:
-        the version bump kills every outstanding access token (including the
-        caller's, within its short TTL) and every session row dies, so the caller
-        leaves with the only live pair. Strictly stronger, and the only sound
-        story once access tokens are stateless.
-
-        Raises:
-            ForbiddenError: When the caller has no login session.
-            InvalidCredentialsError: When the record vanished or the current
-                password mismatches (one gate — no user enumeration).
-        """
-        ensure_authenticated(principal)
-        if principal.auth_type != "session" or not principal.user_id:
-            raise ForbiddenError("Password change requires a login session")
-        user = await self._store.get_user(principal.user_id)
-        if not user or not verify_password(current_password, user.password_hash):
-            raise InvalidCredentialsError("Current password is incorrect")
-        user.password_hash = hash_password(new_password)
-        await self._bump_version(user)
-        await self._store.save_user(user)
-        await self._store.delete_user_sessions(user.user_id)
-        legacy = await self._new_session(user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S)
-        access, refresh = await self._new_jwt_pair(user)
-        await self.audit("password_change", user_id=user.user_id, email=user.email)
-        return SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
-
-    async def auth_events(self, principal: Principal) -> list[AuthEvent]:
-        """Return recent audit events in the caller's org, newest first (admins only).
-
-        Raises:
-            ForbiddenError: When the caller is not an admin.
-        """
-        ensure_authenticated(principal)
-        ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
-        return [e for e in await self._store.list_auth_events() if e.tenant_id == principal.org_id]
-
-    async def audit(
-        self,
-        event_type: str,
-        *,
-        user_id: str | None = None,
-        email: str | None = None,
-        detail: str | None = None,
-    ) -> None:
-        """Append one audit row stamped with the subject's tenant; NEVER fails the op."""
-        try:
-            tenant_id: str | None = None
-            if user_id is not None:
-                subject = await self._store.get_user(user_id)
-                if subject is not None:
-                    tenant_id = subject.org_id
-            await self._store.add_auth_event(
-                AuthEvent(
-                    event_id=new_id("evt"),
-                    type=event_type,
-                    user_id=user_id,
-                    email=email,
-                    detail=detail,
-                    created_at=utc_now(),
-                    tenant_id=tenant_id,
-                )
-            )
-        except Exception:  # noqa: BLE001 - audit is advisory by design
-            logger.warning("auth audit write failed", exc_info=True)

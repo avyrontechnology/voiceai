@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import model_validator
-
 from voiceai.database.base import BaseFields
 from voiceai.modules.auth.models.user import UserRole
 
@@ -17,7 +15,12 @@ __all__ = ["Invite"]
 
 
 class Invite(BaseFields):
-    """Pending organization invite."""
+    """Pending organization invite.
+
+    `tenant_id` (inherited from `BaseFields`) is stamped explicitly by the
+    writer (spec 0040); the `_sync_tenant_from_org` model validator is
+    retired. `org_id` stays populated but deprecated.
+    """
 
     invite_id: str
     email: str
@@ -27,13 +30,3 @@ class Invite(BaseFields):
     token_hash: str
     expires_at: datetime
     accepted: bool = False
-
-    @model_validator(mode="after")
-    def _sync_tenant_from_org(self) -> Invite:
-        """Keep the isolation boundary identical to the org (spec 0020, M1b).
-
-        Returns:
-            The validated invite with `tenant_id` set.
-        """
-        self.tenant_id = self.org_id
-        return self

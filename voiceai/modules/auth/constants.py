@@ -54,3 +54,13 @@ PBKDF2_ITERATIONS: Final[int] = 600_000
 
 #: Mutation-ack body the legacy routes return (copied per response, never shared).
 OK_BODY: Final[dict[str, bool]] = {"ok": True}
+
+#: Opaque id prefixes for the identity program (spec 0040): full ids read
+#: `org_<hex12>` / `team_<hex12>` / `mem_<hex12>` via `common.ids.new_id`.
+#: Tenants skip the prefix scheme — their natural key is the ObjectId hex itself.
+ORG_ID_PREFIX: Final[str] = "org"
+TEAM_ID_PREFIX: Final[str] = "team"
+MEMBERSHIP_ID_PREFIX: Final[str] = "mem"
+
+#: Default billing plan stamped on tenants created without an explicit plan.
+DEFAULT_PLAN: Final[str] = "default"

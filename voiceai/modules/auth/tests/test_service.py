@@ -25,9 +25,13 @@ from voiceai.modules.auth.errors import (
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
 from voiceai.modules.auth.models.invite import Invite
+from voiceai.modules.auth.models.membership import Membership
+from voiceai.modules.auth.models.organization import Organization
 from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.session import SessionRecord
+from voiceai.modules.auth.models.team import Team
+from voiceai.modules.auth.models.tenant import Tenant
 from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.service import AuthService, SessionTokens
 from voiceai.modules.auth.static_methods import hash_password, new_token, token_hash
@@ -44,6 +48,10 @@ class FakeAuthStore:
         self.keys: dict[str, ApiKey] = {}
         self.events: list[AuthEvent] = []
         self.revoked: dict[str, RevokedToken] = {}
+        self.tenants: dict[str, Tenant] = {}
+        self.organizations: dict[str, Organization] = {}
+        self.teams: dict[str, Team] = {}
+        self.memberships: dict[str, Membership] = {}
 
     async def save_user(self, user: User) -> None:
         self.users[user.user_id] = user
@@ -128,6 +136,52 @@ class FakeAuthStore:
 
     async def is_revoked(self, jti: str) -> bool:
         return jti in self.revoked
+
+    async def save_tenant(self, tenant: Tenant) -> None:
+        self.tenants[tenant.tenant_id] = tenant
+
+    async def get_tenant(self, tenant_id: str) -> Tenant | None:
+        row = self.tenants.get(tenant_id)
+        return row if row is not None and row.is_active else None
+
+    async def get_tenant_by_slug(self, slug: str) -> Tenant | None:
+        return next((t for t in self.tenants.values() if t.slug == slug and t.is_active), None)
+
+    async def list_tenants(self) -> list[Tenant]:
+        return [t for t in self.tenants.values() if t.is_active]
+
+    async def save_organization(self, organization: Organization) -> None:
+        self.organizations[organization.org_id] = organization
+
+    async def get_organization(self, org_id: str) -> Organization | None:
+        row = self.organizations.get(org_id)
+        return row if row is not None and row.is_active else None
+
+    async def list_organizations(self, tenant_id: str) -> list[Organization]:
+        return [o for o in self.organizations.values() if o.tenant_id == tenant_id and o.is_active]
+
+    async def save_team(self, team: Team) -> None:
+        self.teams[team.team_id] = team
+
+    async def get_team(self, team_id: str) -> Team | None:
+        row = self.teams.get(team_id)
+        return row if row is not None and row.is_active else None
+
+    async def list_teams(self, org_id: str) -> list[Team]:
+        return [t for t in self.teams.values() if t.org_id == org_id and t.is_active]
+
+    async def save_membership(self, membership: Membership) -> None:
+        self.memberships[membership.membership_id] = membership
+
+    async def list_memberships(self, user_id: str) -> list[Membership]:
+        return [m for m in self.memberships.values() if m.user_id == user_id and m.is_active]
+
+    async def delete_membership(self, membership_id: str) -> bool:
+        row = self.memberships.get(membership_id)
+        if row is None or not row.is_active:
+            return False
+        row.is_active = False
+        return True
 
 
 def _owner_principal(user: User) -> Principal:
@@ -482,12 +536,16 @@ async def test_ticket_needs_calls_write_scope() -> None:
 async def test_auth_events_are_admin_only() -> None:
     """Audit listing needs admin; entries arrive newest-first."""
     store = FakeAuthStore()
+    await store.save_tenant(Tenant(tenant_id="a" * 24, slug="default", name="Default"))
     service = AuthService(store, jwt=_JWT)
     owner, _ = await _signed_up(service)
-    _, raw = await service.invite(_owner_principal(owner), "w@x.test", None, "member")
+    assert owner.tenant_id is not None  # seeded default tenant above stamps it
+    owner_p = _owner_principal(owner)
+    owner_p.tenant_id = owner.tenant_id
+    _, raw = await service.invite(owner_p, "w@x.test", None, "member")
     _, member_tokens = await service.accept_invite(raw, None, "w-pass-1")
 
-    events = await service.auth_events(_owner_principal(owner))
+    events = await service.auth_events(owner_p)
 
     assert events[0].created_at >= events[-1].created_at
     assert {e.type for e in events} >= {"signup", "invite", "invite_accepted"}

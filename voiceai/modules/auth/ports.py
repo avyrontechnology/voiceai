@@ -4,7 +4,9 @@
 indexed lookups (`get_api_key_by_hash`, `get_invite_by_token_hash`) and the
 revocation pair (`save_revoked`, `is_revoked`) so no flow scans a collection:
 the Mongo store answers from indexes, the legacy stores from direct keys (with
-two documented scans that die at the T7 cutover).
+two documented scans that die at the T7 cutover). Spec 0040 adds the identity
+tail (`save_tenant` … `delete_membership`) for tenants, organizations, teams
+and per-team memberships.
 """
 
 from __future__ import annotations
@@ -12,8 +14,12 @@ from __future__ import annotations
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
 from voiceai.modules.auth.models.invite import Invite
+from voiceai.modules.auth.models.membership import Membership
+from voiceai.modules.auth.models.organization import Organization
 from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.session import SessionRecord
+from voiceai.modules.auth.models.team import Team
+from voiceai.modules.auth.models.tenant import Tenant
 from voiceai.modules.auth.models.user import User
 
 __all__ = ["AuthStorePort", "LoginLimiter"]
@@ -115,6 +121,58 @@ class AuthStorePort(Protocol):
 
     async def is_revoked(self, jti: str) -> bool:
         """Report whether a JWT id was denied (cache-fast, store-backed)."""
+        ...
+
+    async def save_tenant(self, tenant: Tenant) -> None:
+        """Persist a tenant (insert or replace)."""
+        ...
+
+    async def get_tenant(self, tenant_id: str) -> Tenant | None:
+        """Return the tenant with this id, or `None`."""
+        ...
+
+    async def get_tenant_by_slug(self, slug: str) -> Tenant | None:
+        """Return the tenant with this slug, or `None` (indexed, no scan)."""
+        ...
+
+    async def list_tenants(self) -> list[Tenant]:
+        """Return every tenant."""
+        ...
+
+    async def save_organization(self, organization: Organization) -> None:
+        """Persist an organization (insert or replace)."""
+        ...
+
+    async def get_organization(self, org_id: str) -> Organization | None:
+        """Return the organization with this id, or `None`."""
+        ...
+
+    async def list_organizations(self, tenant_id: str) -> list[Organization]:
+        """Return every organization of a tenant."""
+        ...
+
+    async def save_team(self, team: Team) -> None:
+        """Persist a team (insert or replace)."""
+        ...
+
+    async def get_team(self, team_id: str) -> Team | None:
+        """Return the team with this id, or `None`."""
+        ...
+
+    async def list_teams(self, org_id: str) -> list[Team]:
+        """Return every team of an organization."""
+        ...
+
+    async def save_membership(self, membership: Membership) -> None:
+        """Persist a membership (insert or replace)."""
+        ...
+
+    async def list_memberships(self, user_id: str) -> list[Membership]:
+        """Return every membership of a user."""
+        ...
+
+    async def delete_membership(self, membership_id: str) -> bool:
+        """Delete a membership; `True` when one existed."""
         ...
 
 

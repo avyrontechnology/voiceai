@@ -109,12 +109,18 @@ class _Socket:
         self.close_code = code
 
 
-def _principal(org_id="acme", role="owner"):
-    """Session principal the way the ticket resolver builds one."""
+def _principal(org_id="acme", role="owner", tenant_id=None):
+    """Session principal the way the ticket resolver builds one.
+
+    `tenant_id` defaults to `org_id`: these doubles simulate single-org
+    history, where the projected tenant coincides with the org slug (spec
+    0040 resolvers stamp the hex in prod — pass it explicitly to pin that).
+    """
     return Principal(
         user_id="u-1",
         email="u@example.com",
         org_id=org_id,
+        tenant_id=org_id if tenant_id is None else tenant_id,
         role=role,
         auth_type="session",
     )
@@ -257,6 +263,17 @@ async def test_accepted_run_binds_the_ticket_holders_tenant():
     socket, _ = await _drive(container, TICKET)
     (call,) = service.calls
     assert call["tenant_id"] == "globex"
+    assert socket.close_code == 1000
+
+
+async def test_accepted_run_binds_projected_tenant_not_org_slug():
+    """Post-migration the ticket principal carries a hex tenant distinct from the org slug (spec 0040)."""
+    service = _Service()
+    principal = _principal(org_id="globex", tenant_id="64f000000000000000000001")
+    container = _container(flag=True, service=service, auth=_Auth(principal))
+    socket, _ = await _drive(container, TICKET)
+    (call,) = service.calls
+    assert call["tenant_id"] == "64f000000000000000000001"
     assert socket.close_code == 1000
 
 

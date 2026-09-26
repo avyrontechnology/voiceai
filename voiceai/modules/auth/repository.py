@@ -6,7 +6,10 @@ in-memory in tests) plus an optional Redis read-through cache for the revocation
 fast path. Natural keys pin `id` (`user_id`, `token_hash`, `invite_id`, `key_id`,
 `event_id`, `jti`), so identity is unchanged from the legacy stores; deletes are
 soft (AGENTS.md rule 5) where the legacy stores destroy — reads skip inactive rows
-either way, and the T7 cutover retires the difference.
+either way, and the T7 cutover retires the difference. Spec 0040 adds the
+identity tail (tenants, organizations, teams, memberships) behind optional
+repositories: wired collections delegate, `None` falls back to process-local
+rows so pre-cutover constructions keep working.
 """
 
 from __future__ import annotations
@@ -23,8 +26,12 @@ from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
 from voiceai.modules.auth.models.invite import Invite
+from voiceai.modules.auth.models.membership import Membership
+from voiceai.modules.auth.models.organization import Organization
 from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.session import SessionRecord
+from voiceai.modules.auth.models.team import Team
+from voiceai.modules.auth.models.tenant import Tenant
 from voiceai.modules.auth.models.user import User
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, so the module imports without a driver
@@ -54,6 +61,12 @@ class MongoAuthStore:
         keys: The `api_keys` collection (`key_hash` unique index).
         events: The `auth_events` collection (descending `created_at` reads).
         revoked: The `revoked_tokens` collection (`jti` unique, TTL on `expires_at`).
+        tenants: The `tenants` collection (`slug` unique), or `None` for a
+            process-local fallback (integrator wires the collection at cutover;
+            `None` keeps pre-cutover constructions working).
+        organizations: The `organizations` collection, or `None` (same fallback).
+        teams: The `teams` collection, or `None` (same fallback).
+        memberships: The `memberships` collection, or `None` (same fallback).
         cache: Redis read-through for `is_revoked`, or `None` to read the store
             directly (tests, single-proc dev).
     """
@@ -67,6 +80,10 @@ class MongoAuthStore:
         keys: BaseRepository[ApiKey],
         events: BaseRepository[AuthEvent],
         revoked: BaseRepository[RevokedToken],
+        tenants: BaseRepository[Tenant] | None = None,
+        organizations: BaseRepository[Organization] | None = None,
+        teams: BaseRepository[Team] | None = None,
+        memberships: BaseRepository[Membership] | None = None,
         cache: Redis | None = None,
     ) -> None:
         self._users = users
@@ -75,7 +92,15 @@ class MongoAuthStore:
         self._keys = keys
         self._events = events
         self._revoked = revoked
+        self._tenants = tenants
+        self._organizations = organizations
+        self._teams = teams
+        self._memberships = memberships
         self._cache = cache
+        self._tenant_rows: dict[str, Tenant] = {}
+        self._organization_rows: dict[str, Organization] = {}
+        self._team_rows: dict[str, Team] = {}
+        self._membership_rows: dict[str, Membership] = {}
 
     async def _all(self, repo: BaseRepository[Any]) -> list[Any]:  # why: heterogeneous owned collections
         """Return every active document of a collection, oldest first."""
@@ -183,6 +208,99 @@ class MongoAuthStore:
     async def list_user_sessions(self, user_id: str) -> list[SessionRecord]:
         """Return every active session and refresh record of a user."""
         return list(await self._sessions.find_many("user_id", user_id))
+
+    async def save_tenant(self, tenant: Tenant) -> None:
+        """Persist a tenant keyed by `tenant_id`."""
+        _pin(tenant, tenant.tenant_id)
+        if self._tenants is not None:
+            await self._tenants.insert(tenant)
+        else:
+            self._tenant_rows[tenant.tenant_id] = tenant
+
+    async def get_tenant(self, tenant_id: str) -> Tenant | None:
+        """Return the active tenant with this id, or `None`."""
+        if self._tenants is not None:
+            return await self._tenants.get(tenant_id)
+        row = self._tenant_rows.get(tenant_id)
+        return row if row is not None and row.is_active else None
+
+    async def get_tenant_by_slug(self, slug: str) -> Tenant | None:
+        """Return the active tenant with this slug, or `None` (indexed, no scan)."""
+        if self._tenants is not None:
+            return await self._tenants.find_one("slug", slug)
+        return next((t for t in self._tenant_rows.values() if t.slug == slug and t.is_active), None)
+
+    async def list_tenants(self) -> list[Tenant]:
+        """Return every active tenant, oldest first."""
+        if self._tenants is not None:
+            return await self._all(self._tenants)
+        return [t for t in self._tenant_rows.values() if t.is_active]
+
+    async def save_organization(self, organization: Organization) -> None:
+        """Persist an organization keyed by `org_id`."""
+        _pin(organization, organization.org_id)
+        if self._organizations is not None:
+            await self._organizations.insert(organization)
+        else:
+            self._organization_rows[organization.org_id] = organization
+
+    async def get_organization(self, org_id: str) -> Organization | None:
+        """Return the active organization with this id, or `None`."""
+        if self._organizations is not None:
+            return await self._organizations.get(org_id)
+        row = self._organization_rows.get(org_id)
+        return row if row is not None and row.is_active else None
+
+    async def list_organizations(self, tenant_id: str) -> list[Organization]:
+        """Return every active organization of a tenant, oldest first."""
+        if self._organizations is not None:
+            return list(await self._organizations.find_many("tenant_id", tenant_id))
+        return [o for o in self._organization_rows.values() if o.tenant_id == tenant_id and o.is_active]
+
+    async def save_team(self, team: Team) -> None:
+        """Persist a team keyed by `team_id`."""
+        _pin(team, team.team_id)
+        if self._teams is not None:
+            await self._teams.insert(team)
+        else:
+            self._team_rows[team.team_id] = team
+
+    async def get_team(self, team_id: str) -> Team | None:
+        """Return the active team with this id, or `None`."""
+        if self._teams is not None:
+            return await self._teams.get(team_id)
+        row = self._team_rows.get(team_id)
+        return row if row is not None and row.is_active else None
+
+    async def list_teams(self, org_id: str) -> list[Team]:
+        """Return every active team of an organization, oldest first."""
+        if self._teams is not None:
+            return list(await self._teams.find_many("org_id", org_id))
+        return [t for t in self._team_rows.values() if t.org_id == org_id and t.is_active]
+
+    async def save_membership(self, membership: Membership) -> None:
+        """Persist a membership keyed by `membership_id`."""
+        _pin(membership, membership.membership_id)
+        if self._memberships is not None:
+            await self._memberships.insert(membership)
+        else:
+            self._membership_rows[membership.membership_id] = membership
+
+    async def list_memberships(self, user_id: str) -> list[Membership]:
+        """Return every active membership of a user, oldest first."""
+        if self._memberships is not None:
+            return list(await self._memberships.find_many("user_id", user_id))
+        return [m for m in self._membership_rows.values() if m.user_id == user_id and m.is_active]
+
+    async def delete_membership(self, membership_id: str) -> bool:
+        """Soft-delete a membership; `True` when one was active (rule 5)."""
+        if self._memberships is not None:
+            return await self._memberships.soft_delete(membership_id)
+        row = self._membership_rows.get(membership_id)
+        if row is None or not row.is_active:
+            return False
+        row.is_active = False
+        return True
 
     async def save_revoked(self, token: RevokedToken) -> None:
         """Deny one access token, in the store and in the revocation cache."""

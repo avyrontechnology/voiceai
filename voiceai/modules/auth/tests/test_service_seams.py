@@ -1,8 +1,11 @@
 """C3 seams: port conformance, limiter, public projection, store additions (spec 0005).
 
-The port test pins the strangler contract — both legacy stores satisfy
-`AuthStorePort` (MemoryStore by instance, RedisStore by method presence since it
-needs a live client), so the service can move without touching persistence.
+The port test pins the strangler contract — both legacy stores satisfy the
+PRE-IDENTITY `AuthStorePort` (MemoryStore by instance, RedisStore by method
+presence since it needs a live client), so the service can move without
+touching persistence. Identity methods (spec 0040: tenants, organizations,
+teams, memberships) are greenfield-only — legacy stores predate them and the
+resolvers degrade gracefully (getattr guards) where they are bound.
 """
 
 from __future__ import annotations
@@ -19,14 +22,42 @@ from voiceai.modules.auth.utils import check_login_allowed, try_login_attempt
 from voiceai.platform.store import MemoryStore, RedisStore
 
 
+#: Identity methods (spec 0040) the frozen legacy stores intentionally lack.
+#: `save/get_organization` are NOT listed: legacy already speaks single
+#: organizations, so they ride the pre-identity surface (integrator correction).
+IDENTITY_PORT_METHODS: frozenset[str] = frozenset(
+    {
+        "save_tenant",
+        "get_tenant",
+        "get_tenant_by_slug",
+        "list_tenants",
+        "list_organizations",
+        "save_team",
+        "get_team",
+        "list_teams",
+        "save_membership",
+        "list_memberships",
+        "delete_membership",
+    }
+)
+
+
 def _port_methods() -> list[str]:
-    """Every port member a conforming store must carry."""
-    return [m for m in dir(AuthStorePort) if not m.startswith("_")]
+    """Every pre-identity port member a conforming legacy store must carry."""
+    return [m for m in dir(AuthStorePort) if not m.startswith("_") and m not in IDENTITY_PORT_METHODS]
 
 
 def test_memory_store_satisfies_port_by_instance() -> None:
-    """The in-process store behind the test seam conforms structurally."""
-    assert isinstance(MemoryStore(), AuthStorePort)
+    """The in-process store behind the test seam conforms structurally.
+
+    Checked member-by-member (not `isinstance`, which demands the identity
+    methods frozen legacy stores intentionally lack — see
+    `IDENTITY_PORT_METHODS`); resolvers degrade gracefully where they are
+    bound (getattr guards in `_resolve_tenancy`).
+    """
+    store = MemoryStore()
+    for method in _port_methods():
+        assert callable(getattr(store, method, None)), method
 
 
 def test_redis_store_carries_every_port_method() -> None:

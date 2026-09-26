@@ -116,7 +116,7 @@ async def voice_chat(
         detail=agent_id,
     )
     context = TenantContext(
-        tenant_id=principal.org_id,
+        tenant_id=principal.tenant_id,
         request_id=new_id("ws"),
         principal_id=principal.user_id,
         scopes=frozenset(principal.effective_scopes()),

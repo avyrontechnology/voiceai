@@ -44,6 +44,12 @@ class Collections(str, Enum):
     #: Per-agent chat sessions (spec 0038, Phase C): tenant-scoped
     #: text-conversation histories.
     CHAT_SESSIONS = "chat_sessions"
+    #: Identity program rows (spec 0040, Phase D): tenants, organizations,
+    #: teams, memberships. Always written stamped; backfill asserts.
+    TENANTS = "tenants"
+    ORGANIZATIONS = "organizations"
+    TEAMS = "teams"
+    MEMBERSHIPS = "memberships"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:
