@@ -127,6 +127,10 @@ behavior until then — documented, not broken).
 
 ## Burn-down
 
-- [ ] Slice 1: schema + validation + allowlist (integrator).
-- [ ] Slice 2: chat module (Agent A).
-- [ ] Slice 3: wiring/tests owned splits + UI spec (integrator + Agent B).
+- [x] Slice 1: schema + validation + allowlist (integrator).
+- [x] Slice 2: chat module (Agent A: models/repository/service/controller
+  SSE/history-cap/session ownership; scalar identity, system prompt first,
+  x-session-id header, blank-turn 400s).
+- [x] Slice 3: wiring (integrator: registry, wire list, census) + endpoint
+  tests + UI spec (Agent B: 19 tests, specs/0039-ui-chat.md).
+- [x] Integrate: docs, ownership, sentinel, budget; gate green 1603.

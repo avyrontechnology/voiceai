@@ -476,6 +476,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
         modules=[
             "voiceai.modules.auth.controller",
             "voiceai.modules.catalog.controller",
+            "voiceai.modules.chat.controller",
             "voiceai.modules.tools.controller",
             "voiceai.modules.voices.controller",
             "voiceai.modules.health.controller",
