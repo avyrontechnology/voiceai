@@ -109,6 +109,18 @@ class AuthAdminMixin(AuthServiceBase):
         await self._store.save_user(user)
         live.accepted = True
         await self._store.save_invite(live)
+        # Spec 0041 integrator: claim pre-accept team grants. The UI grants by
+        # invite email (no user row exists yet), so membership rows keyed by
+        # email wait here; re-key them to the minted user_id so they resolve
+        # instead of orphaning. Email-keyed rows never match a real user id
+        # (`usr_` prefix), so the rewrite is collision-free by construction.
+        # Legacy stores predate the identity tail (getattr guard, T7 retires
+        # them); the module Fake/Mongo stores always carry it.
+        list_memberships = getattr(self._store, "list_memberships", None)
+        if list_memberships is not None:
+            for pending in await list_memberships(live.email):
+                pending.user_id = user.user_id
+                await self._store.save_membership(pending)
         legacy = await self._new_session(
             user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S, tenant_id=user.tenant_id
         )

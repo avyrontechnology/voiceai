@@ -31,6 +31,7 @@ from voiceai.modules.auth.models.user import User, UserRole
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.repository import MongoAuthStore
 from voiceai.modules.auth.service import AuthService
+from voiceai.modules.auth.tests.conftest import _JWT
 from voiceai.modules.auth.tests.test_service import FakeAuthStore
 
 
@@ -215,6 +216,25 @@ async def test_pre_migration_slug_principal_still_scopes() -> None:
     await service.add_membership(_principal("owner-1", tenant.tenant_id, "admin"), team_id, "user-1", "member")
 
     mine = await service.list_user_teams(_principal("user-1", "default", "viewer"), "user-1")
+
+    assert [t.team_id for t in mine] == [team_id]
+
+
+async def test_pre_accept_email_grant_claimed_at_accept() -> None:
+    """A team grant keyed by invite email resolves at accept (spec 0041 integrator).
+
+    No user row exists at invite time, so the UI grants by email; accept_invite
+    re-keys those pending rows to the minted user_id instead of orphaning them.
+    """
+    service = AuthService(FakeAuthStore(), jwt=_JWT)
+    owner = _principal("owner-1", "default", "owner")
+    tenant, _, team_id = await _tenant_stack(service, owner, "acme")
+    admin = _principal("owner-1", tenant.tenant_id, "admin")
+    _, raw = await service.invite(admin, "new@acme.test", "New", "member")
+    await service.add_membership(admin, team_id, "new@acme.test", "member")
+
+    user, _ = await service.accept_invite(raw, None, "new-pass-1")
+    mine = await service.list_user_teams(_principal(user.user_id, tenant.tenant_id, "viewer"), user.user_id)
 
     assert [t.team_id for t in mine] == [team_id]
 
