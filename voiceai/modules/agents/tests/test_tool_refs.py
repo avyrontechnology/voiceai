@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-import voiceai.modules.agents.service as agents_service
+import voiceai.modules.agents.service_tools as agents_service
 from voiceai.modules.agents.errors import AgentConfigInvalidError
 from voiceai.modules.agents.tests.test_service import (
     CONVERSATION_TASK,
@@ -23,7 +23,7 @@ from voiceai.modules.agents.tests.test_service import (
     agent_model,
     build_service,
 )
-from voiceai.modules.tools.errors import ToolNotFoundError
+from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
 
 
 def _row(tool_id: str, url: str | None = "https://hooks.example/run", **overrides: Any) -> SimpleNamespace:
@@ -56,6 +56,13 @@ class _Tools:
             if row.tool_id == ref:
                 return row
         raise ToolNotFoundError(f"Unknown tool {ref!r}.")
+
+    async def get_tool_for_attach(self, ref: str) -> SimpleNamespace:
+        """Mirror the real gate: deprecated rows refuse new attaches (spec 0046)."""
+        row = await self.get_tool(ref)
+        if getattr(row, "deprecated", False):
+            raise InvalidToolError(f"Tool {ref!r} is deprecated.")
+        return row
 
     async def list_tools(self, *, kind: str | None = None) -> list[SimpleNamespace]:
         return list(self._rows)
@@ -134,15 +141,15 @@ async def test_foreign_ref_matches_unknown_message(safe_endpoints: None) -> None
     assert str(typo_exc.value).replace("calendr", "X") == str(foreign_exc.value).replace("payroll", "X")
 
 
-async def test_deprecated_row_still_resolves(safe_endpoints: None) -> None:
-    """Grandfather rule: deprecated rows resolve (pickers filter, writes don't)."""
+async def test_deprecated_row_blocked_on_new_attach(safe_endpoints: None) -> None:
+    """Live-link rule (spec 0046): deprecated rows refuse NEW attaches (already-attached keep resolving)."""
     store = FakeDefinitionStore()
     rows = [_row("function:legacy", deprecated=True)]
     service = build_service(definitions=store, tools=_Tools(rows))
 
-    result = await service.create_agent(agent_model(_task_with(api_tools=_api_tools("function:legacy"))), None)
-
-    assert result["state"] == "created"
+    with pytest.raises(AgentConfigInvalidError, match="deprecated tool ref 'function:legacy'"):
+        await service.create_agent(agent_model(_task_with(api_tools=_api_tools("function:legacy"))), None)
+    assert store.saved == []
 
 
 async def test_embedded_entries_win_ties(safe_endpoints: None) -> None:

@@ -55,7 +55,7 @@ async def create_tool(payload: CreateToolPayload, service: ServiceDep) -> JSONRe
 @inject
 async def update_tool(tool_id: str, payload: UpdateToolPayload, service: ServiceDep) -> JSONResponse:
     """Replace one tenant tool; system rows answer 403."""
-    updated = await service.update_tool(tool_id, payload.to_definition())
+    updated, _propagated = await service.update_tool(tool_id, payload.to_definition())
     return success_response(wire_tool(updated))
 
 

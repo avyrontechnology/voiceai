@@ -33,7 +33,8 @@ MODULE: ModuleDef = ModuleDef(
     # Bumped for spec-0042 (settings truth schema + tests); ratchets down after.
     # Bumped for spec-0043 (extension namespace + merge/audit/service/wire/tests).
     # Bumped for spec-0044 (hybrid leg + pipeline matrix pins).
-    max_lines=16200,
+    # Bumped for spec-0046 (tools livelink + SSRF parity + service_tools split).
+    max_lines=17100,
 )
 
 __all__ = [

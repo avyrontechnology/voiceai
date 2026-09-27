@@ -214,3 +214,64 @@ class TestAcloseDatabase:
         container.db_client.override(providers.Object(database))
         await aclose_container(container)
         assert database.closed is True
+
+
+class TestToolLivelinkWiring:
+    """The tools cascade reaches attached agents through the container (spec 0046 integrator).
+
+    Pins the `_AgentToolLinks` seam the unit fakes cannot: a real container-built
+    tools service (agent_links bound, not None) propagates a tool edit into a
+    tenant agent row seeded straight through the definitions port. If the
+    re-materialize chain ever needs state beyond `_tools`/`_logger`, this fails
+    loudly instead of AttributeError-ing in production.
+    """
+
+    async def test_update_propagates_into_attached_agent(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import voiceai.modules.agents.service_tools as agents_service
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+        from voiceai.modules.tools.models import ToolDefinition
+
+        async def _safe_url(url: str) -> bool:
+            return True
+
+        monkeypatch.setattr(agents_service, "_is_url_safe", _safe_url)
+        container = build_container(arch_environment)
+        with bind_tenant(TenantContext(tenant_id="acme", request_id="t")):
+            tools = container.tools_service()
+            assert tools._agent_links is not None
+            await tools.create_tool(
+                ToolDefinition(
+                    tool_id="pending",
+                    kind="function",
+                    name="calendar",
+                    description="Old description.",
+                    url="https://hooks.example/run",
+                )
+            )
+            definitions = container.agent_definitions()
+            await definitions.save_agent(
+                "agent-1",
+                {
+                    "agent_name": "Cal",
+                    "channels": ["voice"],
+                    "tasks": [
+                        {
+                            "task_type": "conversation",
+                            "tools_config": {
+                                "api_tools": {"tool_refs": ["function:calendar"], "tools": [], "tools_params": {}}
+                            },
+                        }
+                    ],
+                },
+            )
+            row = await tools.get_tool("function:calendar")
+            row.description = "New description."
+            _, propagated = await tools.update_tool("function:calendar", row)
+
+            assert propagated == 1
+            reread = await definitions.get_agent("agent-1")
+            assert reread is not None
+            tools_block = reread["tasks"][0]["tools_config"]["api_tools"]["tools"]
+            assert tools_block[0]["function"]["description"] == "New description."

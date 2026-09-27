@@ -255,6 +255,10 @@ class _Tools:
         except KeyError:
             raise ToolNotFoundError(f"Tool {tool_id!r} not found.", details={"tool_id": tool_id})
 
+    async def get_tool_for_attach(self, tool_id: str):
+        """No deprecated rows in this fake; attach resolves like a read."""
+        return await self.get_tool(tool_id)
+
     async def list_tools(self, *, kind: str | None = None):
         return [SimpleNamespace(tool_id=tool_id) for tool_id in self._rows]
 
@@ -281,7 +285,7 @@ def _agent_with_refs() -> dict:
 
 async def test_tool_refs_materialize_and_webhook_refs_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shared rows merge into embedded config; webhook refs stamp URL + params."""
-    import voiceai.modules.agents.service as agents_service
+    import voiceai.modules.agents.service_tools as agents_service
 
     async def _safe(url: str) -> bool:
         return True

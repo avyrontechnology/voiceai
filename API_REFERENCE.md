@@ -340,6 +340,20 @@ key is promoted to a first-class `ConversationConfig` field by a follow-up spec 
 0042 Slice C is the template) — this spec never promotes a key itself.
 
 
+#### Shared-tool live-link (spec 0046)
+
+Attached shared tools (`tool_refs`, webhook refs) are live-linked: editing a tool
+re-materializes every attached agent (reads keep serving the stored snapshot).
+
+- `PUT /tools/{id}` bumps `tools_version`, re-materializes attached agents (same
+  tenant only), and reports the propagation count.
+- `DELETE /tools/{id}` answers 409 with the referencing agent count while references
+  exist — never a silent cascade-detach.
+- Attaching a `deprecated` tool answers 400 naming the tool; already-attached agents
+  keep running, flagged `stale_deprecated` with version drift on read.
+- Embedded `url` / `tools_params` endpoints pass the same SSRF pre-flight as ref
+  endpoints at attach time; failures answer 400 naming the path, never the URL.
+
 ### CreateAgentPayload
 | Property | Type | Description |
 |----------|------|-------------|

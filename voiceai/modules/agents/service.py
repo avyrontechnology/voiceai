@@ -14,7 +14,7 @@ client (defense in depth — production always wires the Mongo store since T3).
 
 from __future__ import annotations
 
-from asyncio import Semaphore, gather, to_thread
+from asyncio import Semaphore, gather
 from collections.abc import Callable, Mapping
 from logging import Logger
 from typing import Any, Final
@@ -23,7 +23,6 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from voiceai.common.errors import DependencyUnavailableError
-from voiceai.common.security import is_safe_outbound_url
 from voiceai.modules.agents.constants import (
     AGENT_ID_KEY,
     AGENT_NOT_FOUND_MESSAGE,
@@ -46,6 +45,7 @@ from voiceai.modules.agents.exceptions import ensure_agent_exists, ensure_patcha
 from voiceai.modules.agents.models import AgentModel
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort, LlmPort
 from voiceai.modules.agents.schemas import AgentsContract
+from voiceai.modules.agents.service_tools import AgentToolsMixin
 from voiceai.modules.agents.static_methods import apply_agent_patch, audit_provider_config
 
 __all__ = ["AgentService"]
@@ -94,23 +94,6 @@ _USER_ROLE: Final[str] = "user"
 # Identifiers only at INFO — never the config payload the quickstart used to log (AGENTS.md §4).
 _LOG_CREATING_AGENT: Final[str] = "creating agent %s"
 _LOG_UPDATING_AGENT: Final[str] = "updating agent %s"
-_LOG_TOOLS_UNWIRED: Final[str] = "agent tool refs skipped: tools unwired"
-
-
-async def _is_url_safe(url: str) -> bool:
-    """SSRF pre-flight for an attach-time endpoint (spec 0029 slice 2).
-
-    The guard blocks on DNS, so it runs off the event loop (spec 0001).
-    Module-level (not a method) so tests monkeypatch the seam without
-    network — the resolver itself stays injectable inside the guard.
-
-    Args:
-        url: The absolute endpoint URL about to persist on an agent record.
-
-    Returns:
-        `True` only when the URL is safe to request.
-    """
-    return await to_thread(is_safe_outbound_url, url)
 # legacy-parity(spec-0002): the quickstart extraction-setup log line, word for word (no PII).
 _LOG_EXTRACTION_SETUP: Final[str] = "Setting up follow up tasks"
 
@@ -163,7 +146,7 @@ def _patch_validation_error(agent_id: str, exc: ValidationError) -> AgentConfigI
     )
 
 
-class AgentService:
+class AgentService(AgentToolsMixin):
     """The agent-definition CRUD and prompt flows, quickstart-behavior-preserved (spec 0002).
 
     Every collaborator arrives by constructor (rule 9); tests inject in-memory fakes through
@@ -207,140 +190,6 @@ class AgentService:
         self._catalog = catalog
         self._tools = tools
 
-    async def _resolve_tool_refs(self, data: dict[str, Any]) -> list[str]:
-        """Resolve shared tool/webhook refs into embedded config (spec 0029 slice 2).
-
-        Runs BEFORE catalog validation so materialized rows walk like embedded
-        ones. Embedded entries win ties (local override); refs stay on the
-        record for refresh provenance. Unknown or foreign ids report with the
-        visible ids (no oracle — foreign reads as missing); unwired
-        compositions skip with a warning. Ref-attached endpoints pass the
-        SSRF pre-flight (fail-closed); pre-existing embedded URLs are
-        grandfathered, never re-checked here.
-
-        Args:
-            data: The agent definition dump, mutated in place.
-
-        Returns:
-            Problem strings (empty when every ref resolved).
-        """
-        from voiceai.modules.tools.errors import ToolNotFoundError
-
-        if self._tools is None:
-            self._logger.warning(_LOG_TOOLS_UNWIRED)
-            return []
-        problems: list[str] = []
-        valid_ids: list[str] | None = None
-        for position, task in enumerate(data.get(TASKS_KEY, []) or []):
-            if not isinstance(task, dict):
-                continue
-            tools_config = task.get("tools_config")
-            if not isinstance(tools_config, dict):
-                continue
-            api_tools = tools_config.get("api_tools")
-            if not isinstance(api_tools, dict):
-                continue
-            where = f"tasks[{position}].api_tools"
-            for ref in api_tools.get("tool_refs", []) or []:
-                try:
-                    row = await self._tools.get_tool(ref)
-                except ToolNotFoundError:
-                    if valid_ids is None:
-                        valid_ids = sorted({entry.tool_id for entry in await self._tools.list_tools()})
-                    suffix = f" (valid: {', '.join(valid_ids)})" if valid_ids else ""
-                    problems.append(f"{where}: unknown tool ref {ref!r}{suffix}")
-                    continue
-                problem = await self._materialize_tool_ref(api_tools, row, where)
-                if problem is not None:
-                    problems.append(problem)
-            params = api_tools.get("tools_params")
-            if isinstance(params, dict):
-                for name, entry in params.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    new_problems = await self._resolve_webhook_ref(entry, f"{where}.tools_params.{name}")
-                    if new_problems and "unknown webhook ref" in new_problems[0]:
-                        if valid_ids is None:
-                            valid_ids = sorted({row.tool_id for row in await self._tools.list_tools()})
-                        if valid_ids:
-                            new_problems[0] += f" (valid: {', '.join(valid_ids)})"
-                    problems.extend(new_problems)
-        return problems
-
-    async def _materialize_tool_ref(self, api_tools: dict[str, Any], row: Any, where: str) -> str | None:
-        """Merge one shared row into embedded tools/params (embedded wins ties).
-
-        Args:
-            api_tools: The task's `api_tools` mapping, mutated in place.
-            row: The resolved tool row.
-            where: The `tasks[N].api_tools` path for problem strings.
-
-        Returns:
-            A problem string when the row's endpoint fails the SSRF
-            pre-flight, else `None`. Pure-internal rows (no endpoint) stamp
-            the function definition only — no null URL is ever persisted.
-        """
-        tools = api_tools.get("tools")
-        if tools is None:
-            tools = []
-            api_tools["tools"] = tools
-        if isinstance(tools, list):
-            names = {
-                (item.get("function") or {}).get("name") if isinstance(item, dict) else None for item in tools
-            }
-            if row.name not in names:
-                tools.append(
-                    {
-                        "type": "function",
-                        "function": {"name": row.name, "description": row.description, "parameters": row.parameters},
-                    }
-                )
-        params = api_tools.get("tools_params")
-        if isinstance(params, dict) and row.name not in params:
-            if row.url is None:
-                return None
-            if not await _is_url_safe(row.url):
-                return f"{where}: tool {row.name!r} endpoint failed safety validation"
-            params[row.name] = {"url": row.url, "method": row.method}
-        return None
-
-    async def _resolve_webhook_ref(self, entry: dict[str, Any], where: str) -> list[str]:
-        """Stamp one tools_params entry from its webhook ref (spec 0029 slice 2).
-
-        `None` means absent (this runs on the validated dump, where every
-        APIParams field materializes — a `None` was never user-supplied). Any
-        other value, even falsy, is the per-agent override and the shared row
-        is never touched.
-
-        Args:
-            entry: The params entry, mutated in place.
-            where: The `tasks[N].api_tools.tools_params.<name>` path.
-
-        Returns:
-            Problem strings (empty when the entry resolved or had no ref).
-        """
-        from voiceai.modules.tools.errors import ToolNotFoundError
-
-        ref = entry.get("pre_call_webhook_ref")
-        if not ref:
-            return []
-        if self._tools is None:
-            self._logger.warning(_LOG_TOOLS_UNWIRED)
-            return []
-        try:
-            row = await self._tools.get_tool(ref)
-        except ToolNotFoundError:
-            return [f"{where}: unknown webhook ref {ref!r}"]
-        if entry.get("pre_call_webhook_url") is None:
-            if row.url is None:
-                return [f"{where}: webhook {row.name!r} has no endpoint"]
-            if not await _is_url_safe(row.url):
-                return [f"{where}: webhook {row.name!r} endpoint failed safety validation"]
-            entry["pre_call_webhook_url"] = row.url
-        if entry.get("pre_call_webhook_param") is None:
-            entry["pre_call_webhook_param"] = dict(row.params_template)
-        return []
-
     async def _validate_providers(self, data: dict[str, Any]) -> None:
         """Reject provider/model/language values the catalog cannot resolve.
 
@@ -349,6 +198,8 @@ class AgentService:
         Shared tool/webhook refs resolve first so materialized rows walk like
         embedded ones (spec 0029 slice 2) — ref resolution needs only the
         tools service, so it runs even when the catalog is unwired or empty.
+        Embedded endpoints gate before that (spec 0046 slice C), so each
+        persisted URL checks exactly once and ref-stamped values are not re-gated.
 
         Args:
             data: The agent definition dump about to persist.
@@ -356,7 +207,10 @@ class AgentService:
         Raises:
             AgentConfigInvalidError: With every problem and the valid values.
         """
-        ref_problems = await self._resolve_tool_refs(data)
+        # Embedded first: ref materialization stamps already-gated row URLs, so
+        # gating the request's own URLs before it checks each persisted value once.
+        ref_problems = await self._gate_embedded_endpoints(data)
+        ref_problems.extend(await self._resolve_tool_refs(data))
         if self._catalog is None:
             self._logger.warning("agent provider validation skipped: catalog unwired")
             if ref_problems:
@@ -484,11 +338,17 @@ class AgentService:
     async def get_agent(self, agent_id: str) -> dict[str, Any]:  # why: raw config dicts are the engine seam
         """Return the raw stored configuration for `agent_id`.
 
+        Fresh rows read back byte-identical; rows whose materialized tools drifted
+        behind the registry (or attached a deprecated row) carry the read-only
+        `stale_deprecated`/`tool_version_drift` flags — the stored record is
+        never rewritten here (spec 0046 slice B).
+
         Args:
             agent_id: The bare-UUID agent id.
 
         Returns:
-            The stored configuration dict, byte-identical to what the quickstart serves.
+            The stored configuration dict, annotated with livelink flags only
+                when stale.
 
         Raises:
             AgentNotFoundError: When no record exists (the controller swallows this into
@@ -496,7 +356,8 @@ class AgentService:
             DependencyUnavailableError: When the definition store is unconfigured.
         """
         store = self._require_definitions()
-        return ensure_agent_exists(await store.get_agent(agent_id), agent_id)
+        stored = ensure_agent_exists(await store.get_agent(agent_id), agent_id)
+        return self._with_livelink_flags(stored, await self._livelink_flags(stored))
 
     async def get_agent_prompts(self, agent_id: str) -> dict[str, Any]:  # why: quickstart wire shape is a raw dict
         """Return the quickstart prompts payload: `{"agent_id", "agent_prompts"}`.
@@ -721,7 +582,9 @@ class AgentService:
         """Return the quickstart directory payload: `{"agents": [{"agent_id", "data"}, ...]}`.
 
         The scan quirks (`KEYS *`, `":"`-keys skipped, per-key failures logged and skipped)
-        live behind the repository's one documented method.
+        live behind the repository's one documented method. Each entry's `data`
+        carries the same read-only livelink flags as `get_agent` when stale;
+        stored records are never rewritten here (spec 0046 slice B).
 
         Returns:
             The wire dict, `agents` empty when nothing genuine is stored.
@@ -730,4 +593,11 @@ class AgentService:
             DependencyUnavailableError: When the definition store is unconfigured.
         """
         store = self._require_definitions()
-        return {AGENTS_KEY: await store.list_agents()}
+        entries = await store.list_agents()
+        annotated: list[dict[str, Any]] = []  # why: directory entries are free-form wire dicts
+        for entry in entries:
+            data = entry.get("data")
+            if isinstance(data, dict):
+                entry = {**entry, "data": self._with_livelink_flags(data, await self._livelink_flags(data))}
+            annotated.append(entry)
+        return {AGENTS_KEY: annotated}

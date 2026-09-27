@@ -292,7 +292,7 @@ def _build_catalog_service(db_client: Any) -> Any:
     return CatalogService(CatalogRepository(system_view))
 
 
-def _build_tools_service(db_client: Any) -> Any:
+def _build_tools_service(db_client: Any, definitions: Any) -> Any:
     """Build the tool registry over system + scoped views (spec 0029, slice 1)."""
     from voiceai.common.tenancy import SYSTEM_TENANT_ID, current_tenant
     from voiceai.core.db import InMemoryDatabase
@@ -314,7 +314,124 @@ def _build_tools_service(db_client: Any) -> Any:
         current_tenant().tenant_id,
         Collections.TOOLS,
     )
-    return ToolsService(ToolsRepository(system), ToolsRepository(scoped))
+    link = _AgentToolLinks(definitions=definitions)
+    tools = ToolsService(ToolsRepository(system), ToolsRepository(scoped), agent_links=link)
+    link.bind(tools)
+    return tools
+
+
+class _AgentToolLinks:
+    """AgentToolLink over the scoped definitions port (spec 0046 integrator).
+
+    Structural conformance only — never imports the tools Protocol
+    (`LlmPort` precedent). Both this link and the definitions port are built
+    per request under the same ambient tenant, so the cascade is same-tenant
+    by construction; the tools service stays the only writer-facing surface.
+
+    The re-materialize call reuses `AgentService._resolve_tool_refs` through
+    an uninitialized instance carrying only `_tools`/`_logger`: that chain is
+    verified `_tools`/`_logger`-only (no catalog/definitions/prompts reads),
+    and `tests/arch/test_tool_livelink.py` pins the seam — any future chain
+    drift fails there loudly instead of AttributeError-ing here.
+    """
+
+    def __init__(self, definitions: Any) -> None:
+        """Bind the scoped definitions port; `bind` attaches the tools service.
+
+        Args:
+            definitions: Tenant-scoped agent definitions port (raw dict seam).
+        """
+        from voiceai.modules.agents.service import AgentService
+
+        self._definitions = definitions
+        self._service: AgentService | None = None
+
+    def bind(self, tools: Any) -> None:
+        """Attach the tools service whose rows the cascade re-resolves.
+
+        Two-step construction because the tools service takes this link in
+        its own ctor: build link → build service with `agent_links=link` →
+        bind. Unbound links count/rematerialize nothing (warn-and-zero, same
+        posture as `agent_links=None`).
+
+        Args:
+            tools: The `ToolsService` under construction (ref resolution reads).
+        """
+        from voiceai.modules.agents.service import AgentService
+
+        service = AgentService.__new__(AgentService)
+        service._tools = tools
+        service._logger = get_logger("agents")
+        self._service = service
+
+    async def _referencing_dumps(self, tool_id: str) -> list[tuple[str, dict[str, Any]]]:
+        """Return `(agent_id, config)` pairs attaching `tool_id` in this tenant.
+
+        Args:
+            tool_id: The `{kind}:{name}` natural key.
+
+        Returns:
+            Attached agent configs (raw `data` dicts, never persisted here).
+        """
+        from voiceai.modules.agents.service import AgentService
+
+        found: list[tuple[str, int, dict[str, Any]]] = []
+        for position, record in enumerate(await self._definitions.list_agents()):
+            if not isinstance(record, dict):
+                continue
+            config = record.get("data")
+            if not isinstance(config, dict):
+                continue
+            refs: list[str] = []
+            for block in AgentService._api_tools_blocks(config):
+                refs.extend(AgentService._attached_refs(block))
+            if tool_id in refs:
+                agent_id = record.get("agent_id")
+                if isinstance(agent_id, str) and agent_id:
+                    found.append((agent_id, position, config))
+        found.sort(key=lambda item: item[1])
+        return [(agent_id, config) for agent_id, _, config in found]
+
+    async def count_referencing_agents(self, tool_id: str) -> int:
+        """Count this tenant's agents attaching `tool_id` (exact)."""
+        return len(await self._referencing_dumps(tool_id))
+    async def rematerialize_tool(self, tool_id: str, *, limit: int) -> int:
+        """Re-materialize at most `limit` attached agents, persisting clean ones.
+
+        Per-agent isolation (AGENTS.md section 5): one bad dump logs and the
+        loop continues; `asyncio.CancelledError` is never swallowed.
+
+        Args:
+            tool_id: The `{kind}:{name}` natural key.
+            limit: Max agents processed per call (Slice A fan-out bound).
+
+        Returns:
+            The count persisted without problems (0 when unbound).
+        """
+        import asyncio
+
+        service = self._service
+        if service is None:
+            get_logger("tools").warning("livelink cascade skipped: agent link unbound")
+            return 0
+        tool_logger = get_logger("tools")
+        propagated = 0
+        for agent_id, config in await self._referencing_dumps(tool_id):
+            if propagated >= limit:
+                break
+            try:
+                problems = await service.rematerialize_agent_tools(config)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad dump must not fail the write
+                tool_logger.warning("livelink rematerialize failed for agent %s: %s", agent_id, type(exc).__name__)
+                continue
+            if problems:
+                tool_logger.warning("livelink rematerialize skipped for agent %s: %s", agent_id, "; ".join(problems))
+                continue
+            await self._definitions.save_agent(agent_id, config)
+            propagated += 1
+        return propagated
 
 
 def _build_chat_service(db_client: Any, definitions: Any) -> Any:
@@ -404,15 +521,18 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Catalog Module: system-tenant rows, no ambient read — Singleton is safe.
     catalog_service = providers.Singleton(_build_catalog_service, db_client)
 
-    # Tools Module providers live here (above agents): the agent service
-    # resolves shared tool refs through the tools service.
-    tools_service = providers.Factory(_build_tools_service, db_client)
     # Agents Module: per-request collection views (spec 0020, M1b). These must
     # stay Factory, never Singleton: a shared instance would pin the first
     # request's tenant on every later request. The driver handles underneath
     # are stateless, so per-request views cost an object allocation, not a socket.
     agent_definitions = providers.Factory(_build_agent_definitions, db_client)
     agent_session_store = providers.Factory(_build_agent_prompt_store, db_client)
+
+    # Tools Module providers live here (below agents): the agent service
+    # resolves shared tool refs through the tools service, and the tools
+    # service cascades edits back through the agent link (spec 0046) — the
+    # link closes over the scoped definitions above, same ambient tenant.
+    tools_service = providers.Factory(_build_tools_service, db_client, agent_definitions)
 
     agent_service = providers.Factory(
         _build_agent_service,

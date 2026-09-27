@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: FastAPI
   version: 0.1.0
+  description: Legacy HTTP surface; the shared-tool live-link contract (spec 0046
+    — version-stamped propagation, refuse-delete, deprecation gate, SSRF parity)
+    lives in voiceai/modules/tools/CONTRACT.md.
 paths:
   /agent/{agent_id}:
     get:
