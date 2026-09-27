@@ -70,7 +70,8 @@ MODULE: ModuleDef = ModuleDef(
     # retire the legacy side — specs 0032-0037); slices after this one must
     # bring it back down as regions leave TaskManager.
     # Bumped for spec-0042 (runtime wiring + recording report + tests).
-    max_lines=48200,
+    # Bumped for spec-0044 (hybrid leg pins).
+    max_lines=48400,
 )
 
 __all__ = [

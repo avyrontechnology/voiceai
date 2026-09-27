@@ -39,6 +39,7 @@ TICKET_TOUCHED: frozenset[str] = frozenset(
         "voiceai/modules/voice/constants.py",
         "voiceai/modules/voice/controller.py",
         "voiceai/modules/voice/tests/test_controller.py",
+        "voiceai/modules/voice/tests/test_hybrid_channels.py",  # spec 0044: ticket-path hybrid pin
     }
 )
 

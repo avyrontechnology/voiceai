@@ -57,6 +57,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/chat/service.py",  # spec 0038: session ownership checks
         "voiceai/modules/chat/tests/test_controller.py",  # spec 0038: isolation pins
         "voiceai/modules/chat/tests/test_service.py",  # spec 0038: ownership pins
+        "voiceai/modules/chat/tests/test_hybrid_channels.py",  # spec 0044: hybrid leg pins
         "voiceai/modules/catalog/models.py",  # spec 0022: system default tenant
         "voiceai/modules/catalog/repository.py",  # spec 0022: system-tenant view
         "voiceai/modules/catalog/tests/test_controller.py",  # spec 0022: boot seed pins
@@ -64,6 +65,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/catalog/tests/test_service.py",  # spec 0022: stamp pins
         "voiceai/modules/voice/controller.py",  # spec 0021, M2: channel tenant binding
         "voiceai/modules/voice/tests/test_controller.py",  # spec 0021, M2: gate pins
+        "voiceai/modules/voice/tests/test_hybrid_channels.py",  # spec 0044: hybrid leg pins
         "voiceai/modules/tools/models.py",  # spec 0029: system default tenant
         "voiceai/modules/tools/repository.py",  # spec 0029: dual-view reads
         "voiceai/modules/tools/static_methods.py",  # spec 0029: system predicate
