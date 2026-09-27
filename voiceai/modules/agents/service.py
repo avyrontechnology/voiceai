@@ -34,6 +34,7 @@ from voiceai.modules.agents.constants import (
     ASSISTANT_STATUS_KEY,
     ASSISTANT_STATUS_SEEDING,
     ASSISTANT_STATUS_UPDATED,
+    EXTENSIONS_KEY,
     MAX_EXTRACTION_CONCURRENCY,
     STATE_KEY,
     TASK_TYPE_EXTRACTION,
@@ -112,6 +113,54 @@ async def _is_url_safe(url: str) -> bool:
     return await to_thread(is_safe_outbound_url, url)
 # legacy-parity(spec-0002): the quickstart extraction-setup log line, word for word (no PII).
 _LOG_EXTRACTION_SETUP: Final[str] = "Setting up follow up tasks"
+
+
+def _dotted_location(loc: tuple[int | str, ...]) -> str:
+    """Render a pydantic error location in the audit walk's dotted style.
+
+    Args:
+        loc: The `loc` tuple from one `ValidationError` entry.
+
+    Returns:
+        `tasks[0].task_config.extensions` for the usual nesting, `agent` when empty.
+    """
+    parts: list[str] = []
+    for element in loc:
+        if isinstance(element, int):
+            parts.append(f"[{element}]")
+        elif parts:
+            parts.append(f".{element}")
+        else:
+            parts.append(str(element))
+    return "".join(parts) or "agent"
+
+
+def _patch_validation_error(agent_id: str, exc: ValidationError) -> AgentConfigInvalidError:
+    """Map a PATCH revalidation failure to a client-safe 400 (spec 0043 Slice C).
+
+    Errors rooted at the reserved `extensions` namespace surface as key-names-only
+    problems (location + the schema rule — the Slice A validator names offending KEY
+    names only, never values), never the raw pydantic text (which echoes inputs).
+    Errors elsewhere keep the existing envelope byte-identical. Failed validation
+    writes nothing: this raises before the service reaches any store call.
+
+    Args:
+        agent_id: The patched agent, carried for log correlation.
+        exc: The pydantic failure from the full strict revalidation.
+
+    Returns:
+        The `AgentConfigInvalidError` the caller raises.
+    """
+    if EXTENSIONS_KEY not in [element for err in exc.errors() for element in err.get("loc", ())]:
+        return AgentConfigInvalidError(str(exc), details={"agent_id": agent_id})
+    problems: list[str] = []
+    for err in exc.errors():
+        where = _dotted_location(err.get("loc", ()))
+        problems.append(f"{where}: {err.get('msg', 'invalid agent configuration')}")
+    return AgentConfigInvalidError(
+        "; ".join(problems),
+        details={"problems": problems, "agent_id": agent_id},
+    )
 
 
 class AgentService:
@@ -595,7 +644,7 @@ class AgentService:
         try:
             config = AgentModel.model_validate(merged)
         except ValidationError as exc:
-            raise AgentConfigInvalidError(str(exc), details={"agent_id": agent_id}) from exc
+            raise _patch_validation_error(agent_id, exc) from exc
         new_data = config.model_dump()
         new_data[ASSISTANT_STATUS_KEY] = ASSISTANT_STATUS_UPDATED
         await self._validate_providers(new_data)

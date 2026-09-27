@@ -24,6 +24,7 @@ from voiceai.common.logger import get_logger
 from voiceai.modules.agents.constants import (
     AGENT_DATA_KEY,
     AGENT_ID_KEY,
+    EXTENSIONS_KEY,
     MODULE_NAME,
     REDIS_KEY_NAMESPACE_SEPARATOR,
     TASKS_KEY,
@@ -52,6 +53,12 @@ _TASK_INDEX_OFFSET: Final[int] = 1
 # Inside a multiagent task block every agent's prompt lives under this key
 # (task_manager.py:2157 reads `prompts[agent]["system_prompt"]`).
 _SYSTEM_PROMPT_KEY: Final[str] = "system_prompt"
+
+# Spec 0043 Slice B: the one reserved free-form namespace inside a task's
+# `task_config`, skipped by key (never value-sniffed) in the audit walk below.
+# Slice D owns `TaskPatch.clear_extensions` in `schemas.py`; this is its wire
+# key. INTEGRATOR: keep this string identical to that field name.
+_CLEAR_EXTENSIONS_KEY: Final[str] = "clear_extensions"
 
 
 def is_agent_key(key: str) -> bool:
@@ -339,6 +346,11 @@ def _audit_llm_leaves(
         if isinstance(provider, str) and "model" in node:
             _check_leaf(problems, index, modality="llm", provider=provider, model=model, where=where)
         for key, value in node.items():
+            # Spec 0043 Slice B exemption (why: tenant free-form keys must never
+            # fail catalog validation): never descend into an `extensions`
+            # subtree — skipped by key, never value-sniffed.
+            if key == EXTENSIONS_KEY:
+                continue
             _audit_llm_leaves(problems, index, value, f"{where}.{key}")
     elif isinstance(node, list):
         for position, value in enumerate(node):
@@ -406,7 +418,11 @@ def audit_provider_config(
     write (spec 0028 strict) — the inactive block is parked, never exempt.
     Returns problem strings (empty means valid) — callers raise their own
     module error, so this stays import-clean: catalog rows arrive as plain
-    mappings and the language predicate injects.
+    mappings and the language predicate injects. The task
+    `task_config.extensions` subtree (spec 0043) is tenant free-form and is
+    never descended into: provider-shaped keys inside it produce no problems,
+    while the same names under `tools_config` still fail. The recursive
+    `llm_agent` walk skips that key by name (see `_audit_llm_leaves`).
 
     Args:
         config: One agent definition dump (`model_dump`, defaults materialized).
@@ -463,9 +479,16 @@ def audit_provider_config(
 
 
 def _merge_dict(base: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:
-    """Recursively merge a patch mapping into a copy of base (present wins)."""
+    """Recursively merge a patch mapping into a copy of base (present wins).
+
+    Present-`None` values are no-ops at every level — deletion uses explicit
+    clear ops, never null writes (spec 0043 Slice B pins the rule inside the
+    `extensions` namespace; the PATCH contract promises it everywhere).
+    """
     merged = dict(base)
     for key, value in patch.items():
+        if value is None:
+            continue
         if (
             key in merged
             and isinstance(merged[key], dict)
@@ -477,6 +500,50 @@ def _merge_dict(base: dict[str, Any], patch: Mapping[str, Any]) -> dict[str, Any
     return merged
 
 
+def _drop_extension_key(task: dict[str, Any], name: object, index: int, problems: list[str]) -> None:
+    """Drop one named key from a merged task's extensions bag (spec 0043 Slice B).
+
+    Unknown names — a missing bag or an absent key — are problems, in strict
+    parity with the `clear` ops, and never mutate.
+
+    Args:
+        task: The merged task mapping (mutated only on a hit).
+        name: The requested extension key (non-strings always miss).
+        index: The task position, for problem paths.
+        problems: The structural problems accumulator.
+    """
+    task_config = task.get("task_config")
+    extensions: object = task_config.get(EXTENSIONS_KEY) if isinstance(task_config, dict) else None
+    if isinstance(extensions, dict) and isinstance(name, str) and name in extensions:
+        del extensions[name]
+    else:
+        problems.append(f"tasks[{index}].{_CLEAR_EXTENSIONS_KEY}: unknown target {name!r}")
+
+
+def _apply_clear_extensions(
+    task: dict[str, Any], operation: Mapping[str, Any], index: int, problems: list[str]
+) -> None:
+    """Drop `clear_extensions` names from a merged task AFTER the merge (spec 0043 Slice B).
+
+    Absent or present-`None` is a no-op; a non-list value is a problem;
+    unknown names are problems via `_drop_extension_key`.
+
+    Args:
+        task: The merged task mapping (mutated only on hits).
+        operation: The raw per-task patch op.
+        index: The task position, for problem paths.
+        problems: The structural problems accumulator.
+    """
+    names = operation.get(_CLEAR_EXTENSIONS_KEY, [])
+    if names is None:
+        return
+    if not isinstance(names, list):
+        problems.append(f"tasks[{index}].{_CLEAR_EXTENSIONS_KEY} must be a list")
+        return
+    for name in names:
+        _drop_extension_key(task, name, index, problems)
+
+
 def apply_agent_patch(
     stored: Mapping[str, Any], patch: Mapping[str, Any]
 ) -> tuple[dict[str, Any], Any, bool, list[str]]:
@@ -484,7 +551,9 @@ def apply_agent_patch(
 
     Scalars/enums replace when present non-null; nested dicts merge
     recursively; lists replace wholesale; present-null is a no-op everywhere;
-    clearing uses explicit `clear` ops. Prompts persist separately from the
+    clearing uses explicit `clear` ops. Per-task `clear_extensions` drops named
+    `task_config.extensions` keys AFTER the merge; unknown names are problems
+    (strict parity with `clear`). Prompts persist separately from the
     definition, so the prompts action returns apart. Unknown paths are
     reported, never applied.
 
@@ -548,6 +617,7 @@ def apply_agent_patch(
                 updated["pipeline"] = None
             else:
                 problems.append(f"tasks[{index}].clear: unknown target {cleared!r}")
+        _apply_clear_extensions(updated, operation, index, problems)
         tasks[index] = updated
 
     if "agent_prompts" in patch and patch["agent_prompts"] is not None:

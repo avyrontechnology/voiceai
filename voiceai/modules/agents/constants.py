@@ -316,3 +316,20 @@ JUDGMENT_TIMEOUT_S: Final[float] = 8.0
 RAG_CACHE_MAX_ENTRIES: Final[int] = 32
 #: Rag-config key enabling the retrieval cache; 0/absent keeps it off (default).
 RAG_CACHE_TTL_KEY: Final[str] = "cache_ttl_s"
+# --- Dynamic extension namespace (spec 0043, Slice A) ------------------------------------
+#: Reserved key hosting tenant-defined config inside ConversationConfig.
+EXTENSIONS_KEY: Final[str] = "extensions"
+#: Allowlist syntax for keys inside `extensions` (no dots, no `$`-prefix).
+EXTENSION_KEY_PATTERN: Final[str] = r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
+#: Key names rejected inside `extensions` even though they match the syntax
+#: (prototype-pollution surface for JS consumers; the regex alone accepts
+#: `constructor`/`prototype`, so the denylist carries them explicitly).
+EXTENSION_FORBIDDEN_NAMES: Final[frozenset[str]] = frozenset({"__proto__", "constructor", "prototype"})
+#: Max number of keys inside one `extensions` namespace.
+MAX_EXTENSION_KEYS: Final[int] = 32
+#: Max JSON-serialized bytes (utf-8) of a single extension value.
+MAX_EXTENSION_VALUE_BYTES: Final[int] = 4096
+#: Max summed JSON-serialized bytes (utf-8) of all extension values.
+MAX_EXTENSIONS_TOTAL_BYTES: Final[int] = 32768
+#: Max nesting depth of an extension value (containers add one level each).
+EXTENSION_MAX_DEPTH: Final[int] = 3

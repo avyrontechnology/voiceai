@@ -8,8 +8,20 @@ import paths keep resolving.
 
 from __future__ import annotations
 
+import json
+import re
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from voiceai.modules.agents.constants import (
+    EXTENSION_FORBIDDEN_NAMES,
+    EXTENSION_KEY_PATTERN,
+    EXTENSION_MAX_DEPTH,
+    MAX_EXTENSION_KEYS,
+    MAX_EXTENSION_VALUE_BYTES,
+    MAX_EXTENSIONS_TOTAL_BYTES,
+)
 from voiceai.modules.agents.models.base import (
     AGENT_WELCOME_MESSAGE,
     LocalizedText,
@@ -37,6 +49,26 @@ from voiceai.modules.agents.models.tools import ToolsChainModel, ToolsConfig  # 
 def _default_channels() -> list[Channel]:
     """Default channel set: every existing row runs on voice (spec 0028)."""
     return ["voice"]
+
+
+def _extension_depth(value: Any) -> int:  # why: extension values are tenant-defined JSON of unknown shape
+    """Nesting depth of one extension value: scalars are 0, each dict/list adds one level.
+
+    Args:
+        value: A single extension value to measure.
+
+    Returns:
+        The nesting depth, compared against EXTENSION_MAX_DEPTH by the validator.
+    """
+    if isinstance(value, dict):
+        if not value:
+            return 1
+        return 1 + max(_extension_depth(item) for item in value.values())
+    if isinstance(value, list):
+        if not value:
+            return 1
+        return 1 + max(_extension_depth(item) for item in value)
+    return 0
 
 
 class ConversationConfig(BaseModel):
@@ -166,6 +198,52 @@ class ConversationConfig(BaseModel):
             "runtime read at voice/session/config.py:266, meaning byte-identical)."
         ),
     )
+    extensions: dict[str, Any] = Field(  # why: tenant keys are schemaless JSON (spec 0043)
+        default_factory=dict,
+        description=(
+            "Reserved namespace for tenant-defined call-behavior keys (spec 0043). "
+            "Free-form inside, validated outside: key syntax, key count, per-value "
+            "JSON-serializability and byte caps, total byte cap, nesting depth cap."
+        ),
+    )
+
+    @field_validator("extensions")
+    @classmethod
+    def _validate_extensions(cls, value: dict[str, Any]) -> dict[str, Any]:  # why: namespace holds tenant JSON
+        """Guard the reserved namespace boundary: shape only, never value contents.
+
+        Args:
+            value: The raw `extensions` mapping under validation.
+
+        Returns:
+            The mapping unchanged when every bound holds.
+
+        Raises:
+            ValueError: Naming only offending KEY names, never values (audit opacity).
+        """
+        if len(value) > MAX_EXTENSION_KEYS:
+            raise ValueError(f"too many extension keys ({len(value)} > {MAX_EXTENSION_KEYS})")
+        bad_keys = sorted(key for key in value if re.fullmatch(EXTENSION_KEY_PATTERN, key) is None)
+        if bad_keys:
+            raise ValueError(f"invalid extension key syntax: {bad_keys}")
+        forbidden = sorted(key for key in value if key in EXTENSION_FORBIDDEN_NAMES)
+        if forbidden:
+            raise ValueError(f"forbidden extension key names: {forbidden}")
+        sizes: dict[str, int] = {}
+        for key, item in value.items():
+            try:
+                raw = json.dumps(item)
+            except (TypeError, ValueError):
+                raise ValueError(f"extension value is not JSON-serializable: {key}") from None
+            size = len(raw.encode("utf-8"))
+            if size > MAX_EXTENSION_VALUE_BYTES:
+                raise ValueError(f"extension value exceeds byte cap: {key}")
+            sizes[key] = size
+            if _extension_depth(item) > EXTENSION_MAX_DEPTH:
+                raise ValueError(f"extension value exceeds nesting depth: {key}")
+        if sum(sizes.values()) > MAX_EXTENSIONS_TOTAL_BYTES:
+            raise ValueError(f"extensions exceed total byte cap ({sum(sizes.values())} > {MAX_EXTENSIONS_TOTAL_BYTES})")
+        return value
 
     @field_validator("hangup_after_silence", mode="before")
     def set_hangup_after_silence(cls, v: int | None) -> int:

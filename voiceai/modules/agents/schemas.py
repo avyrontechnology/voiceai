@@ -51,6 +51,13 @@ class AgentsContract:
         clear: list[Literal["pipeline"]] = Field(
             default_factory=list, description="Explicit clears (null is a no-op, never a clear)."
         )
+        clear_extensions: list[str] = Field(
+            default_factory=list,
+            description=(
+                "Explicit per-key drops inside `task_config.extensions` "
+                "(spec 0043 Slice D; null is a no-op, never a delete)."
+            ),
+        )
 
     class PatchAgentRequest(BaseModel):
         """Request body for `PATCH /agent/{id}` — strict partials (spec 0028)."""

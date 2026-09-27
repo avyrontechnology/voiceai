@@ -31,7 +31,8 @@ MODULE: ModuleDef = ModuleDef(
     # Bumped for spec-0028 Phase A (channels, pipeline, PATCH) and spec-0029
     # slice 2 (tool refs + SSRF gate + tests); ratchets down after.
     # Bumped for spec-0042 (settings truth schema + tests); ratchets down after.
-    max_lines=14900,
+    # Bumped for spec-0043 (extension namespace + merge/audit/service/wire/tests).
+    max_lines=15900,
 )
 
 __all__ = [

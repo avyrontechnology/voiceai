@@ -785,6 +785,21 @@ components:
           title: End Call Tool Mode
           description: End-call tool wiring ('primary' or 'primary_with_shadow_hangup');
             any other value leaves it disarmed.
+        extensions:
+          type: object
+          additionalProperties: true
+          title: Extensions
+          description: Tenant-defined custom call-behavior keys for this task (spec 0043).
+            The sole free-form subtree in the validated agent schema; every other
+            ConversationConfig field stays strict. Key syntax follows EXTENSION_KEY_PATTERN;
+            bounds follow MAX_EXTENSION_KEYS, MAX_EXTENSION_VALUE_BYTES,
+            MAX_EXTENSIONS_TOTAL_BYTES, and EXTENSION_MAX_DEPTH (authoritative values
+            live in voiceai/modules/agents/constants.py and are intentionally not
+            repeated here). PUT replaces the namespace wholesale; PATCH merges
+            task_config.extensions key-by-key (present-None is a no-op) and drops
+            keys via the per-task clear_extensions list. The engine ignores these
+            keys; catalog/audit validation never descends into this namespace. A
+            load-bearing key graduates to a first-class field in its own spec.
       type: object
       title: ConversationConfig
     CreateAgentPayload:

@@ -300,6 +300,44 @@ Callback endpoint for Plivo to provide XML instructions for streaming audio to t
 | `language_injection_mode` | string or null | Where to inject the detected-language instruction ('system_only' or 'per_turn'); any other value injects nothing. |
 | `language_instruction_template` | string or null | Template for the detected-language instruction with a {language} placeholder. |
 | `end_call_tool_mode` | string or null | End-call tool wiring ('primary' or 'primary_with_shadow_hangup'); any other value leaves it disarmed. |
+| `extensions` | object | Tenant-defined custom keys (spec 0043, the sole free-form subtree). Syntax: `EXTENSION_KEY_PATTERN`; bounds: `MAX_EXTENSION_KEYS`, `MAX_EXTENSION_VALUE_BYTES`, `MAX_EXTENSIONS_TOTAL_BYTES`, `EXTENSION_MAX_DEPTH`. See the guide below. |
+
+
+#### Dynamic extension namespace (`extensions`, spec 0043)
+
+Per-task custom call-behavior keys (tenant flags, thresholds, labels, experiment
+knobs) live under `task_config.extensions` — the ONLY free-form subtree in the
+validated agent schema. Everything outside it stays strict: unknown top-level keys
+are still dropped-or-rejected exactly as today, and a key that wants runtime meaning
+graduates to a first-class field in its own spec (prove-or-promote) instead of gaining
+silent behavior here. The engine ignores extension keys; catalog/audit validation never
+descends into this namespace (the walk skips the subtree by key, via `EXTENSIONS_KEY`).
+
+Syntax and bounds (authoritative values live in `voiceai/modules/agents/constants.py`
+and are referenced by name so tuning never desyncs these docs):
+
+- Key syntax follows `EXTENSION_KEY_PATTERN` (starts with a letter, then letters,
+  digits, or underscores — dotted keys, `$`-prefixed keys, and prototype-polluting
+  names are excluded by construction).
+- Key count follows `MAX_EXTENSION_KEYS`; each value must be JSON-serializable within
+  `MAX_EXTENSION_VALUE_BYTES` (serialized per value); the namespace total follows
+  `MAX_EXTENSIONS_TOTAL_BYTES`; nesting depth follows `EXTENSION_MAX_DEPTH`.
+- Validation failures name offending key names only, never values.
+
+Write semantics: `PUT /agent/{id}` replaces the namespace wholesale. `PATCH` merges
+`tasks_patch[].task_config.extensions` key-by-key (present wins; present-`None` is a
+no-op everywhere, including inside `extensions` — there is no null-means-delete).
+Per-key drops use the explicit per-task `clear_extensions` list (applied after the
+merge; unknown clear names are problems, matching the existing `clear` semantics).
+Wholesale `tasks` replace needs no special handling.
+
+Builder contract: the builder agent editor binds its namespaced key/value section to
+`tasks[i].task_config.extensions` per conversation task (key input mirrors
+`EXTENSION_KEY_PATTERN` client-side; server remains authoritative), emits per-key
+deletes as `clear_extensions` (never null-writes), and never shares a key name between
+first-class fields and `extensions`. Graduation path: a proven load-bearing extension
+key is promoted to a first-class `ConversationConfig` field by a follow-up spec (spec
+0042 Slice C is the template) — this spec never promotes a key itself.
 
 
 ### CreateAgentPayload

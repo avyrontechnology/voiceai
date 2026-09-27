@@ -153,7 +153,9 @@ def test_schema_fields_match_consumer_map_exactly() -> None:
     """Every schema field has a consumer entry and no entry points at a deleted field."""
     schema_fields = set(ConversationConfig.model_fields)
     mapped_fields = set(FIELD_CONSUMERS)
-    assert schema_fields == mapped_fields, (
+    # spec 0043: `extensions` is engine-ignored by design (sole passthrough,
+    # pinned by test_dynamic_config.py) — exempt here, never a consumer entry.
+    assert schema_fields - {"extensions"} == mapped_fields, (
         "settings truth drift (spec 0042: wire the key or delete it in the same slice):\n"
         + "\n".join(f"+ {field} (in schema, missing from FIELD_CONSUMERS)" for field in sorted(schema_fields - mapped_fields))
         + "\n".join(f"- {field} (in FIELD_CONSUMERS, gone from schema)" for field in sorted(mapped_fields - schema_fields))

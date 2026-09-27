@@ -233,14 +233,42 @@ template.
 
 ## Burn-down
 
-- [ ] Slice A: schema — constants + `ConversationConfig.extensions` + schema tests.
-- [ ] Slice B: pure merge + audit exemption — `static_methods.py` + merge tests.
-- [ ] Slice C: service failure-mapping + isolation — `service.py` + service tests.
-- [ ] Slice D: wire contract — `schemas.py` (`clear_extensions`) + controller tests.
-- [ ] Slice E: drift pins + docs — `tests/arch/test_dynamic_config.py`, `openapi.yaml`,
+- [x] Slice A: schema — constants + `ConversationConfig.extensions` + schema tests.
+- [x] Slice B: pure merge + audit exemption — `static_methods.py` + merge tests.
+- [x] Slice C: service failure-mapping + isolation — `service.py` + service tests.
+- [x] Slice D: wire contract — `schemas.py` (`clear_extensions`) + controller tests.
+- [x] Slice E: drift pins + docs — `tests/arch/test_dynamic_config.py`, `openapi.yaml`,
   `API_REFERENCE.md`.
-- [ ] Integrator: drift resolution + gate (`make check`, `make sec`, `make cov`) +
+- [x] Integrator: drift resolution + gate (`make check`, `make sec`, coverage) +
   report (no commit — gate-held).
+
+## Integration notes (integrator resolutions, all loud)
+
+- **Forbidden-names denylist added.** Agent A implemented regex-only per the
+  contract, but the regex accepts `constructor`/`prototype` (only `__proto__`
+  fails the leading-letter rule) — the spec security note promised exclusion
+  "by construction" and was wrong. Added `EXTENSION_FORBIDDEN_NAMES`
+  (`__proto__`, `constructor`, `prototype`) + validator check + test. A open
+  Q1 closed.
+- **`_merge_dict` nested-None change accepted** (Slice B deviation 1): the
+  PATCH docstring already promised no-op-everywhere; no test pinned the old
+  behavior; all pre-existing tests pass unchanged.
+- **B getattr hack replaced** with the direct `EXTENSIONS_KEY` import (Slice A
+  landed); `_CLEAR_EXTENSIONS_KEY` stays a local literal pinned identical to
+  `TaskPatch.clear_extensions` (one repair of a botched sed that mangled the
+  name — verified clean).
+- **Agent A deleted `RAG_CACHE_TTL_KEY`** (2 lines, adjacent to its append
+  point) while `brains/knowledgebase.py` still imports it — restored verbatim.
+  Parallel-edit casualty; mypy caught it.
+- **Settings-truth gate exempted `extensions`** (engine-ignored by design;
+  sole-passthrough pin lives in `test_dynamic_config.py`, never a consumer
+  entry). Wire-null on `clear_extensions` → 422, same as existing `clear`
+  (D open Q2 closed as intended-parity).
+- **Budgets ratcheted with citations:** agents 14900→15900 (this build's
+  code+tests). Depth semantics per Agent A (scalar=0, container=+1);
+  total-bytes = sum of per-value serialized sizes (documented in Slice E).
+- OPEN-2 bounds uncalibrated (no tenant ask on record) — constants, tunable
+  without a spec change. OPEN-1/OPEN-3 stay deferred per spec.
 
 ## Open decisions (OPEN — integrator/architect to close before build)
 
