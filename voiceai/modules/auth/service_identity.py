@@ -46,10 +46,14 @@ class AuthIdentityMixin(AuthServiceBase):
         Returns:
             The acting tenant's hex.
         """
-        direct = await self._store.get_tenant(principal.org_id)
+        direct = None
+        get_tenant = getattr(self._store, "get_tenant", None)
+        if get_tenant is not None:
+            direct = await get_tenant(principal.org_id)
         if direct is not None:
             return direct.tenant_id
-        via_slug = await self._store.get_tenant_by_slug(principal.org_id)
+        get_by_slug = getattr(self._store, "get_tenant_by_slug", None)
+        via_slug = await get_by_slug(principal.org_id) if get_by_slug is not None else None
         if via_slug is not None:
             return via_slug.tenant_id
         return principal.org_id
@@ -220,10 +224,17 @@ class AuthIdentityMixin(AuthServiceBase):
             ensure_permitted(principal.has_role("admin"), "Requires admin role or higher")
         acting_hex = await self._acting_tenant_hex(principal)
         teams: list[Team] = []
-        for membership in await self._store.list_memberships(user_id):
+        # Redis-backed deployments have no membership store (see
+        # service_admin/service_base defensive getattr pattern) —
+        # degrade to "no teams" instead of AttributeError 500s.
+        list_memberships = getattr(self._store, "list_memberships", None)
+        if list_memberships is None:
+            return teams
+        get_team = getattr(self._store, "get_team", None)
+        for membership in await list_memberships(user_id):
             if membership.tenant_id != acting_hex:
                 continue
-            team = await self._store.get_team(membership.team_id)
+            team = await get_team(membership.team_id) if get_team is not None else None
             if team is not None:
                 teams.append(team)
         return teams
