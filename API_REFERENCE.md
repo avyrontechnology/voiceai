@@ -184,6 +184,29 @@ Callback endpoint for Plivo to provide XML instructions for streaming audio to t
 | 200 | Successful Response | N/A |
 
 
+### POST /voice/inbound/twilio
+**Twilio Inbound Carrier Webhook (spec 0047)**
+
+Unauthenticated carrier ingress for calls to assigned numbers. Validates the
+`X-Twilio-Signature` header against the account auth token, resolves the called
+number to its agent through the tenant-safe lookup, runs the screening pipeline
+(blocklist, spam protection, caller-match enrichment, greeting resolution), and
+answers TwiML (connect greeting flow) or an identical reject shape.
+
+**Request Body:**
+- Content-Type: `application/x-www-form-urlencoded`
+- Fields: `To` (called number, E.164), `From` (caller number, E.164),
+  `CallSid` (Twilio call identifier for this inbound leg).
+
+**Responses:**
+| Status | Description | Schema |
+|--------|-------------|--------|
+| 200 | TwiML instructions (connect greeting flow or identical reject). | N/A |
+
+See the inbound-engine note below for screening order, greeting precedence,
+record fields, and the carrier-seam extension contract.
+
+
 ## Schema Definitions
 
 ### APIParams
@@ -353,6 +376,41 @@ re-materializes every attached agent (reads keep serving the stored snapshot).
   keep running, flagged `stale_deprecated` with version drift on read.
 - Embedded `url` / `tools_params` endpoints pass the same SSRF pre-flight as ref
   endpoints at attach time; failures answer 400 naming the path, never the URL.
+
+#### Inbound engine (spec 0047)
+
+Inbound calls to assigned numbers (`POST /voice/inbound/twilio`) reach the
+right agent with greeting override, blocklist/spam screening, and caller-match
+context — tenant-safe by construction, since carrier webhooks are
+unauthenticated HTTP.
+
+- Inbound flow: Twilio posts a form-encoded body (`To`, `From`, `CallSid`) with
+  an `X-Twilio-Signature` header. The webhook validates the signature against
+  the account auth token (env, never logged; constant-time compare), then
+  normalizes the called number to E.164, resolves it to at most one agent row
+  (the agent's tenant binds the call), runs screening, and answers TwiML.
+- Screening order (fixed): blocklist → spam protection → caller-match
+  enrichment → greeting resolution. Each step is pure and recorded.
+- Greeting precedence: `inbound.greeting` set wins over `agent_welcome_message`;
+  unset keeps today's welcome-message behavior. No merge, no further fallback.
+- Record fields: every decision lands on the call record as the additive field
+  `inbound_screening` with `{decision, reason}` (`blocked` / `spam` / `passed`
+  plus the reason copy). Screening runs pre-answer, so the record exists even
+  for rejected calls where the platform persists one; pre-0047 records carry no
+  field. Unknown/unassigned numbers, bad signatures, and blocked callers answer
+  an identical reject shape (no cross-tenant oracle via dialing). Duplicate
+  assignment triage: the assign path performs no uniqueness check, so a number
+  shared by two agents fails closed (identical reject) with a WARNING log for
+  operator triage — never silent first-wins.
+- Enrichment failures fail OPEN with a recorded reason (a down enrichment
+  service must not drop calls); enrichment fetches pass the SSRF pre-flight
+  with mandatory timeouts. Caller numbers log as identifiers only, never
+  payloads.
+- Carrier seam: the webhook parsing is Twilio-shaped, but the lookup +
+  screening core takes normalized `(called, caller)` and never sees carrier
+  specifics. A Plivo/Talko follow-up plugs a thin shim in front of the same
+  core (parse to `(called, caller)`, validate that carrier's signature,
+  answer that carrier's reject XML) without touching lookup or screening.
 
 ### CreateAgentPayload
 | Property | Type | Description |

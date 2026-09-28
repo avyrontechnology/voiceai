@@ -134,6 +134,10 @@ class Environment(BaseModel):
     #: (default) keeps ``/chat/v1/{agent_id}`` dark — the handler closes immediately —
     #: while quickstart stays the deployed entry. ``VOICE_WS_ENABLED`` in the environment.
     voice_ws_enabled: bool = False
+    #: Twilio account auth token for inbound-webhook signature validation
+    #: (spec 0047). Empty fails closed: the webhook rejects every call.
+    #: ``TWILIO_AUTH_TOKEN`` in the environment; never logged.
+    twilio_auth_token: str = ""
 
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod

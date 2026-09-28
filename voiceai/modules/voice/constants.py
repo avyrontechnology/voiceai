@@ -180,3 +180,19 @@ TALKO_DIDS_PAGE_SIZE: Final[int] = 200
 TALKO_FETCH_TIMEOUT_S: Final[float] = 15.0
 #: Detail keys for client-safe failures (identifiers only).
 TALKO_API_KEY_TRUNCATED_KEY: Final[str] = "key_hint"
+
+# --- Inbound Twilio webhook (spec 0047) -----------------------------------------------
+#: Carrier webhook route (Twilio first; Plivo/Talko shims plug in later untouched).
+INBOUND_TWILIO_PATH: Final[str] = "/voice/inbound/twilio"
+#: Twilio signature header carrying the request HMAC.
+TWILIO_SIGNATURE_HEADER: Final[str] = "x-twilio-signature"
+#: TwiML response media type (carrier contract — never the JSON envelope).
+TWIML_MEDIA_TYPE: Final[str] = "text/xml"
+#: The one reject shape: unknown numbers, bad signatures, and blocked callers
+#: answer byte-identically (no cross-tenant oracle).
+TWIML_REJECT: Final[str] = '<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>'
+#: Say-verb template for the resolved greeting (XML-escaped at format time).
+TWIML_SAY_TEMPLATE: Final[str] = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>{greeting}</Say></Response>'
+#: Spoken when the inbound greeting is unset; the canonical unset→welcome
+#: behavior lives in the composition hunk (the webhook answers pre-session).
+TWIML_DEFAULT_GREETING: Final[str] = "Hello. Thank you for calling."

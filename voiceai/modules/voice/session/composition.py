@@ -480,6 +480,36 @@ def wire_session_state(self: Any, args: CallArgs, call_config: CallConfig) -> No
     self.conversation_config = None
 
 
+def _apply_inbound_greeting(kwargs: dict[str, Any]) -> None:  # why: inbound/legacy kwargs values are caller-shaped
+    """Override the welcome message with a set inbound greeting (spec 0047, Slice B).
+
+    Slice C precedence (Decision 4): a set ``inbound.greeting`` wins over
+    ``agent_welcome_message``; unset (or no ``inbound_config`` staged, i.e. every
+    pre-0047 call) leaves ``kwargs`` byte-identical. The ingress stages the Slice A
+    config dict under the ``"inbound_config"`` kwargs key when it composes the
+    session; ``resolve_greeting`` resolves lazily so this module never couples to
+    the screening file's import time.
+
+    Args:
+        kwargs: The live session kwargs, mutated in place only when an override wins.
+    """
+    inbound_config = kwargs.get("inbound_config")
+    if inbound_config is None:
+        return
+    import voiceai.modules.voice.static_methods as static_methods_mod
+
+    greeting = (
+        inbound_config.get("greeting")
+        if isinstance(inbound_config, dict)
+        else getattr(inbound_config, "greeting", None)
+    )
+    if not isinstance(greeting, str):
+        greeting = None
+    resolved = static_methods_mod.resolve_greeting(greeting, kwargs.get("agent_welcome_message"))
+    if resolved:
+        kwargs["agent_welcome_message"] = resolved
+
+
 def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> None:
     """Compose the task_id == 0 primary task: IO defaults, DTMF, end_call, voicemail, welcome."""
     if args.task_id == 0:
@@ -612,6 +642,10 @@ def compose_primary_task(self: Any, args: CallArgs, call_config: CallConfig) -> 
                 logger.info(f"Agent welcome message: {self.kwargs['agent_welcome_message']}")
                 self.first_message_task = None
                 self.transcriber_message = ""
+            # spec-0047 Slice B greeting override (Slice C precedence): a set inbound
+            # greeting wins over agent_welcome_message; unset (or no inbound_config,
+            # i.e. every pre-0047 call) keeps today's behavior byte-identical.
+            _apply_inbound_greeting(self.kwargs)
 
             # Discard pre-welcome utterance
             self.discard_pre_welcome_utterance = call_config.discard_pre_welcome_utterance

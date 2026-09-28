@@ -503,6 +503,7 @@ def test_router_mounts_ws_plus_place_call_surface() -> None:
     in declaration order."""
     from voiceai.modules.voice.constants import (
         CHAT_WS_PATH,
+        INBOUND_TWILIO_PATH,
         PARTNER_ITEM_PATH,
         PARTNER_REFRESH_PATH,
         PARTNERS_CONNECT_PATH,
@@ -522,6 +523,7 @@ def test_router_mounts_ws_plus_place_call_surface() -> None:
         PARTNERS_PREVIEW_PATH,
         PARTNERS_CONNECT_PATH,
         PARTNER_REFRESH_PATH,
+        INBOUND_TWILIO_PATH,
     ]
 
 

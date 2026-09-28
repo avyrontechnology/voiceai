@@ -71,7 +71,8 @@ MODULE: ModuleDef = ModuleDef(
     # bring it back down as regions leave TaskManager.
     # Bumped for spec-0042 (runtime wiring + recording report + tests).
     # Bumped for spec-0044 (hybrid leg pins).
-    max_lines=48400,
+    # Bumped for spec-0047 (inbound lookup + webhook + screening + tests).
+    max_lines=49800,
 )
 
 __all__ = [
