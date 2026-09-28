@@ -36,6 +36,7 @@ from voiceai.helpers.logger_config import configure_logger
 from voiceai.models import *
 from voiceai.modules import auth as auth_module
 from voiceai.modules import catalog as catalog_module
+from voiceai.modules import health as health_module
 from voiceai.modules.agents import AgentNotFoundError, AgentService
 from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.schemas import VoiceContract as _VoiceContract
@@ -491,6 +492,12 @@ app.include_router(auth_module.MODULE.router, prefix=API_PREFIX)
 
 # Spec 0022: the agent builder reads provider options here in dev.
 app.include_router(catalog_module.MODULE.router, prefix=API_PREFIX)
+
+# Liveness for Docker healthchecks (quickstart never mounted the health
+# module, so both /health and /api/v1/health 404'd and the container
+# could never report healthy).
+app.include_router(health_module.MODULE.router)
+app.include_router(health_module.MODULE.router, prefix=API_PREFIX)
 
 
 #############################################################################################
