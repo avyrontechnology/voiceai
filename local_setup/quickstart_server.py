@@ -96,6 +96,10 @@ class _AgentRedisSeam:
         """Return every key matching ``pattern``."""
         return await redis_client.keys(pattern)
 
+    async def ping(self) -> bool:
+        """Answer the health probe on the live client (kept off the legacy CRUD surface)."""
+        return bool(await redis_client.ping())
+
 
 # Spec 0002 (A5): the agent CRUD handlers below are thin delegates into the agents module.
 # Services compose ONCE at module init from the central container (AGENTS.md rule 9) —
