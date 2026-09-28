@@ -474,11 +474,12 @@ try:
         # Bare paths stay byte-identical; duplicate operation_ids warn only.
         app.include_router(_router, prefix=API_PREFIX)
     app.state.platform_store = RedisStore(redis_client)
-    # Cutover follow-up (spec 0006 post-E4): the module controller resolves its
-    # service from `state.container`, which quickstart never set — every
-    # `/api/v1/auth/*` request died there. Bind the SAME store instance the
-    # legacy seam serves (one session ledger, not two).
-    _agents_container.auth_store.override(providers.Object(app.state.platform_store))
+    # Auth handled from DB: do NOT override the container's auth_store with
+    # the Redis platform store. The container binding is MongoAuthStore
+    # (otoba.users), so logins, invites and API keys read the database;
+    # Redis sessions from the old seam are orphaned — users log in once.
+    # (Wallet/templates keep the Redis seam below; untouched.)
+    _agents_container.auth_store.reset_override()
     # Same seam for the migrated wallet/templates routes: the module service
     # reads this app's store, so topups, ledger and reset stay consistent.
     _agents_container.wallet_service.override(
