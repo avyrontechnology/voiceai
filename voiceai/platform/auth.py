@@ -114,11 +114,45 @@ async def _principal_from_api_key(store: MemoryStore, secret: str) -> Optional[P
     return None
 
 
+async def _principal_from_mongo(request: Request, token: str) -> Optional[Principal]:
+    """Resolve a session cookie against the Mongo auth store.
+
+    Logins are minted by MongoAuthStore (auth handled from DB) while the
+    platform seam still reads Redis — without this fallback every platform
+    route 401s on fresh sessions and the UI logs the user out. Any failure
+    returns None (caller falls through to 401) — a store outage must not
+    become a 500 here.
+    """
+    try:
+        container = getattr(request.app.state, "container", None)
+        if container is None:
+            return None
+        auth_store = container.auth_store()
+        session = await auth_store.get_session(token_hash(token))
+        if not session or getattr(session, "kind", None) != "session":
+            return None
+        user = await auth_store.get_user(session.user_id)
+        if not user or getattr(user, "disabled", False):
+            return None
+        return Principal(
+            user_id=user.user_id,
+            email=user.email,
+            org_id=getattr(user, "org_id", "default"),
+            role=getattr(user, "role", "viewer"),
+            auth_type="session",
+        )
+    except Exception:
+        return None
+
+
 async def get_principal(request: Request, store: MemoryStore = Depends(get_store)) -> Principal:
     """Resolve the caller from session cookie, else Bearer API key. 401 if neither."""
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         principal = await _principal_from_session(store, token)
+        if principal:
+            return principal
+        principal = await _principal_from_mongo(request, token)
         if principal:
             return principal
     authorization = request.headers.get("authorization", "")
