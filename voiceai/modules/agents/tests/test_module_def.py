@@ -26,7 +26,6 @@ from voiceai.modules.agents.constants import (
     PREPROCESS_DIR,
 )
 from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort
-from voiceai.modules.agents.repository import FilePromptStore
 from voiceai.modules.agents.service import AgentService
 
 if TYPE_CHECKING:  # annotation only: the spy stands in for a container at runtime

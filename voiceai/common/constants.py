@@ -141,3 +141,7 @@ IPV6_SCOPE_SEPARATOR: Final[str] = "%"
 CONTAINER_KEY_REDIS: Final[str] = "redis"
 CONTAINER_KEY_DB: Final[str] = "db"
 CONTAINER_STATE_ATTR: Final[str] = "container"
+#: `app.state` attribute carrying the platform store the frozen `platform/router.py`
+#: handlers read (spec 0048, Slice B): the container's repository-backed store in the
+#: single app, a `MemoryStore` in the legacy platform test app.
+PLATFORM_STORE_STATE_ATTR: Final[str] = "platform_store"

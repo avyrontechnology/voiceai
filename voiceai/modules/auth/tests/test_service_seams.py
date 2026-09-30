@@ -1,7 +1,7 @@
 """C3 seams: port conformance, limiter, public projection, store additions (spec 0005).
 
 The port test pins the strangler contract — both legacy stores satisfy the
-PRE-IDENTITY `AuthStorePort` (MemoryStore by instance, RedisStore by method
+PRE-IDENTITY `AuthStorePort` (MemoryStore by instance
 presence since it needs a live client), so the service can move without
 touching persistence. Identity methods (spec 0040: tenants, organizations,
 teams, memberships) are greenfield-only — legacy stores predate them and the
@@ -19,7 +19,7 @@ from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.static_methods import hash_password
 from voiceai.modules.auth.utils import check_login_allowed, try_login_attempt
-from voiceai.platform.store import MemoryStore, RedisStore
+from voiceai.platform.store import MemoryStore
 
 
 #: Identity methods (spec 0040) the frozen legacy stores intentionally lack.
@@ -60,15 +60,9 @@ def test_memory_store_satisfies_port_by_instance() -> None:
         assert callable(getattr(store, method, None)), method
 
 
-def test_redis_store_carries_every_port_method() -> None:
-    """The production store names every port method (no client to instance-check)."""
-    assert set(_port_methods()) <= {m for m in dir(RedisStore) if callable(getattr(RedisStore, m))}
-
-
 def test_legacy_stores_are_unmodified_classes() -> None:
     """The conformance above holds on the legacy classes themselves (no subclass)."""
     assert legacy_store.MemoryStore is MemoryStore
-    assert legacy_store.RedisStore is RedisStore
 
 
 def test_limiter_allows_five_then_trips() -> None:

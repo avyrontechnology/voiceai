@@ -67,6 +67,28 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "organizations",
     "teams",
     "memberships",
+    # Spec 0048 bridge collections: every row is stamped from the request tenant
+    # at write time and the Slice C backfill stamps the default tenant itself, so
+    # this rule only ever matches a row that should not exist — harmless.
+    "platform_executions",
+    "platform_batches",
+    "platform_numbers",
+    "platform_kbs",
+    "platform_tools",
+    "platform_webhooks",
+    "platform_inbound",
+    "platform_voices",
+    "platform_vector",
+    "platform_subaccounts",
+    "platform_integrations",
+    "platform_graphs",
+    "platform_graph_versions",
+    "platform_workflows",
+    "platform_workflow_versions",
+    "platform_workflow_runs",
+    "platform_workflow_campaigns",
+    "platform_ledger",
+    "platform_singletons",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).

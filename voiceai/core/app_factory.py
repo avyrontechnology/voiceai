@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -25,6 +25,7 @@ from voiceai.common.constants import (
     APP_NAME,
     APP_VERSION,
     CONTAINER_STATE_ATTR,
+    PLATFORM_STORE_STATE_ATTR,
     PRINCIPAL_STATE_ATTR,
     REQUEST_ID_HEADER,
     SESSION_COOKIE,
@@ -40,13 +41,40 @@ from voiceai.core.environment import Environment, ensure_exact_origins, get_envi
 if TYPE_CHECKING:  # import-direction rule: modules → core is the only static direction
     from voiceai.modules import ModuleDef
 
-__all__ = ["RequestIdMiddleware", "TenantMiddleware", "create_app"]
+__all__ = ["RequestIdMiddleware", "TenantMiddleware", "create_app", "platform_store_of"]
 
 #: Methods and headers the browser boundary accepts when CORS is enabled at all.
 CORS_ALLOW_METHODS: Final[tuple[str, ...]] = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
 CORS_ALLOW_HEADERS: Final[tuple[str, ...]] = ("Authorization", "Content-Type", REQUEST_ID_HEADER)
 #: Exposed so a browser client can read back the id it was assigned and quote it in a report.
 CORS_EXPOSE_HEADERS: Final[tuple[str, ...]] = (REQUEST_ID_HEADER,)
+
+
+def platform_store_of(app: FastAPI) -> Any:  # why: the store is a legacy duck-typed surface
+    """Return the platform store an app serves the frozen platform routers from.
+
+    A store staged on ``app.state`` wins (the legacy platform test app and quickstart
+    pin a ``MemoryStore`` there); otherwise the container's
+    ``platform_store`` resolves on first use — never at ``create_app`` time, so a
+    provider override applied after the factory (the test convention) still binds.
+
+    Args:
+        app: The application carrying ``state.platform_store`` and/or ``state.container``.
+
+    Returns:
+        The store every platform handler and the voice execution recorder write to.
+
+    Raises:
+        ConfigurationError: When neither a staged store nor a container provider exists.
+    """
+    store = getattr(app.state, PLATFORM_STORE_STATE_ATTR, None)
+    if store is not None:
+        return store
+    container = getattr(app.state, CONTAINER_STATE_ATTR, None)
+    provider = getattr(container, "platform_store", None) if container is not None else None
+    if provider is None:
+        raise ConfigurationError("platform store is not wired")
+    return provider()
 
 
 def _resolve_request_id(inbound: str | None) -> str:
@@ -261,5 +289,15 @@ def create_app(
 
     for module in modules_to_load:
         app.include_router(module.router, prefix=API_PREFIX)
+
+    # Spec 0048 (Slice B): the frozen platform routers ride the single app, prefix-only,
+    # after the modules (first match wins, so a module handler owns any shared path).
+    # Their store resolves per request through `platform_store_of` (nothing is pulled
+    # from the container here). Imported lazily: the legacy surface is not an
+    # architecture root and retires with M6.
+    from voiceai.platform.router import single_app_routers
+
+    for router in single_app_routers():
+        app.include_router(router, prefix=API_PREFIX)
 
     return app

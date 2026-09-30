@@ -66,6 +66,7 @@ class _Service:
                 "agent_id": agent_id,
                 "ws": ws,
                 "tenant_id": current_tenant().tenant_id,
+                "platform_store": kwargs.get("platform_store"),
             }
         )
         return []
@@ -255,6 +256,26 @@ async def test_served_agent_runs_through_the_service():
     assert call["agent_id"] == AGENT_ID
     assert call["ws"] is socket
     assert socket.close_code == 1000
+
+
+async def test_served_run_receives_the_containers_platform_store():
+    """Spec 0048 (Slice B): the execution record lands in the container's platform store."""
+    service = _Service()
+    container = _container(flag=True, service=service)
+    sentinel = object()
+    container.platform_store.override(providers.Object(sentinel))
+    socket, _ = await _drive(container, TICKET)
+    (call,) = service.calls
+    assert call["platform_store"] is sentinel
+    assert socket.close_code == 1000
+
+
+async def test_served_run_resolves_the_real_platform_store_by_default():
+    service = _Service()
+    container = _container(flag=True, service=service)
+    await _drive(container, TICKET)
+    (call,) = service.calls
+    assert call["platform_store"] is container.platform_store()
 
 
 async def test_accepted_run_binds_the_ticket_holders_tenant():

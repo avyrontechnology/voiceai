@@ -1,7 +1,8 @@
 """Authentication + authorization core for the platform layer.
 
-Principal resolution from server-side sessions in Redis (with TTL) and scoped
-Bearer API keys. Roles reuse the existing owner/admin/member/viewer ladder.
+Principal resolution from server-side sessions and scoped Bearer API keys, read
+through the platform store (spec 0048: the greenfield auth store underneath).
+Roles reuse the existing owner/admin/member/viewer ladder.
 
 Spec 0006 E4: session-minting and login-throttle delegators retired to
 ``voiceai.modules.auth`` (service, utils, helpers, constants). What remains is
@@ -24,6 +25,8 @@ from typing import Optional, TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request
 
+from voiceai.common.errors import ConfigurationError
+from voiceai.core.app_factory import platform_store_of
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import new_id, utcnow
 
@@ -36,11 +39,11 @@ SESSION_COOKIE = "otoba_session"
 
 
 def get_store(request: Request) -> MemoryStore:
-    """Store accessor that avoids a router import cycle."""
-    store = getattr(request.app.state, "platform_store", None)
-    if store is None:
-        raise HTTPException(status_code=503, detail="Platform store unavailable")
-    return store
+    """Store accessor that avoids a router import cycle (staged store, else the container's)."""
+    try:
+        return platform_store_of(request.app)
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="Platform store unavailable") from exc
 
 
 # -- password + token hashing ----------------------------------------------------
@@ -87,72 +90,46 @@ async def _principal_from_session(store: MemoryStore, token: str) -> Optional[Pr
 
 
 async def _principal_from_api_key(store: MemoryStore, secret: str) -> Optional[Principal]:
-    digest = token_hash(secret)
-    for key in await store.list_api_keys():
-        if not key.key_hash:
-            continue  # legacy key minted before hashing; rotate it
-        prefix_ok = secret.startswith(key.prefix) if key.prefix else True
-        if prefix_ok and hmac.compare_digest(key.key_hash, digest):
-            if key.expires_at and key.expires_at.replace(tzinfo=timezone.utc) < utcnow():
-                return None
-            key.last_used_at = utcnow()
-            try:
-                await store.save_api_key(key)
-            except Exception:
-                logger.warning(f"Could not touch last_used_at for key {key.key_id}")
-            user = await store.get_user(key.created_by) if key.created_by else None
-            return Principal(
-                user_id=key.created_by,
-                email=user.email if user else None,
-                org_id=user.org_id if user else "default",
-                role="viewer",
-                auth_type="key",
-                scopes=list(key.scopes),
-                key_id=key.key_id,
-                key_name=key.name,
-            )
-    return None
+    """Resolve a Bearer secret by its hash: one indexed read, never a key scan (spec 0048).
 
-
-async def _principal_from_mongo(request: Request, token: str) -> Optional[Principal]:
-    """Resolve a session cookie against the Mongo auth store.
-
-    Logins are minted by MongoAuthStore (auth handled from DB) while the
-    platform seam still reads Redis — without this fallback every platform
-    route 401s on fresh sessions and the UI logs the user out. Any failure
-    returns None (caller falls through to 401) — a store outage must not
-    become a 500 here.
+    A key minted before hashing (no ``key_hash``) can never match and must be rotated;
+    the prefix and expiry checks are the pre-cutover ones, verbatim.
     """
-    try:
-        container = getattr(request.app.state, "container", None)
-        if container is None:
-            return None
-        auth_store = container.auth_store()
-        session = await auth_store.get_session(token_hash(token))
-        if not session or getattr(session, "kind", None) != "session":
-            return None
-        user = await auth_store.get_user(session.user_id)
-        if not user or getattr(user, "disabled", False):
-            return None
-        return Principal(
-            user_id=user.user_id,
-            email=user.email,
-            org_id=getattr(user, "org_id", "default"),
-            role=getattr(user, "role", "viewer"),
-            auth_type="session",
-        )
-    except Exception:
+    digest = token_hash(secret)
+    key = await store.get_api_key_by_hash(digest)
+    if key is None or not key.key_hash or not hmac.compare_digest(key.key_hash, digest):
         return None
+    if key.prefix and not secret.startswith(key.prefix):
+        return None
+    if key.expires_at and key.expires_at.replace(tzinfo=timezone.utc) < utcnow():
+        return None
+    key.last_used_at = utcnow()
+    try:
+        await store.save_api_key(key)
+    except Exception:
+        logger.warning(f"Could not touch last_used_at for key {key.key_id}")
+    user = await store.get_user(key.created_by) if key.created_by else None
+    return Principal(
+        user_id=key.created_by,
+        email=user.email if user else None,
+        org_id=user.org_id if user else "default",
+        role="viewer",
+        auth_type="key",
+        scopes=list(key.scopes),
+        key_id=key.key_id,
+        key_name=key.name,
+    )
 
 
 async def get_principal(request: Request, store: MemoryStore = Depends(get_store)) -> Principal:
-    """Resolve the caller from session cookie, else Bearer API key. 401 if neither."""
+    """Resolve the caller from session cookie, else Bearer API key. 401 if neither.
+
+    Both paths are single indexed reads on the platform store, which in the single
+    app persists through the greenfield auth store (spec 0048): no scan, no Redis.
+    """
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         principal = await _principal_from_session(store, token)
-        if principal:
-            return principal
-        principal = await _principal_from_mongo(request, token)
         if principal:
             return principal
     authorization = request.headers.get("authorization", "")

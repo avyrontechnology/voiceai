@@ -22,8 +22,7 @@ services:
       - ./agent_data:/voiceai/agent_data
       - $HOME/.aws/credentials:/root/.aws/credentials:ro
       - $HOME/.aws/config:/root/.aws/config:ro
-    depends_on:
-      - redis
+    # Spec 0048: Redis is an optional cache (throttle/denylist); the app boots without it.
     networks:
       - voiceai
 

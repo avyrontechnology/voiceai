@@ -146,7 +146,6 @@ def test_retained_principal_chain_still_resolves(name: str) -> None:
 def test_retained_store_methods_still_present(name: str) -> None:
     """Port-critical store methods (plus the keys-router delete) survive on both stores."""
     assert hasattr(legacy_store.MemoryStore, name), f"MemoryStore.{name}"
-    assert hasattr(legacy_store.RedisStore, name), f"RedisStore.{name}"
 
 
 def test_module_homes_own_every_moved_behavior() -> None:
@@ -165,99 +164,3 @@ def test_module_homes_own_every_moved_behavior() -> None:
         utils.try_login_attempt,
     ):
         assert home is not None
-
-
-def _quickstart() -> ModuleType:
-    """Import the quickstart server inside the call (conftest collection rule).
-
-    The import builds redis pools and the engine container, so it must never run at
-    collection time; `REDIS_URL` is defaulted first because `ConnectionPool.from_url`
-    rejects an empty URL while opening no socket.
-
-    Returns:
-        The imported `local_setup.quickstart_server` module.
-    """
-    os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-    return importlib.import_module("local_setup.quickstart_server")
-
-
-@pytest.fixture
-def wired_quickstart(arch_environment: Environment) -> Iterator[tuple[ModuleType, FastAPI]]:
-    """Wire the cutover quickstart app to a fresh store; restore state afterwards.
-
-    The module controller resolves through the container binding while the legacy
-    `platform_store` seam stays populated (other routers still read it). State is
-    restored on teardown so suites sharing this module object observe the
-    import-time wiring.
-
-    Args:
-        arch_environment: The offline test environment.
-
-    Yields:
-        The quickstart module and its rewired app.
-    """
-    from voiceai.core.container import build_container
-    from voiceai.modules.auth.service import AuthService
-    from voiceai.modules.auth.tests.conftest import _JWT
-
-    from voiceai.platform.store import MemoryStore
-
-    qs = _quickstart()
-    app: FastAPI = qs.app
-    state = app.state
-    had_container = hasattr(state, "container")
-    previous_container = getattr(state, "container", None)
-    previous_store = getattr(state, "platform_store", None)
-    store = MemoryStore()
-    container = build_container(arch_environment)
-    container.auth_store.override(providers.Object(store))
-    container.auth_service.override(
-        providers.Object(AuthService(cast(auth_module.AuthStorePort, store), jwt=_JWT))
-    )
-    state.container = container
-    state.platform_store = store
-    try:
-        yield qs, app
-    finally:
-        if had_container:
-            state.container = previous_container
-        else:
-            delattr(state, "container")
-        state.platform_store = previous_store
-
-
-async def test_quickstart_new_auth_serves_envelope(
-    wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
-) -> None:
-    """`POST /api/v1/auth/signup` answers 201 with the enveloped owner shape (E4 serves)."""
-    _, app = wired_quickstart
-    async with client_factory(app) as client:
-        response = await client.post(
-            "/api/v1/auth/signup",
-            json={"email": "owner@x.test", "name": "Owner", "password": "owner-pass-1"},
-        )
-        assert response.status_code == 201, response.text
-        envelope: dict[str, Any] = response.json()
-        assert envelope["ok"] is True
-        assert envelope["data"]["user"]["email"] == "owner@x.test"
-        assert envelope["data"]["user"]["role"] == "owner"
-        assert envelope["data"]["access_token"].count(".") == 2
-
-        me = await client.get("/api/v1/auth/me")
-    assert me.status_code == 200, me.text
-    assert me.json()["data"]["user"]["email"] == "owner@x.test"
-
-
-async def test_quickstart_legacy_auth_is_dark(
-    wired_quickstart: tuple[ModuleType, FastAPI], client_factory: Callable[..., AsyncClient]
-) -> None:
-    """Retired `/auth` paths 404 as bare Starlette responses (E4 unmount)."""
-    _, app = wired_quickstart
-    async with client_factory(app) as client:
-        get_me = await client.get("/auth/me")
-        post_signup = await client.post(
-            "/auth/signup",
-            json={"email": "ghost@x.test", "name": "Ghost", "password": "ghost-pass-1"},
-        )
-    assert get_me.status_code == 404
-    assert post_signup.status_code == 404

@@ -14,16 +14,14 @@ from types import SimpleNamespace
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from tests.auth_helpers import mount_new_auth
-from voiceai.platform import create_platform_app
-from voiceai.platform.store import MemoryStore
+from tests.auth_helpers import build_platform_test_app, signup_owner
 
 AUTH = "/api/v1/auth"
 
 
 @pytest_asyncio.fixture
 async def ctx():
-    app = mount_new_auth(create_platform_app(MemoryStore()))
+    app = build_platform_test_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield SimpleNamespace(app=app, client=client)
@@ -37,7 +35,7 @@ def fresh_client(app):
 async def signup_owner(client, email="owner@acme.test"):
     resp = await client.post(f"{AUTH}/signup", json={"email": email, "name": "Owner", "password": "correct-horse-1"})
     assert resp.status_code == 201, resp.text
-    data = resp.json()["data"]
+    data = resp.json()["data"]["user"]  # spec 0048: the greenfield pair envelope wraps the user
     assert data["role"] == "owner"
     return data
 
@@ -64,7 +62,7 @@ async def test_me_without_session_is_401(ctx):
     await signup_owner(ctx.client)
     async with fresh_client(ctx.app) as anon:
         assert (await anon.get(f"{AUTH}/me")).status_code == 401
-        assert (await anon.get("/tools")).status_code == 401
+        assert (await anon.get("/api/v1/webhooks")).status_code == 401
 
 
 async def test_invite_accept_and_role_gates(ctx):
@@ -82,14 +80,12 @@ async def test_invite_accept_and_role_gates(ctx):
         assert accepted.json()["data"]["user"]["role"] == "member"
 
         # Members write platform resources...
-        tool = await member.post(
-            "/tools", json={"name": "clock", "kind": "datetime", "config": {"timezone": "Asia/Kolkata"}}
-        )
-        assert tool.status_code == 201, tool.text
+        hook = await member.post("/api/v1/webhooks", json={"url": "https://example.test/hook"})
+        assert hook.status_code == 201, hook.text
         # ...but cannot manage users or keys.
         assert (await member.post(f"{AUTH}/invite", json={"email": "x@y.test"})).status_code in (401, 403)
         assert (await member.get(f"{AUTH}/users")).status_code == 403
-        assert (await member.post("/api-keys", json={"name": "k"})).status_code == 403
+        assert (await member.post("/api/v1/api-keys", json={"name": "k"})).status_code == 403
 
     # Reusing the token fails.
     async with fresh_client(ctx.app) as other:
@@ -116,12 +112,12 @@ async def test_viewer_is_read_only(ctx):
     async with fresh_client(ctx.app) as viewer:
         accepted = await viewer.post(f"{AUTH}/accept", json={"token": token, "password": "correct-horse-4"})
         assert accepted.status_code == 201
-        assert (await viewer.get("/tools")).status_code == 200
-        assert (await viewer.get("/batches")).status_code == 200
-        assert (await viewer.post("/tools", json={"name": "t", "kind": "datetime"})).status_code == 403
+        assert (await viewer.get("/api/v1/webhooks")).status_code == 200
+        assert (await viewer.get("/api/v1/batches")).status_code == 200
+        assert (await viewer.post("/api/v1/webhooks", json={"url": "https://example.test/h"})).status_code == 403
         assert (
             await viewer.post(
-                "/calls/simulate",
+                "/api/v1/calls/simulate",
                 json={"agent_id": "a", "to_number": "+911234567890"},
             )
         ).status_code == 403
@@ -130,21 +126,21 @@ async def test_viewer_is_read_only(ctx):
 
 async def test_api_key_scopes(ctx):
     await signup_owner(ctx.client)
-    created = await ctx.client.post("/api-keys", json={"name": "ci", "scopes": ["batches:read"]})
+    created = await ctx.client.post("/api/v1/api-keys", json={"name": "ci", "scopes": ["batches:read"]})
     assert created.status_code == 201, created.text
     secret = created.json()["key"]
     assert secret.startswith(created.json()["prefix"])
 
     async with fresh_client(ctx.app) as keyed:
-        ok = await keyed.get("/batches", headers={"Authorization": f"Bearer {secret}"})
+        ok = await keyed.get("/api/v1/batches", headers={"Authorization": f"Bearer {secret}"})
         assert ok.status_code == 200
         denied = await keyed.post(
-            "/batches",
+            "/api/v1/batches",
             json={"agent_id": "a", "name": "n", "entries": [{"to_number": "+91"}]},
             headers={"Authorization": f"Bearer {secret}"},
         )
         assert denied.status_code == 403
-        bad = await keyed.get("/batches", headers={"Authorization": "Bearer nope"})
+        bad = await keyed.get("/api/v1/batches", headers={"Authorization": "Bearer nope"})
         assert bad.status_code == 401
 
 
@@ -154,9 +150,9 @@ async def test_reset_is_owner_only_and_preserves_users(ctx):
     token = invite.json()["data"]["token"]
     async with fresh_client(ctx.app) as member:
         await member.post(f"{AUTH}/accept", json={"token": token, "password": "correct-horse-2"})
-        assert (await member.post("/organization/reset")).status_code == 403
+        assert (await member.post("/api/v1/organization/reset")).status_code == 403
 
-    wiped = await ctx.client.post("/organization/reset")
+    wiped = await ctx.client.post("/api/v1/organization/reset")
     assert wiped.status_code == 200
     assert (await ctx.client.get(f"{AUTH}/me")).status_code == 200
     users = await ctx.client.get(f"{AUTH}/users")
@@ -192,10 +188,10 @@ async def test_unauthenticated_requests_are_rejected(ctx):
     # read, one write and the destructive reset without any credentials.
     await signup_owner(ctx.client)
     async with fresh_client(ctx.app) as anon:
-        assert (await anon.get("/templates")).status_code == 401
+        assert (await anon.get("/api/v1/templates")).status_code == 401
         assert (await anon.get(f"{AUTH}/me")).status_code == 401
-        assert (await anon.post("/organization/reset")).status_code == 401
-        assert (await anon.post("/calls/simulate", json={"agent_id": "a", "to_number": "+91"})).status_code == 401
+        assert (await anon.post("/api/v1/organization/reset")).status_code == 401
+        assert (await anon.post("/api/v1/calls/simulate", json={"agent_id": "a", "to_number": "+91"})).status_code == 401
 
 
 async def test_logout_kills_session(ctx):

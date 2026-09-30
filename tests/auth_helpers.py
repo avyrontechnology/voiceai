@@ -1,45 +1,48 @@
-"""Shared auth setup for platform contract tests.
+"""Shared setup for the platform contract tests: the single app, offline (spec 0048).
 
-Existing endpoint tests predate enforcement; their fixtures call
-signup_owner() so requests carry an owner session cookie. Since spec 0006 E4
-the legacy `/auth` routes are dark — signup rides the cut-over controller at
-`/api/v1/auth` (enveloped), mounted per-app by mount_new_auth().
+The frozen platform routers ride `create_app` over an in-memory container; signup
+rides the greenfield auth module, which needs signing keys to mint its token pair,
+so the offline environment gets the test-only RS256 settings.
 """
+
+from __future__ import annotations
 
 OWNER_EMAIL = "owner@acme.test"
 OWNER_PASSWORD = "correct-horse-1"
 
 
-def mount_new_auth(app):
-    """Serve the cut-over auth controller on a platform test app (spec 0006 E4).
-
-    Binds the app's own store in a fresh container (mirrors production wiring)
-    so the controller resolves its service without touching the legacy seam.
-    """
+def build_platform_test_app():
+    """Build the single app over an offline container with signing keys for signup."""
     from dependency_injector import providers
 
-    from voiceai.common.responses import register_exception_handlers
+    from voiceai.core.app_factory import create_app
     from voiceai.core.container import build_container
     from voiceai.core.environment import Environment
-    from voiceai.modules import auth as auth_module
-    from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
+    from voiceai.modules.auth.service import AuthService
+    from voiceai.modules.auth.tests.conftest import _JWT
 
-    register_exception_handlers(app)  # why: the cut-over controller raises AppError; the factory owns rendering
-    container = build_container(Environment())
-    container.auth_store.override(providers.Object(app.state.platform_store))
-    container.wallet_service.override(providers.Factory(build_legacy_wallet_service, app.state.platform_store))
-    app.state.container = container
-    app.include_router(auth_module.MODULE.router, prefix="/api/v1")
-    return app
+    environment = Environment(
+        app_env="dev",
+        log_level="INFO",
+        redis_url="",
+        db_backend="memory",
+        db_url="",
+        db_name="otoba_test",
+        allowed_origins=(),
+        cookie_secure=None,
+    )
+    container = build_container(environment)
+    container.auth_service.override(providers.Object(AuthService(container.auth_store(), jwt=_JWT)))
+    return create_app(env=environment, container=container)
 
 
 async def signup_owner(client, email: str = OWNER_EMAIL):
-    """Register the first (owner) user on a fresh app. Asserts success."""
+    """Register the first (owner) user on a fresh app. Asserts success; returns the user."""
     resp = await client.post(
         "/api/v1/auth/signup",
         json={"email": email, "name": "Owner", "password": OWNER_PASSWORD},
     )
     assert resp.status_code == 201, resp.text
     data = resp.json()["data"]
-    assert data["role"] == "owner"
-    return data
+    assert data["user"]["role"] == "owner"
+    return data["user"]

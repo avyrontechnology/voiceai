@@ -1,6 +1,6 @@
 """Behavior-parity tests for the moved agent-record helpers (spec 0002, step A3).
 
-Mirrors every case of ``tests/test_platform_agent_records.py`` against the new home,
+Mirrors every case of the retired ``tests/test_platform_agent_records.py`` against the new home,
 pins the legacy shim to the SAME function objects (an import-parity check stronger than
 equal behavior), and covers the pure prompt-selection helpers that mirror the engine's
 ``task_<n>`` / multiagent ``task_1.{agent_name}.system_prompt`` read shape.
@@ -59,19 +59,6 @@ def test_collect_preserves_id_alignment_with_skips():
 
     assert [record["agent_id"] for record in records] == ["uuid-1", "uuid-2"]
     assert all(record["data"] == AGENT for record in records)
-
-
-def test_legacy_shim_reexports_the_same_objects():
-    """The old platform path must answer the SAME function objects, not copies.
-
-    Identity (not equality) is the contract: a patch applied through either import path
-    must be visible through the other, and the shim stays a pure re-export.
-    """
-    from voiceai.platform import agent_records as shim
-
-    assert shim.is_agent_key is static_methods.is_agent_key
-    assert shim.parse_agent_record is static_methods.parse_agent_record
-    assert shim.collect_agent_records is static_methods.collect_agent_records
 
 
 def test_task_prompt_key_is_one_based():

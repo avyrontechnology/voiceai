@@ -1,11 +1,11 @@
-"""VoiceAI platform layer (SaaS surface over the realtime engine).
+"""Legacy platform surface: frozen routers served by the single app (spec 0048).
 
-Provides executions, batches, phone numbers, knowledge bases, tools,
-webhooks, wallet and agent templates. Storage is pluggable: in-memory
-for tests/dev, Redis in production (same backend as agent CRUD).
+`single_app_routers()` is what `create_app` mounts; `RepositoryPlatformStore` is
+what production persists through; `MemoryStore` remains for tests.
 """
 
-from voiceai.platform.router import create_platform_app
-from voiceai.platform.store import MemoryStore, RedisStore
+from voiceai.platform.repository_store import RepositoryPlatformStore
+from voiceai.platform.router import single_app_routers
+from voiceai.platform.store import MemoryStore
 
-__all__ = ["MemoryStore", "RedisStore", "create_platform_app"]
+__all__ = ["MemoryStore", "RepositoryPlatformStore", "single_app_routers"]

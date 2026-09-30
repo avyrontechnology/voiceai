@@ -194,6 +194,10 @@ class MongoAuthStore:
         _pin(key, key.key_id)
         await self._keys.insert(key)
 
+    async def delete_api_key(self, key_id: str) -> bool:
+        """Soft-delete an API key; `True` when one was active (spec 0048, rule 5)."""
+        return await self._keys.soft_delete(key_id)
+
     async def add_auth_event(self, event: AuthEvent) -> None:
         """Append one audit event keyed by `event_id`."""
         _pin(event, event.event_id)

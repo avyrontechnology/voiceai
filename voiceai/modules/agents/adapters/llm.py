@@ -2,7 +2,7 @@
 
 This file is a §3.1 bridge (rule 1): the ONLY place agents code may import the legacy LLM
 stack, and every such import is tagged with the migration that retires it. The behavior is
-`local_setup/quickstart_server.py` lines 160-175 verbatim: the model name is read from the
+the retired quickstart server (lines 160-175 at the time) verbatim: the model name is read from the
 environment AT CALL TIME, a fresh `LiteLLM` is built per call with the pinned token budget,
 and the completion text passes through untouched.
 """

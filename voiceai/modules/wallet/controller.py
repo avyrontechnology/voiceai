@@ -98,10 +98,11 @@ async def get_ledger(
     service: ServiceDep,
     limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
     entry_type: str | None = None,
+    legacy_type: str | None = Query(default=None, alias="type"),
 ) -> JSONResponse:
-    """List ledger entries (bounded page)."""
+    """List ledger entries (bounded page); `type` is the legacy spelling of the filter (spec 0048)."""
     await _require_role(request, auth, "admin")
-    entries = await service.list_ledger(limit=limit, entry_type=entry_type)
+    entries = await service.list_ledger(limit=limit, entry_type=entry_type or legacy_type)
     return success_response(LedgerListResponse(entries=entries))
 
 

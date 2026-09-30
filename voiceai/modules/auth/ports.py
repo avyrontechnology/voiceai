@@ -103,6 +103,10 @@ class AuthStorePort(Protocol):
         """Persist an API key."""
         ...
 
+    async def delete_api_key(self, key_id: str) -> bool:
+        """Retire an API key; `True` when one was active (spec 0048)."""
+        ...
+
     async def add_auth_event(self, event: AuthEvent) -> None:
         """Append one audit event."""
         ...

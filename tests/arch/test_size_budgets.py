@@ -48,7 +48,6 @@ SIZE_DEBT: dict[str, str] = {
     "voiceai/modules/voice/session/turn/history_sync.py": "spec-0024",
     "voiceai/modules/voice/session/s2s_runner.py": "spec-0024",
     "voiceai/platform/router.py": "spec-0025",
-    "voiceai/platform/store.py": "spec-0025",
     "voiceai/helpers/utils.py": "spec-0022",
     "voiceai/modules/voice/tts/providers/kalpa_synthesizer.py": "spec-0022",
     # spec-0042 integrator: recording capture outcome grew lifecycle/report.py past

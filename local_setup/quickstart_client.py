@@ -38,7 +38,7 @@ interruption_message = 0
 server_url = "ws://localhost:5001"  # os.getenv("VOICEAI_WS_SERVER_URL")
 assistant_id = os.getenv("ASSISTANT_ID")
 logging.info(f"Assistant ID {os.getenv('ASSISTANT_ID')}")
-uri = f"{server_url}/chat/v1/{assistant_id}"
+uri = f"{server_url}/api/v1/chat/v1/{assistant_id}"  # spec 0048: the single app serves the socket under the API prefix
 
 # Audio queue to store audio frames
 input_queue = asyncio.Queue()

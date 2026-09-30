@@ -28,7 +28,6 @@ ALL_AGENTS_PATH: Final[str] = "/all"
 # TODO(spec-0002): `KEYS *` is documented preserved debt for the platform-store spec; the
 # repository (step A3) keeps it behind one documented method until that spec replaces it.
 REDIS_KEY_NAMESPACE_SEPARATOR: Final[str] = ":"
-REDIS_SCAN_ALL_PATTERN: Final[str] = "*"
 
 # --- Agent record wire shape (quickstart JSON, byte-identical) --------------------------
 AGENT_ID_KEY: Final[str] = "agent_id"

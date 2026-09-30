@@ -268,7 +268,7 @@ class AuthServiceBase:
     async def _bump_version(self, user: User) -> None:
         """Stamp the next revocation version onto a user row (caller persists it).
 
-        Legacy platform rows (quickstart's `RedisStore`, retired at T7) predate the
+        Legacy platform rows (the retired Redis store, spec 0048) predate the
         stamp: stamping is skipped for them while session sweeps keep revoking, so a
         mixed deployment degrades to sweep-only revocation instead of crashing.
         """

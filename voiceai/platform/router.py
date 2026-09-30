@@ -1,8 +1,8 @@
 """HTTP surface for the platform layer.
 
-Mount via `create_platform_app(store)` in tests/dev, or include the
-routers in the main server with a shared RedisStore (see
-local_setup/quickstart_server.py wiring).
+Mounted by `voiceai.core.app_factory.create_app` through `single_app_routers()`
+over the container's platform store (spec 0048); frozen until M6 retires each
+router into its module.
 """
 
 import asyncio
@@ -120,6 +120,7 @@ from voiceai.platform.workflows import (
     run_workflow,
     validate_workflow,
 )
+from voiceai.core.app_factory import platform_store_of
 from voiceai.platform.store import MemoryStore
 from voiceai.platform.templates_seed import TEMPLATES
 from voiceai.platform.templates_seed import get_template as lookup_template
@@ -128,7 +129,7 @@ logger = configure_logger(__name__)
 
 
 def get_store(request: Request) -> MemoryStore:
-    return request.app.state.platform_store
+    return platform_store_of(request.app)
 
 
 def _not_found(resource: str, resource_id: str) -> HTTPException:
@@ -138,10 +139,13 @@ def _not_found(resource: str, resource_id: str) -> HTTPException:
 # --- executions & calls ---------------------------------------------------------
 
 calls_router = APIRouter(prefix="/calls", tags=["Calls"])
+# Spec 0048 (Slice B): the simulator rides its own router so the single app can mount
+# it without the legacy `/calls/place` twin (the voice module owns that path).
+simulate_router = APIRouter(prefix="/calls", tags=["Calls"])
 executions_router = APIRouter(prefix="/executions", tags=["Executions"])
 
 
-@calls_router.post("/simulate", response_model=Execution, status_code=202)
+@simulate_router.post("/simulate", response_model=Execution, status_code=202)
 async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depends(get_store),
     _auth: Principal = Depends(require_scope("calls:write")),
 ) -> Execution:
@@ -1254,27 +1258,25 @@ async def delete_api_key(
     return DeletedResponse()
 
 
-def build_routers() -> list[APIRouter]:
-    from voiceai.platform.auth_router import auth_router
+def single_app_routers() -> list[APIRouter]:
+    """Routers the single app mounts under the API prefix (spec 0048, Slice B).
 
-    # Strangler: wallet/templates routes moved to voiceai.modules.wallet (their
-    # canonical home); the legacy bare mounts below re-export the module's
-    # public routers until the bare paths retire.
-    from voiceai.modules.wallet import templates_router, wallet_router
+    Everything a module already owns stays out: auth (tombstone), `/calls/place`
+    (voice), tools, voices, wallet and templates. These mount AFTER the module
+    routers and first match wins, so no path here may collide with a module path —
+    `tests/arch/test_route_inventory.py` pins the resulting table.
 
+    Returns:
+        The frozen platform routers still without a module home.
+    """
     return [
-        auth_router,
-        calls_router,
+        simulate_router,
         executions_router,
         batches_router,
         numbers_router,
         kbs_router,
-        tools_router,
         webhooks_router,
-        wallet_router,
-        templates_router,
         inbound_router,
-        voices_router,
         agents_router,
         subs_router,
         integrations_router,
@@ -1285,42 +1287,3 @@ def build_routers() -> list[APIRouter]:
         org_router,
         keys_router,
     ]
-
-
-def create_platform_app(store: Optional[MemoryStore] = None) -> FastAPI:
-    """Build the standalone platform app with dual-served routers (spec 0007).
-
-    Every router from `build_routers()` mounts twice — bare (today) plus the
-    shared `API_PREFIX` mount (new) — sharing one handler, so shapes stay
-    byte-identical on both mounts. Duplicate operation_ids across the two
-    mounts warn only. The tombstoned zero-route auth router mounts twice
-    harmlessly and needs no special case.
-
-    Args:
-        store: Backing store; a fresh `MemoryStore` when omitted.
-
-    Returns:
-        The FastAPI application with each router mounted bare and prefixed.
-    """
-    from dependency_injector import providers
-
-    from voiceai.common.constants import API_PREFIX
-    from voiceai.core.container import build_container
-    from voiceai.modules.wallet.adapters.legacy_store import build_legacy_wallet_service
-
-    app = FastAPI(title="VoiceAI Platform", version="0.1.0")
-    app.state.platform_store = store or MemoryStore()
-    for router in build_routers():
-        app.include_router(router)
-        # Spec 0007: dual-serve — the same handler answers under `/api/v1` too.
-        # Bare paths stay byte-identical; duplicate operation_ids warn only.
-        app.include_router(router, prefix=API_PREFIX)
-    # The migrated wallet/templates routes resolve their service from a container:
-    # this app owns one, with the wallet bound to THIS app's store (one ledger,
-    # not two). Instance-scoped — class-level overrides do not reach instances.
-    container = build_container()
-    container.wallet_service.override(
-        providers.Factory(build_legacy_wallet_service, app.state.platform_store)
-    )
-    app.state.container = container
-    return app

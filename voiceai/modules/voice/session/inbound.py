@@ -73,7 +73,7 @@ class NumberAssignment:
 class InboundLookupStore(Protocol):
     """Injected read seam over the legacy platform phone-number surface.
 
-    The integrator implements this against `MemoryStore`/`RedisStore`
+    The integrator implements this against the platform store
     (`list_numbers` → `NumberAssignment`, `get_inbound` → `model_dump`); this
     module never imports `voiceai.platform` (spec 0047 Slice A contract).
     """

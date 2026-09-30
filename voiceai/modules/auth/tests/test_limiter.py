@@ -172,6 +172,9 @@ class FakeAuthStore:
     async def save_api_key(self, key: ApiKey) -> None:
         self.keys[key.key_id] = key
 
+    async def delete_api_key(self, key_id: str) -> bool:
+        return self.keys.pop(key_id, None) is not None
+
     async def add_auth_event(self, event: AuthEvent) -> None:
         self.events.append(event)
 

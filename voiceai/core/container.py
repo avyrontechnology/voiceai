@@ -97,13 +97,35 @@ def _auth_repositories(db_client: Any) -> dict[str, Any]:
 def create_auth_store(db_client: Any, cache_client: Any) -> Any:
     """Build the greenfield auth store: Atlas (or memory) truth, Redis TTL cache (T2).
 
-    The legacy `MemoryStore`/`RedisStore` selection is retired — quickstart pins its
-    own `RedisStore` explicitly, so nothing deployed depends on this factory's old
-    shape (spec 0006 E1 superseded).
+    The legacy `MemoryStore`/`RedisStore` selection is retired (spec 0006 E1
+    superseded; the Redis store itself is gone since spec 0048).
     """
     from voiceai.modules.auth.repository import MongoAuthStore
 
     return MongoAuthStore(cache=cache_client, **_auth_repositories(db_client))
+
+
+def create_platform_store(db_client: Any, auth_store: Any) -> Any:
+    """Build the legacy platform store over the greenfield repositories (spec 0048, Slice A).
+
+    One `PlatformRow` repository per bridge collection on the deployment's driver; the
+    auth families ride on `auth_store`. Safe as a singleton: the store reads the ambient
+    tenant on every call, never at construction (unlike `_scoped_collection`).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        auth_store: The container's `MongoAuthStore`.
+
+    Returns:
+        A `RepositoryPlatformStore` serving the frozen platform routers.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.platform.repository_store import PLATFORM_COLLECTIONS, PlatformRow, RepositoryPlatformStore
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    repositories = {collection: factory(db_client, collection, PlatformRow) for collection in PLATFORM_COLLECTIONS}
+    return RepositoryPlatformStore(auth_store, repositories)
 
 
 def _build_auth_service(auth_store: Any, environment: Any) -> Any:
@@ -252,19 +274,43 @@ def _build_voice_call_service(
     )
 
 
-def _build_wallet_service(db_client: Any) -> Any:
+def create_wallet_repository(db_client: Any) -> Any:
+    """Build the wallet repository (wallet, ledger, templates) pinned to the ambient tenant.
+
+    Shared by the per-request wallet service and the spec-0048 backfill; like every
+    `_scoped_collection` the tenant is read at construction, so call it inside a
+    bound tenant, never from a singleton.
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `MongoWalletRepository` over the deployment's driver.
+    """
     from voiceai.database.constants import Collections
     from voiceai.database.repository import BaseRepository
     from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
     from voiceai.modules.wallet.repository import MongoWalletRepository
-    from voiceai.modules.wallet.service import WalletService
 
     wallet_repo: BaseRepository[Wallet] = _scoped_collection(db_client, Collections.WALLETS, Wallet)
     ledger_repo: BaseRepository[LedgerEntry] = _scoped_collection(db_client, Collections.LEDGER, LedgerEntry)
     template_repo: BaseRepository[StoredTemplate] = _scoped_collection(
         db_client, Collections.AGENT_TEMPLATES, StoredTemplate
     )
-    return WalletService(MongoWalletRepository(wallet_repo, ledger_repo, template_repo))
+    return MongoWalletRepository(wallet_repo, ledger_repo, template_repo)
+
+
+def _build_wallet_service(db_client: Any) -> Any:
+    from voiceai.modules.wallet.service import WalletService
+
+    return WalletService(create_wallet_repository(db_client))
+
+
+def _build_inbound_store(platform_store: Any) -> Any:
+    """Adapt the platform store to the voice inbound lookup seam (spec 0047 seam, spec 0048 wiring)."""
+    from voiceai.modules.voice.adapters.inbound_store import PlatformInboundStore
+
+    return PlatformInboundStore(platform_store)
 
 
 def _build_catalog_service(db_client: Any) -> Any:
@@ -501,6 +547,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     task_registry = providers.Singleton(TaskRegistry)
 
     auth_store = providers.Singleton(create_auth_store, db_client, redis_cache)
+    # Spec 0048: the frozen platform routers persist through the greenfield repositories.
+    platform_store = providers.Singleton(create_platform_store, db_client, auth_store)
+    # Spec 0047 seam: the inbound webhook resolves called numbers through the same store.
+    inbound_store = providers.Factory(_build_inbound_store, platform_store)
 
     # Auth Module
     auth_service = providers.Factory(_build_auth_service, auth_store, environment)

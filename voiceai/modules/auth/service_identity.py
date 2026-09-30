@@ -46,14 +46,14 @@ class AuthIdentityMixin(AuthServiceBase):
         Returns:
             The acting tenant's hex.
         """
-        direct = None
+        direct: Tenant | None = None
         get_tenant = getattr(self._store, "get_tenant", None)
         if get_tenant is not None:
             direct = await get_tenant(principal.org_id)
         if direct is not None:
             return direct.tenant_id
         get_by_slug = getattr(self._store, "get_tenant_by_slug", None)
-        via_slug = await get_by_slug(principal.org_id) if get_by_slug is not None else None
+        via_slug: Tenant | None = await get_by_slug(principal.org_id) if get_by_slug is not None else None
         if via_slug is not None:
             return via_slug.tenant_id
         return principal.org_id

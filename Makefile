@@ -2,6 +2,8 @@
 PY ?= .venv/bin/python
 RUFF ?= .venv/bin/ruff
 ARCH_DIRS = voiceai/common voiceai/core voiceai/database voiceai/modules
+# Spec 0048: strict-profile files outside the arch roots (legacy-surface bridges).
+ARCH_EXTRA = voiceai/platform/repository_store.py
 # T1: module tests live beside their modules; `make test` runs both trees.
 ARCH_TESTS = tests/arch voiceai/modules
 # Strict lint profile for new-architecture SOURCES only; tests (both trees) keep the
@@ -22,10 +24,10 @@ lint:
 	$(RUFF) check .
 
 lint-arch:
-	$(RUFF) check --select $(ARCH_SELECT) --ignore $(ARCH_IGNORE) --extend-exclude $(ARCH_EXCLUDE) $(ARCH_DIRS)
+	$(RUFF) check --select $(ARCH_SELECT) --ignore $(ARCH_IGNORE) --extend-exclude $(ARCH_EXCLUDE) $(ARCH_DIRS) $(ARCH_EXTRA)
 
 type:
-	$(PY) -m mypy $(ARCH_DIRS) tests/arch
+	$(PY) -m mypy $(ARCH_DIRS) $(ARCH_EXTRA) tests/arch
 
 test:
 	$(PY) -m pytest -q $(ARCH_TESTS)
@@ -35,7 +37,7 @@ test-all:
 	$(PY) -m pytest -q --ignore=tests/test_seed_mongo_users.py
 
 sec:
-	$(PY) -m bandit -q -r $(ARCH_DIRS) --severity-level medium --confidence-level high
+	$(PY) -m bandit -q -r $(ARCH_DIRS) $(ARCH_EXTRA) --severity-level medium --confidence-level high
 
 # Coverage gate (spec 0004 B13a): the full suite (legacy suites pin the moved engine
 # code through delegators/shims) over the new packages MINUS the leaf provider trees
@@ -47,9 +49,6 @@ sec:
 cov:
 	$(PY) -m pytest -q --ignore=tests/test_seed_mongo_users.py \
 		--deselect tests/arch/common/test_constants.py::TestAppVersion::test_app_version_is_the_installed_distribution_version \
-		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_roundtrip \
-		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_missing_file_returns_null \
-		--deselect tests/test_agent_prompts_endpoint.py::test_prompts_missing_agent_returns_404 \
 		--deselect tests/test_prompt_resilience.py::test_missing_prompts_file_returns_empty_dict \
 		--deselect tests/test_prompt_resilience.py::test_missing_prompts_result_supports_get \
 		--deselect "tests/test_telephony_output_send_timeout.py::test_handle_interruption_does_not_hang_on_a_dead_socket[TwilioOutputHandler]" \
@@ -59,7 +58,7 @@ cov:
 		--cov-report=term-missing:skip-covered --cov-fail-under=85
 
 fmt:
-	$(RUFF) format $(ARCH_DIRS) $(ARCH_TESTS)
+	$(RUFF) format $(ARCH_DIRS) $(ARCH_EXTRA) $(ARCH_TESTS)
 
 docs:
 	$(PY) voiceai/tooling/render_docs.py --out docs

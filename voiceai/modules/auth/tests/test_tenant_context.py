@@ -78,6 +78,10 @@ class _TenantFakeStore:
         """Persist a key (the resolver touches `last_used_at`)."""
         self.keys[key.key_id] = key
 
+    async def delete_api_key(self, key_id: str) -> bool:
+        """Retire a key; `True` when it existed (spec 0048 port member)."""
+        return self.keys.pop(key_id, None) is not None
+
     async def is_revoked(self, jti: str) -> bool:
         """No denylist rows exist in these tests (`jti` is accepted and ignored)."""
         _ = jti

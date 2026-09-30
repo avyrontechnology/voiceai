@@ -150,7 +150,14 @@ async def voice_chat(
             await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
             return
         try:
-            await service.run_call(agent_config=agent_config, ws=websocket, agent_id=agent_id)
+            # Spec 0048 (Slice B): the execution record lands in the container's
+            # repository-backed platform store (quickstart used to pass its own).
+            await service.run_call(
+                agent_config=agent_config,
+                ws=websocket,
+                agent_id=agent_id,
+                platform_store=container.platform_store(),
+            )
         finally:
             # Channel lifecycle event (spec 0021, M2): the run's record joins
             # the tenant-stamped audit trail whether the run succeeded or not.
@@ -373,18 +380,20 @@ def _twilio_form_params(raw: bytes) -> dict[str, str]:
     return dict(parse_qsl(raw.decode("utf-8"), keep_blank_values=True))
 
 
-def _inbound_store(request: Request) -> Any:  # why: the Slice A store seam type lands with Slice A
-    """Resolve the phone-assignment store seam for the Slice A lookup.
+def _inbound_store(request: Request) -> Any:  # why: the seam is a duck-typed read port
+    """Resolve the phone-assignment store seam for the inbound lookup.
 
-    PROVISIONAL(spec-0047): reads the store staged on app state (tests) or on the
-    container (once Slice A wires it); ``None`` means unassigned, which rejects.
+    A store staged on app state (tests) wins; otherwise the container's
+    ``inbound_store`` provider (spec 0048: the platform store adapter) resolves
+    it. ``None`` means no seam at all, which rejects the call.
     """
     state = request.app.state
     store = getattr(state, "inbound_store", None)
     if store is not None:
         return store
     container = getattr(state, CONTAINER_STATE_ATTR, None)
-    return getattr(container, "inbound_store", None) if container is not None else None
+    provider = getattr(container, "inbound_store", None) if container is not None else None
+    return provider() if provider is not None else None
 
 
 async def _lookup_inbound_agent(

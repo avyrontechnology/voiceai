@@ -50,6 +50,29 @@ class Collections(str, Enum):
     ORGANIZATIONS = "organizations"
     TEAMS = "teams"
     MEMBERSHIPS = "memberships"
+    #: Legacy platform bridge (spec 0048, Slice A): the frozen `platform/router.py`
+    #: families persisted verbatim (payload under a tenant-stamped envelope) until
+    #: M6 migrates each into its module. Namespaced so they never collide with a
+    #: module collection (`executions` already holds `PlacedCall`).
+    PLATFORM_EXECUTIONS = "platform_executions"
+    PLATFORM_BATCHES = "platform_batches"
+    PLATFORM_NUMBERS = "platform_numbers"
+    PLATFORM_KBS = "platform_kbs"
+    PLATFORM_TOOLS = "platform_tools"
+    PLATFORM_WEBHOOKS = "platform_webhooks"
+    PLATFORM_INBOUND = "platform_inbound"
+    PLATFORM_VOICES = "platform_voices"
+    PLATFORM_VECTOR = "platform_vector"
+    PLATFORM_SUBACCOUNTS = "platform_subaccounts"
+    PLATFORM_INTEGRATIONS = "platform_integrations"
+    PLATFORM_GRAPHS = "platform_graphs"
+    PLATFORM_GRAPH_VERSIONS = "platform_graph_versions"
+    PLATFORM_WORKFLOWS = "platform_workflows"
+    PLATFORM_WORKFLOW_VERSIONS = "platform_workflow_versions"
+    PLATFORM_WORKFLOW_RUNS = "platform_workflow_runs"
+    PLATFORM_WORKFLOW_CAMPAIGNS = "platform_workflow_campaigns"
+    PLATFORM_LEDGER = "platform_ledger"
+    PLATFORM_SINGLETONS = "platform_singletons"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:
