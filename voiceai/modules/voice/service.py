@@ -244,7 +244,9 @@ class VoiceCallService:
         except Exception as hook_error:  # why: legacy contract — recording must never fail the call
             self._logger.warning(_LOG_EXECUTION_SKIPPED, hook_error)
 
-    async def place_call(self, *, payload: PlaceCallRequest) -> PlacedCall:
+    async def place_call(
+        self, *, payload: PlaceCallRequest, platform_store: Any = None
+    ) -> PlacedCall:
         """Place one outbound call: validate, resolve credentials, dial, persist (spec 0008).
 
         Credential precedence per field: explicit per-request value > partner DB
@@ -253,6 +255,8 @@ class VoiceCallService:
 
         Args:
             payload: The validated place-call request.
+            platform_store: The platform executions store for the detail-page
+                mirror (best-effort; `None` keeps the module-only write).
 
         Returns:
             The persisted placed-call view (`IN_PROGRESS` for accepted trunk
@@ -320,7 +324,27 @@ class VoiceCallService:
             provider=payload.provider,
             variables=dict(payload.variables),
         )
-        return await repo.save_execution(placed)
+        stored = await repo.save_execution(placed)
+        await self._mirror_placed_execution(platform_store, stored)
+        return stored
+
+    async def _mirror_placed_execution(self, platform_store: Any, placed: PlacedCall) -> None:
+        """Best-effort mirror of a placed row for the executions surface.
+
+        The executions HTTP routes read the platform `platform_executions`
+        collection while placed rows persist in the module `executions`
+        collection — without this mirror a placed dial 404s on its own
+        detail route. A mirror failure lands as the legacy skipped-record
+        warning: the dial already happened, so logging must never fail it.
+        """
+        if platform_store is None:
+            return
+        try:
+            from voiceai.modules.voice.adapters.outbound import record_placed_execution
+
+            await record_placed_execution(platform_store, placed=placed)
+        except Exception as hook_error:  # why: legacy contract — recording must never fail the call
+            self._logger.warning(_LOG_EXECUTION_SKIPPED, hook_error)
 
     async def create_partner(self, *, payload: CreateTalkoPartnerRequest) -> TalkoPartnerView:
         """Store a partner credential record, rejecting duplicate ids (spec 0008).

@@ -216,6 +216,48 @@ async def test_place_call_explicit_beats_record() -> None:
     assert call["from_number"] == "911414000000"  # normalized to digits
 
 
+class _FakePlatformStore:
+    """Platform executions double: captures mirrored rows, optionally explodes."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.saved: list[Any] = []
+        self.fail = fail
+
+    async def save_execution(self, execution: Any) -> None:
+        if self.fail:
+            raise RuntimeError("platform store down")
+        self.saved.append(execution)
+
+
+async def test_place_call_mirrors_row_to_platform_store() -> None:
+    """A placed dial lands in the platform executions family under its own id."""
+    service, _ = _service()
+    await _partner(service)
+    store = _FakePlatformStore()
+    placed = await service.place_call(
+        payload=PlaceCallRequest(
+            agent_id="a", to_number="+919812345678", provider="talko", partner_id="2", delay_scale=0
+        ),
+        platform_store=store,
+    )
+    assert placed.execution_id == "exec-trunk"
+    (mirrored,) = store.saved
+    assert mirrored.execution_id == "exec-trunk"
+    assert mirrored.agent_id == "a"
+    assert mirrored.direction == "outbound"
+    assert mirrored.status.value == "in_progress"
+
+
+async def test_place_call_mirror_failure_keeps_placement() -> None:
+    """A dead mirror store degrades to a warning; the placed dial stands."""
+    service, _ = _service()
+    placed = await service.place_call(
+        payload=PlaceCallRequest(agent_id="agent-1", to_number="+919812345678", delay_scale=0),
+        platform_store=_FakePlatformStore(fail=True),
+    )
+    assert placed.execution_id == "exec-sim"
+
+
 async def test_place_call_unknown_partner_fails_closed() -> None:
     service, fake = _service()
     with pytest.raises(UnknownTalkoPartnerError):

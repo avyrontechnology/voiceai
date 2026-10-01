@@ -192,9 +192,14 @@ async def place_call(
 ) -> JSONResponse:
     """Place one outbound call (spec 0008)."""
     principal = await _require_scope(request, auth, "calls:write")
+    container = getattr(request.app.state, CONTAINER_STATE_ATTR, None)
+    store_provider = getattr(container, "platform_store", None) if container is not None else None
 
     try:
-        placed = await service.place_call(payload=payload)
+        placed = await service.place_call(
+            payload=payload,
+            platform_store=store_provider() if store_provider is not None else None,
+        )
     except AppError as exc:
         return error_response(exc)
     # Channel lifecycle event (spec 0021, M2): the dial joins the tenant-stamped

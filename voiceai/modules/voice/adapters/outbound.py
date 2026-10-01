@@ -19,6 +19,7 @@ from typing import Any
 
 from voiceai.common.tenancy import TenantContext, current_tenant
 from voiceai.core.resilience import TaskRegistry
+from voiceai.modules.voice.models import PlacedCall
 from voiceai.modules.voice.ports.outbound import DialOutcome, PartnerPreview
 from voiceai.platform.models import new_id as _legacy_new_id
 from voiceai.platform.simulation import (
@@ -34,6 +35,7 @@ __all__ = [
     "OutboundDialBridge",
     "dial_trunk_call",
     "fetch_partner_dids",
+    "record_placed_execution",
     "run_simulated_call_inline",
     "start_simulated_call_background",
 ]
@@ -356,3 +358,41 @@ async def fetch_partner_dids(
             partner_id = str(candidate)
             break
     return PartnerPreview(partner_id=partner_id, dids=dids)
+
+
+async def record_placed_execution(
+    store: Any,  # why: the platform store seam is duck-typed (bridge or legacy MemoryStore)
+    *,
+    placed: PlacedCall,
+) -> None:
+    """Mirror one placed-call row into the platform executions family.
+
+    Placed rows persist in the module `executions` collection, but the
+    executions HTTP surface reads `platform_executions` — without this mirror
+    a placed dial 404s on its own detail route. Same execution id, different
+    collection (never written twice to one). Raises on persistence failure;
+    the service converts that to the legacy skipped-record warning so a
+    logging failure never fails an already-placed dial.
+
+    Args:
+        store: The platform store (has `save_execution`).
+        placed: The persisted placed-call row (execution id, agent, numbers,
+            status string, variables).
+    """
+    from voiceai.platform.models import Execution, ExecutionStatus
+
+    try:
+        status = ExecutionStatus(placed.status)
+    except ValueError:
+        status = ExecutionStatus.QUEUED
+    await store.save_execution(
+        Execution(
+            execution_id=placed.execution_id,
+            agent_id=placed.agent_id,
+            direction="outbound",
+            to_number=placed.to_number or "unknown",
+            from_number=placed.from_number,
+            status=status,
+            variables=dict(placed.variables or {}),
+        )
+    )

@@ -74,7 +74,9 @@ MODULE: ModuleDef = ModuleDef(
     # Bumped for spec-0047 (inbound lookup + webhook + screening + tests).
     # Bumped for the ?leg=browser flag restoration + 4404 warning (controller,
     # constants, regression pins): +50, ratchet back with the next slice.
-    max_lines=49850,
+    # Bumped for the placed-row platform mirror (adapter, service, controller,
+    # regression pins): +150, ratchet back with the next slice.
+    max_lines=50000,
 )
 
 __all__ = [
