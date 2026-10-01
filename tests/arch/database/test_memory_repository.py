@@ -6,14 +6,16 @@ from datetime import datetime, timezone
 
 import pytest
 
+from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.errors import NotFoundError
 from voiceai.common.pagination import PaginationParams
 from voiceai.core.db import InMemoryDatabase
-from voiceai.database.constants import Collections
+from voiceai.database.constants import IS_ACTIVE_FIELD, Collections
 from voiceai.database.repository import BaseRepository, InMemoryRepository
 from voiceai.modules.health.models import HealthCheckRecord
 
 PAST = datetime(2024, 1, 1, tzinfo=timezone.utc)
+NOTE_FIELD = "note"
 
 
 @pytest.fixture
@@ -201,3 +203,56 @@ async def test_list_past_the_last_page_is_empty(repo: BaseRepository[HealthCheck
 
     assert page.items == []
     assert page.total == 1
+
+
+async def test_list_where_filters_active_documents_then_pages(repo: BaseRepository[HealthCheckRecord]) -> None:
+    """The filter runs over every active document before the window is cut (spec 0050)."""
+    for index in range(5):
+        await repo.insert(HealthCheckRecord(id=f"row-{index}", note="a" if index % 2 == 0 else "b"))
+    assert await repo.soft_delete("row-2") is True
+
+    first = await repo.list_where({NOTE_FIELD: "a"}, PaginationParams(page=1, page_size=1))
+    second = await repo.list_where({NOTE_FIELD: "a"}, PaginationParams(page=2, page_size=1))
+
+    assert first.total == 2
+    assert first.pages == 2
+    assert [item.id for item in first.items] == ["row-0"]
+    assert [item.id for item in second.items] == ["row-4"]
+    assert second.has_next is False
+
+
+async def test_list_where_without_filters_is_the_plain_listing(repo: BaseRepository[HealthCheckRecord]) -> None:
+    """An empty filter map and ``list`` are the same read: same order, same total."""
+    for index in range(3):
+        await repo.insert(HealthCheckRecord(note=f"note-{index}"))
+    params = PaginationParams(page=1, page_size=2)
+
+    plain = await repo.list(params)
+    filtered = await repo.list_where({}, params)
+
+    assert [item.id for item in filtered.items] == [item.id for item in plain.items]
+    assert filtered.total == plain.total == 3
+
+
+async def test_list_where_cannot_widen_a_read_to_soft_deleted_rows(repo: BaseRepository[HealthCheckRecord]) -> None:
+    """Reads never surface a deleted document, whatever the caller filters on (rule 5)."""
+    await repo.insert(HealthCheckRecord(id="gone"))
+    assert await repo.soft_delete("gone") is True
+
+    page = await repo.list_where({IS_ACTIVE_FIELD: False}, PaginationParams())
+
+    assert (page.items, page.total) == ([], 0)
+
+
+async def test_find_many_is_a_bounded_lookup(repo: BaseRepository[HealthCheckRecord]) -> None:
+    """``find_many`` clamps to ``MAX_PAGE_SIZE`` (never negative); ``list_where`` sees the rest (spec 0050)."""
+    for _ in range(MAX_PAGE_SIZE + 1):
+        await repo.insert(HealthCheckRecord(note="same"))
+
+    capped = await repo.find_many(NOTE_FIELD, "same", limit=MAX_PAGE_SIZE + 1)
+    none = await repo.find_many(NOTE_FIELD, "same", limit=-1)
+    tail = await repo.list_where({NOTE_FIELD: "same"}, PaginationParams(page=2, page_size=MAX_PAGE_SIZE))
+
+    assert len(capped) == MAX_PAGE_SIZE
+    assert none == []
+    assert (tail.total, len(tail.items)) == (MAX_PAGE_SIZE + 1, 1)

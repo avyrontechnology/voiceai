@@ -7,11 +7,14 @@ Every response leaving the service is built here, so clients see one shape:
 
 This is the only file in `common` allowed to import FastAPI (AGENTS.md §3). The handlers here
 are also the error-opacity boundary: an unexpected exception is logged with its stack and an
-`error_id`, and the client gets that id and nothing else — never `str(exc)`.
+`error_id`, and the client gets that id and nothing else — never `str(exc)`. The same boundary
+holds for a 422: per-field records name where the request failed and which rule it broke
+(`loc`, `type`), never the validator's text or the value the caller submitted (spec 0052).
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import Any, Final
 
 from fastapi import FastAPI
@@ -45,6 +48,8 @@ from voiceai.common.constants import (
     PAGINATION_KEY_PAGE_SIZE,
     PAGINATION_KEY_PAGES,
     PAGINATION_KEY_TOTAL,
+    VALIDATION_KEY_LOC,
+    VALIDATION_KEY_TYPE,
 )
 from voiceai.common.errors import (
     AppError,
@@ -64,6 +69,7 @@ __all__ = [
     "error_payload",
     "error_response",
     "paginated_response",
+    "public_validation_errors",
     "register_exception_handlers",
     "success_response",
     "unexpected_error_response",
@@ -193,16 +199,21 @@ def paginated_response(page: Page[Any], *, message: str | None = None) -> JSONRe
     return success_response(page.items, message=message, meta=meta)
 
 
-def _log_app_error(err: AppError, request: Request) -> None:
-    """Log an expected failure at a severity matching its status.
+def _log_app_error(err: AppError, request: Request, *, status: int | None = None) -> None:
+    """Log an expected failure at a severity matching the status the client receives.
 
     Args:
         err: The error being returned to the client.
         request: The request that produced it; only its path is logged (never the payload).
+        status: The HTTP status actually sent, when it differs from the error's own — a
+            request-validation failure is an `InvalidRequestError` (400) answered as 422, and
+            a framework `HTTPException` keeps its original status. `None` logs the error's
+            own status, so `status=` in the log line always matches the response (spec 0052).
     """
     logger = get_logger(_LOGGER_MODULE)
-    arguments = (err.error_id, err.code.value, err.http_status, request.url.path)
-    if err.http_status >= HTTP_INTERNAL_SERVER_ERROR:
+    sent_status = err.http_status if status is None else status
+    arguments = (err.error_id, err.code.value, sent_status, request.url.path)
+    if sent_status >= HTTP_INTERNAL_SERVER_ERROR:
         logger.error(_LOG_APP_ERROR, *arguments, exc_info=err)
     else:
         logger.warning(_LOG_APP_ERROR, *arguments)
@@ -256,12 +267,51 @@ async def _http_exception_handler(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, StarletteHTTPException):
         return await _unhandled_exception_handler(request, exc)
     err = _error_for_status(exc.status_code, str(exc.detail))
-    _log_app_error(err, request)
+    _log_app_error(err, request, status=exc.status_code)
     return JSONResponse(
         status_code=exc.status_code,
         content=jsonable_encoder(error_payload(err)),
         headers=exc.headers,
     )
+
+
+def _public_loc_segment(segment: object) -> str | int:
+    """Render one location segment as JSON-able text or a list index.
+
+    Args:
+        segment: A field name, a list index, or (rarely) another hashable key.
+
+    Returns:
+        The segment unchanged when it is a `str` or an `int`; its `str()` otherwise.
+    """
+    if isinstance(segment, str | int):
+        return segment
+    return str(segment)
+
+
+def public_validation_errors(errors: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce pydantic error records to the client-safe pair `{"loc", "type"}` (spec 0052).
+
+    A pydantic record also carries `msg` (validator text), `input` (the submitted value),
+    `ctx` (validator context, including raised exception text) and a docs `url`. Echoing those
+    would hand a rejected password or token back to the caller and into every log on the way
+    (AGENTS.md §4, error opacity). This is an allow-list: only the location and the error type
+    are copied, so a key a future pydantic adds stays server-side by default.
+
+    Args:
+        errors: The records of `RequestValidationError.errors()` or `ValidationError.errors()`.
+
+    Returns:
+        One `{"loc": [...], "type": "..."}` mapping per record, in the same order. `loc` holds
+        field names and list indexes; `type` is the pydantic error type (e.g. `missing`).
+    """
+    return [
+        {
+            VALIDATION_KEY_LOC: [_public_loc_segment(segment) for segment in record.get(VALIDATION_KEY_LOC, ())],
+            VALIDATION_KEY_TYPE: str(record.get(VALIDATION_KEY_TYPE, "")),
+        }
+        for record in errors
+    ]
 
 
 async def _validation_exception_handler(request: Request, exc: Exception) -> Response:
@@ -272,13 +322,15 @@ async def _validation_exception_handler(request: Request, exc: Exception) -> Res
         exc: The raised exception (a `RequestValidationError` by registration).
 
     Returns:
-        The error envelope with the per-field failures under `error.details.errors`.
+        The error envelope with the per-field failures under `error.details.errors`, each
+        reduced to `{"loc", "type"}` — never pydantic's message text or the submitted value
+        (spec 0052).
     """
-    details: dict[str, Any] = {}  # why: pydantic error records are free-form JSON
+    details: dict[str, Any] = {}  # why: heterogeneous JSON-able detail fragment
     if isinstance(exc, RequestValidationError):
-        details[DETAIL_KEY_ERRORS] = jsonable_encoder(exc.errors())
+        details[DETAIL_KEY_ERRORS] = public_validation_errors(exc.errors())
     err = InvalidRequestError(_VALIDATION_FAILED_MESSAGE, details=details)
-    _log_app_error(err, request)
+    _log_app_error(err, request, status=HTTP_UNPROCESSABLE_ENTITY)
     return JSONResponse(
         status_code=HTTP_UNPROCESSABLE_ENTITY,
         content=jsonable_encoder(error_payload(err)),

@@ -16,11 +16,17 @@ from dependency_injector import providers
 from voiceai.core.container import VoiceAIContainer, aclose_container, build_container
 from voiceai.core.db import InMemoryDatabase
 from voiceai.core.environment import Environment
-from voiceai.core.redis import create_redis, ping_redis
+from voiceai.core.redis import create_redis, create_redis_cache, ping_redis
 
 from ..conftest import FakeRedis
 
 REDIS_URL = "redis://localhost:6379/0"
+#: Split-URL fixtures (spec 0053): distinct hosts so a test can tell which client was built.
+CACHE_HOST = "cache"
+LEGACY_HOST = "legacy"
+CACHE_URL = f"redis://{CACHE_HOST}:6379/0"
+LEGACY_URL = f"redis://{LEGACY_HOST}:6379/0"
+PING = "ping"
 
 
 class TestProviderLifetimes:
@@ -161,6 +167,171 @@ class TestRedisFactory:
 
     async def test_ping_swallows_outages(self, failing_redis: FakeRedis) -> None:
         assert await ping_redis(cast("redis_asyncio.Redis", failing_redis)) is False
+
+
+def _answering_pings(client: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Replace `ping` on one built client so the probe answers without opening a socket.
+
+    Args:
+        client: A client the container built (constructing one opens no connection).
+        monkeypatch: Restores the instance attribute after the test.
+
+    Returns:
+        The list every ping on that client is appended to.
+    """
+    calls: list[str] = []
+
+    async def _ping() -> bool:
+        calls.append(PING)
+        return True
+
+    monkeypatch.setattr(client, PING, _ping)
+    return calls
+
+
+def _host_of(client: Any) -> str:
+    """Return the host a built client would connect to (read from its pool, no socket)."""
+    host: str = client.connection_pool.connection_kwargs["host"]
+    return host
+
+
+class TestHealthProbesTheCacheClient:
+    """Readiness pings the Redis the app uses: the cache client (spec 0053).
+
+    Before the fix the health repository was built from `redis_client` (`REDIS_URL`
+    only), so the documented production config — `REDIS_CACHE_URL` set, `REDIS_URL`
+    empty — read "redis not configured" while the JWT denylist depended on it.
+    """
+
+    async def test_a_cache_url_alone_is_probed_not_skipped(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reproduction: cache URL set, legacy URL empty → UP through the cache client."""
+        from voiceai.modules.health.models import HealthState
+
+        env = arch_environment.model_copy(update={"redis_url": "", "redis_cache_url": CACHE_URL})
+        container = build_container(env)
+        assert container.redis_client() is None
+        pings = _answering_pings(container.redis_cache(), monkeypatch)
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.UP
+        assert pings == [PING]
+        await aclose_container(container)
+
+    async def test_split_urls_ping_the_cache_server_not_the_legacy_one(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With both URLs set the probe must not answer for a server the app never calls."""
+        from voiceai.modules.health.models import HealthState
+
+        env = arch_environment.model_copy(update={"redis_url": LEGACY_URL, "redis_cache_url": CACHE_URL})
+        container = build_container(env)
+        legacy_pings = _answering_pings(container.redis_client(), monkeypatch)
+        cache_pings = _answering_pings(container.redis_cache(), monkeypatch)
+        assert _host_of(container.redis_cache()) == CACHE_HOST
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.UP
+        assert cache_pings == [PING]
+        assert legacy_pings == []
+        await aclose_container(container)
+
+    async def test_the_legacy_url_alone_is_probed_through_the_cache_fallback(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`REDIS_URL` only: the cache client falls back to it, and that client is the one pinged."""
+        from voiceai.modules.health.models import HealthState
+
+        env = arch_environment.model_copy(update={"redis_url": LEGACY_URL, "redis_cache_url": ""})
+        container = build_container(env)
+        legacy_pings = _answering_pings(container.redis_client(), monkeypatch)
+        cache_pings = _answering_pings(container.redis_cache(), monkeypatch)
+        assert _host_of(container.redis_cache()) == LEGACY_HOST
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.UP
+        assert cache_pings == [PING]
+        assert legacy_pings == []
+        await aclose_container(container)
+
+    async def test_no_effective_cache_url_is_skipped(self, arch_environment: Environment) -> None:
+        """SKIPPED is reserved for "no cache URL is effective" — nothing is built, nothing pinged."""
+        from voiceai.modules.health.constants import REDIS_NOT_CONFIGURED_DETAIL
+        from voiceai.modules.health.models import HealthState
+
+        container = build_container(arch_environment)
+        assert container.redis_cache() is None
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.SKIPPED
+        assert component.detail == REDIS_NOT_CONFIGURED_DETAIL
+
+    async def test_the_probe_and_the_auth_store_share_one_cache_client(
+        self, arch_environment: Environment, fake_redis: FakeRedis
+    ) -> None:
+        """One override of `redis_cache` reaches the probe: no second client hides behind it."""
+        from voiceai.modules.health.models import HealthState
+
+        container = build_container(arch_environment)
+        container.redis_cache.override(providers.Object(fake_redis))
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.UP
+        assert fake_redis.ping_calls == 1
+
+    async def test_a_dead_cache_fails_the_report(self, arch_environment: Environment, failing_redis: FakeRedis) -> None:
+        """The service the controller resolves sees the cache outage, not a skipped probe."""
+        from voiceai.modules.health.constants import COMPONENT_REDIS
+        from voiceai.modules.health.models import HealthState
+
+        container = build_container(arch_environment)
+        container.redis_cache.override(providers.Object(failing_redis))
+
+        report = await container.health_service().report()
+
+        states = {component.name: component.state for component in report.components}
+        assert states[COMPONENT_REDIS] is HealthState.DOWN
+        assert report.status is HealthState.DOWN
+        assert failing_redis.ping_calls == 1
+
+    async def test_the_legacy_alias_is_never_probed(
+        self, arch_environment: Environment, failing_redis: FakeRedis
+    ) -> None:
+        """`redis_client` is the legacy single-URL alias: binding it must not move the probe."""
+        from voiceai.modules.health.models import HealthState
+
+        container = build_container(arch_environment)
+        container.redis_client.override(providers.Object(failing_redis))
+
+        component = await container.health_repository().probe_redis()
+
+        assert component.state is HealthState.SKIPPED
+        assert failing_redis.ping_calls == 0
+
+
+class TestRedisCacheFactory:
+    """`create_redis_cache` — the client behind `redis_cache`, keyed on the effective cache URL."""
+
+    def test_no_url_means_no_client(self, arch_environment: Environment) -> None:
+        assert create_redis_cache(arch_environment) is None
+
+    def test_the_cache_url_wins_over_the_legacy_url(self, arch_environment: Environment) -> None:
+        env = arch_environment.model_copy(update={"redis_url": LEGACY_URL, "redis_cache_url": CACHE_URL})
+        client = create_redis_cache(env)
+        assert isinstance(client, redis_asyncio.Redis)
+        assert _host_of(client) == CACHE_HOST
+
+    def test_the_legacy_url_is_the_fallback(self, arch_environment: Environment) -> None:
+        env = arch_environment.model_copy(update={"redis_url": LEGACY_URL})
+        client = create_redis_cache(env)
+        assert isinstance(client, redis_asyncio.Redis)
+        assert _host_of(client) == LEGACY_HOST
 
 
 def test_container_override_fixture_swaps_a_built_dependency(

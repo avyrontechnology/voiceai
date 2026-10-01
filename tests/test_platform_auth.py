@@ -32,14 +32,6 @@ def fresh_client(app):
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def signup_owner(client, email="owner@acme.test"):
-    resp = await client.post(f"{AUTH}/signup", json={"email": email, "name": "Owner", "password": "correct-horse-1"})
-    assert resp.status_code == 201, resp.text
-    data = resp.json()["data"]["user"]  # spec 0048: the greenfield pair envelope wraps the user
-    assert data["role"] == "owner"
-    return data
-
-
 async def test_signup_closes_after_first_user(ctx):
     await signup_owner(ctx.client)
     resp = await ctx.client.post(f"{AUTH}/signup", json={"email": "second@acme.test", "password": "correct-horse-1"})

@@ -1,21 +1,37 @@
+"""Microphone client for one agent on the single app (spec 0054).
+
+The app serves the call socket at ``WS /api/v1/chat/v1/{agent_id}`` and closes
+every connection that does not redeem a single-use ``?ticket=`` (close code
+4401), so this client first mints a ticket with an API key and then connects:
+
+    POST {VOICEAI_API_URL}/api/v1/auth/ws-ticket   (Authorization: Bearer VOICEAI_API_KEY)
+    WS   {ws(s) twin of VOICEAI_API_URL}/api/v1/chat/v1/{ASSISTANT_ID}?ticket=<ticket>
+
+Env (``.env`` is loaded):
+    ASSISTANT_ID     agent to talk to
+    VOICEAI_API_KEY  API key whose owner's role carries calls:write
+    VOICEAI_API_URL  the app's base URL (default http://localhost:5001)
+
+Run: ``python local_setup/quickstart_client.py``. Importing the module opens no
+audio device and no socket.
+"""
+
 import asyncio
 import pyaudio
 import websockets
 import logging
 import base64
 import json
-import wave
 import time
-import argparse
 import sounddevice as sd
 import numpy as np
+import requests
 from dotenv import load_dotenv
 import os
 import queue
+from urllib.parse import quote, urlencode, urlsplit
 
 load_dotenv()
-# Argument parsing
-parser = argparse.ArgumentParser(description="Client for WebSocket communication")
 
 audio_queue = queue.Queue()
 
@@ -29,16 +45,44 @@ format = pyaudio.paInt16
 channels = 1
 rate = 16000
 chunk = 8000
-audio = pyaudio.PyAudio()
 start_time = time.time()
 chunks = []
 interruption_message = 0
 
-# WebSocket server address based on connection type
-server_url = "ws://localhost:5001"  # os.getenv("VOICEAI_WS_SERVER_URL")
-assistant_id = os.getenv("ASSISTANT_ID")
-logging.info(f"Assistant ID {os.getenv('ASSISTANT_ID')}")
-uri = f"{server_url}/api/v1/chat/v1/{assistant_id}"  # spec 0048: the single app serves the socket under the API prefix
+# The single app's contract (spec 0021 / 0048): every route under /api/v1, the
+# call socket gated by a single-use ticket.
+DEFAULT_API_URL = "http://localhost:5001"
+WS_TICKET_PATH = "/api/v1/auth/ws-ticket"
+CHAT_WS_PATH = "/api/v1/chat/v1/{agent_id}"
+WS_TICKET_PARAM = "ticket"
+TICKET_TIMEOUT_S = 10
+WS_SCHEMES = {"http": "ws", "https": "wss"}
+
+
+def ws_base_url(api_url):
+    """Map the app's http(s) base URL to its ws(s) twin (no trailing slash)."""
+    parts = urlsplit(api_url.strip())
+    scheme = WS_SCHEMES.get(parts.scheme.lower())
+    if scheme is None or not parts.netloc:
+        raise ValueError("VOICEAI_API_URL must be an absolute http(s) URL")
+    return f"{scheme}://{parts.netloc}{parts.path.rstrip('/')}"
+
+
+def chat_uri(api_url, agent_id, ticket):
+    """Build the ticketed call socket URL for one agent."""
+    path = CHAT_WS_PATH.format(agent_id=quote(agent_id, safe=""))
+    return f"{ws_base_url(api_url)}{path}?{urlencode({WS_TICKET_PARAM: ticket})}"
+
+
+def mint_ws_ticket(api_url, api_key):
+    """Mint one single-use websocket ticket (valid 60 seconds) with an API key."""
+    response = requests.post(
+        f"{api_url.rstrip('/')}{WS_TICKET_PATH}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=TICKET_TIMEOUT_S,
+    )
+    response.raise_for_status()
+    return response.json()["data"]["ticket"]
 
 # Audio queue to store audio frames
 input_queue = asyncio.Queue()
@@ -54,6 +98,7 @@ def _callback(input_data, frame_count, time_info, status_flags):
 # Coroutine to open microphone stream and start sending audio
 async def microphone():
     print("Starting microphone")
+    audio = pyaudio.PyAudio()
     stream = audio.open(
         format=format, channels=channels, rate=rate, input=True, frames_per_buffer=chunk, stream_callback=_callback
     )
@@ -149,24 +194,26 @@ async def receiver(ws):
             logging.error(e)
 
 
-stream = start_audio_stream()
-
-
 async def main():
-    api_key = os.getenv("VOICEAI_API_KEY", None)
-    if api_key is not None:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-        }
-    else:
-        headers = None
-    async with websockets.connect(uri, open_timeout=None, extra_headers=headers) as ws:
+    api_url = os.getenv("VOICEAI_API_URL") or DEFAULT_API_URL
+    assistant_id = os.getenv("ASSISTANT_ID")
+    api_key = os.getenv("VOICEAI_API_KEY")
+    if not assistant_id or not api_key:
+        raise SystemExit("Set ASSISTANT_ID and VOICEAI_API_KEY (an API key with the calls:write scope).")
+    logging.info(f"Assistant ID {assistant_id}")
+    # The ticket is single-use and short-lived: mint it right before connecting,
+    # and never log the URL that carries it.
+    uri = chat_uri(api_url, assistant_id, mint_ws_ticket(api_url, api_key))
+    stream = start_audio_stream()  # keep a reference: the output stream plays until exit
+    async with websockets.connect(uri, open_timeout=None) as ws:
         global play_audio_task
         tasks = [microphone(), emitter(ws), receiver(ws)]
         play_audio_task = asyncio.create_task(play_audio())
         await asyncio.gather(*tasks)
+    stream.stop()
 
 
-print("Starting with the loop")
-# Run the asyncio event loop
-asyncio.run(main())
+if __name__ == "__main__":
+    print("Starting with the loop")
+    # Run the asyncio event loop
+    asyncio.run(main())

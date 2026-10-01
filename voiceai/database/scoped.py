@@ -10,6 +10,10 @@ Fail-closed rules:
 - Reads only ever return rows whose ``tenant_id`` equals the bound tenant.
   Pre-tenancy rows (``tenant_id is None``) are invisible until the backfill
   stamps them — never silently attributed.
+- Listings (``list``/``list_where``) stamp the bound tenant into the selector the
+  backend pages, so every page is one driver query with an exact total (spec
+  0050). They are never served from a bounded ``find_many`` lookup windowed in
+  Python, which truncated every tenant at ``MAX_PAGE_SIZE`` rows.
 - Writes stamp the bound tenant; ``update``/``soft_delete`` first verify the
   stored row belongs to it, raising the generic not-found error otherwise (no
   cross-tenant existence oracle). The check-then-act race cannot cross tenants:
@@ -22,7 +26,7 @@ Fail-closed rules:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Generic
 
 from voiceai.common.constants import MAX_PAGE_SIZE
@@ -98,14 +102,41 @@ class TenantScopedRepository(Generic[TModel]):
     async def list(self, params: PaginationParams) -> Page[TModel]:
         """Page over this tenant's active documents, oldest first.
 
-        Served from the tenant equality lookup (bounded by ``MAX_PAGE_SIZE`` like
-        every ``find_many``) rather than windowing the global listing, so pages
-        never straddle tenants.
+        ``list_where`` with no extra filters: the backend applies the tenant filter
+        and the page window in one query, so every row is reachable by walking pages
+        and totals count this tenant alone (spec 0050).
         """
-        rows = await self._inner.find_many(TENANT_ID_FIELD, self._tenant_id, limit=MAX_PAGE_SIZE)
-        tenant_rows = [row for row in rows if row.is_active and row.tenant_id == self._tenant_id]
-        window = tenant_rows[params.skip : params.skip + params.limit]
-        return paginate(window, len(tenant_rows), params)
+        return await self.list_where({}, params)
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[TModel]:
+        """Page over this tenant's active documents matching every filter, oldest first.
+
+        The bound tenant is stamped into the selector before it reaches the backend, so
+        a business-field filter pages exactly this tenant's matches at the driver level.
+        Fail-closed rules:
+
+        - A ``tenant_id`` filter naming any other value — another tenant or ``None``
+          (pre-tenancy rows) — returns an empty page without consulting the backend:
+          no existence oracle, no silent attribution.
+        - Rows the backend returns are re-checked against the bound tenant and the
+          active flag, so a misbehaving backend cannot leak a foreign row through the
+          view. ``total`` is the backend's count of the tenant-stamped selector.
+
+        Args:
+            filters: ``{field: value}`` equality filters (code constants, ANDed).
+            params: Page number and bounded page size (see ``common.pagination``).
+
+        Returns:
+            The requested window plus the total number of this tenant's active matches.
+        """
+        if filters.get(TENANT_ID_FIELD, self._tenant_id) != self._tenant_id:
+            return paginate([], 0, params)
+        stamped: dict[str, Any] = dict(filters)  # why: driver-open filter values
+        stamped[TENANT_ID_FIELD] = self._tenant_id
+        page = await self._inner.list_where(stamped, params)
+        rows = [row for row in page.items if row.is_active and row.tenant_id == self._tenant_id]
+        return paginate(rows, page.total, params)
 
     async def update(self, model: TModel) -> TModel:
         """Replace a same-tenant document, stamping the bound tenant first.
@@ -136,7 +167,13 @@ class TenantScopedRepository(Generic[TModel]):
         return model
 
     async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
-        """Active same-tenant matches; a tenant-id query for another tenant is empty."""
+        """Bounded same-tenant lookup; a tenant-id query for another tenant is empty.
+
+        The inner lookup is bounded at ``MAX_PAGE_SIZE`` *before* the tenant filter
+        runs, so on a field shared across tenants fewer than ``limit`` own rows may
+        come back even when more exist. That is the lookup contract; a read that must
+        see every match pages with :meth:`list_where`.
+        """
         if field == TENANT_ID_FIELD and value != self._tenant_id:
             return []
         matched = await self._inner.find_many(field, value, limit=limit)

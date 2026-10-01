@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Final, Protocol
 
-from voiceai.common.pagination import PaginationParams
-from voiceai.database.repository import BaseRepository
-from voiceai.modules.wallet.constants import SINGLETON_WALLET_ID
+from voiceai.database.repository import BaseRepository, walk_pages
+from voiceai.modules.wallet.constants import DEFAULT_LEDGER_LIMIT, SINGLETON_WALLET_ID
 from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
+
+#: `LedgerEntry` field the ledger listing filters on at the driver (spec 0050).
+_ENTRY_TYPE_FIELD: Final[str] = "type"
 
 
 class WalletRepository(Protocol):
@@ -25,8 +27,8 @@ class WalletRepository(Protocol):
         """Add a new entry to the ledger."""
         ...
 
-    async def list_ledger(self, limit: int = 50, entry_type: str | None = None) -> list[LedgerEntry]:
-        """List ledger entries with optional filtering by type."""
+    async def list_ledger(self, limit: int = DEFAULT_LEDGER_LIMIT, entry_type: str | None = None) -> list[LedgerEntry]:
+        """List the newest `limit` ledger entries, newest first, optionally of one type."""
         ...
 
     async def list_templates(self) -> list[StoredTemplate]:
@@ -69,27 +71,32 @@ class MongoWalletRepository:
         """Add a new entry to the ledger."""
         await self._ledger.insert(entry)
 
-    async def list_ledger(self, limit: int = 50, entry_type: str | None = None) -> list[LedgerEntry]:
-        """List ledger entries with optional filtering by type."""
-        page = await self._ledger.list(PaginationParams(page=1, page_size=limit))
-        # Note: In a real system we'd filter at DB level, but BaseRepository doesn't support it yet
-        # Filter in memory for now to keep the generic repository clean
-        entries = page.items
-        if entry_type:
-            entries = [e for e in entries if e.type == entry_type]
-        # Reverse to get newest first (matching old legacy behavior)
-        return list(reversed(entries))
+    async def list_ledger(self, limit: int = DEFAULT_LEDGER_LIMIT, entry_type: str | None = None) -> list[LedgerEntry]:
+        """List the newest `limit` ledger entries, newest first, optionally of one type.
+
+        The type filter is applied by the driver and every page of the match is
+        walked (spec 0050): the listing is oldest-first, so the newest entries sit
+        on the last page and reading page one alone returned the oldest rows of a
+        ledger longer than `limit`. Ledger writes are rare (top-ups), so the walk
+        is a handful of bounded queries; a descending driver sort is the follow-up
+        if a ledger ever grows past that.
+
+        Args:
+            limit: Most entries to return; a non-positive limit returns nothing.
+            entry_type: Narrow to one entry type, or every type when empty.
+
+        Returns:
+            At most `limit` entries of this view, newest first.
+        """
+        if limit <= 0:
+            return []
+        filters = {_ENTRY_TYPE_FIELD: entry_type} if entry_type else None
+        entries = [entry async for entry in walk_pages(self._ledger, filters)]
+        return list(reversed(entries[-limit:]))
 
     async def list_templates(self) -> list[StoredTemplate]:
-        """List every stored seed template, oldest first."""
-        items: list[StoredTemplate] = []
-        page_number = 1
-        while True:
-            page = await self._templates.list(PaginationParams(page=page_number, page_size=100))
-            items.extend(page.items)
-            if not page.has_next:
-                return items
-            page_number += 1
+        """List every stored seed template, oldest first (all pages, spec 0050)."""
+        return [template async for template in walk_pages(self._templates)]
 
     async def get_template(self, template_id: str) -> StoredTemplate | None:
         """Return the stored template with this id, or `None`."""

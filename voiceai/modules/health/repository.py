@@ -42,7 +42,9 @@ class HealthRepository:
     their stack; only a short, client-safe detail travels back in the payload (AGENTS.md §4).
 
     Args:
-        redis_client: The async redis client, or ``None`` when redis is switched off.
+        redis_client: The async redis client the app really uses — the container's cache
+            client (``REDIS_CACHE_URL``, legacy ``REDIS_URL`` fallback; spec 0053) — or
+            ``None`` when no cache URL is effective.
         db_client: The database client the deployment selected.
     """
 
@@ -54,8 +56,9 @@ class HealthRepository:
         """Ping redis and time the round trip.
 
         Returns:
-            ``SKIPPED`` when the deployment configures no redis URL, ``DOWN`` with the measured
-            latency when the ping fails or times out, ``UP`` otherwise.
+            ``SKIPPED`` when the deployment has no effective cache URL (no client was built),
+            ``DOWN`` with the measured latency when the ping fails or times out, ``UP``
+            otherwise.
         """
         if self._redis is None:
             return ComponentHealth(

@@ -207,10 +207,10 @@ re-enabling them is part of the merge-to-master spec.
 
 ## 8. Known legacy debt (do not "fix" casually)
 
-- On `master`, the full suite has pre-existing failures (telephony send-timeout contract,
-  prompt-loader contract, prompts-endpoint auth) and `tests/test_seed_mongo_users.py` imports
-  a git-ignored `scripts/` file; `make test-all` ignores that file. Real fixes already exist
-  on `revamp/resilient-core` — merging that branch is its own spec, not a side effect.
+- `tests/test_seed_mongo_users.py` imports a git-ignored `scripts/` file; `make test-all`
+  and `make cov` ignore that file. The suite's former pre-existing failures (telephony
+  send-timeout contract, prompt-loader contract, a deleted example's tests) were settled by
+  spec 0051 — `make cov` deselects nothing.
 - The realtime engine has documented HIGH-severity issues (see the audit artifact referenced
   in the repo history). Engine fixes follow their own specs on `revamp/resilient-core`.
 

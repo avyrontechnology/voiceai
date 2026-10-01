@@ -13,7 +13,8 @@ MODULE: ModuleDef = ModuleDef(
     owner_squad="squad-platform",
     slack_channel="#squad-platform",
     runbook_path="voiceai/modules/tools/RUNBOOK.md",
-    max_lines=1500,
+    # spec 0049: route-gate + 422 tests pushed the total past 1500; ratcheted minimally.
+    max_lines=1750,
 )
 
 __all__ = ["MODULE", "ToolsService"]

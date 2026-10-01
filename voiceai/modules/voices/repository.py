@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from voiceai.common.constants import MAX_PAGE_SIZE
-from voiceai.common.pagination import PaginationParams
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.voices.models import VoiceRecord
 
 __all__ = ["VoicesRepository"]
@@ -46,15 +44,19 @@ class VoicesRepository:
     async def list_voices(self, agent_id: str | None = None) -> Sequence[VoiceRecord]:
         """List this tenant's rows, optionally filtered to one agent.
 
-        The scoped store bounds the listing to the tenant; the agent filter
-        applies in memory — voice libraries are small, a dedicated index is
-        M-later if a tenant stores thousands.
+        The scoped store bounds the listing to the tenant and every page is
+        walked (spec 0050), so a library past one page loses no row. The agent
+        filter applies in memory — voice libraries are small, a dedicated
+        index is M-later if a tenant stores thousands.
 
         Args:
             agent_id: Narrow to one agent's voices, or all when `None`.
+
+        Returns:
+            Every matching row of this tenant, oldest first.
         """
-        page = await self._store.list(PaginationParams(page=1, page_size=MAX_PAGE_SIZE))
-        return [row for row in page.items if agent_id is None or row.agent_id == agent_id]
+        rows = [row async for row in walk_pages(self._store)]
+        return [row for row in rows if agent_id is None or row.agent_id == agent_id]
 
     async def delete_voice(self, voice_id: str) -> bool:
         """Soft-delete one row of this tenant; foreign rows read as missing."""

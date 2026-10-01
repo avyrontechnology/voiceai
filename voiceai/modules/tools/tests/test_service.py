@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.core.db import InMemoryDatabase
 from voiceai.database.constants import Collections
@@ -85,6 +86,22 @@ async def test_cross_tenant_rows_are_invisible() -> None:
         await globex.get_tool(created.tool_id)
     with pytest.raises(ToolNotFoundError):
         await globex.delete_tool(created.tool_id)
+
+
+async def test_listing_walks_every_row_past_one_page() -> None:
+    """A tenant past one page of tools lists them all, and never a foreign row (spec 0050)."""
+    database = InMemoryDatabase()
+    acme, globex = _service("acme", database), _service("globex", database)
+    names = [f"acme_tool_{index:03d}" for index in range(MAX_PAGE_SIZE + 30)]
+    for name in names:
+        await acme.create_tool(_row(name=name))
+    for index in range(3):
+        await globex.create_tool(_row(name=f"globex_tool_{index}"))
+
+    listed = await acme.list_tools()
+
+    assert [row.name for row in listed] == names
+    assert {row.tenant_id for row in listed} == {"acme"}
 
 
 async def test_system_rows_reject_writes_with_403() -> None:

@@ -1,31 +1,46 @@
+# Reference stack for the single app (spec 0048). Copy .env.sample to .env first.
+#
+#   docker compose up -d voiceai-app                    # the API alone, against Atlas
+#   docker compose --profile cache up -d voiceai-app redis   # + the optional Redis cache
+#   docker compose --profile mongo up -d voiceai-app mongo   # + a local MongoDB (dev only)
+#   docker compose up -d voiceai-app twilio-app         # + the Twilio example trunk (+ ngrok)
+#
+# One image (./Dockerfile) serves every Python service; `command` picks the process.
 services:
 
   voiceai-app:
     container_name: voiceai-app
     build: .
     restart: on-failure
+    # The only server: `uvicorn voiceai.app:app` (the Dockerfile CMD). Every route
+    # is under /api/v1; the voice websocket is WS /api/v1/chat/v1/{agent_id}.
     ports:
       - "5001:5001"
     env_file:
       - .env
-    # Greenfield liveness (T7): the thin entry serves every module; the probe
-    # touches no dependency, so orchestrators never restart a healthy process
-    # over someone else's outage.
+    # Liveness touches no dependency: an Atlas or Redis outage degrades
+    # GET /api/v1/health/ready to 503, it never restarts a healthy process.
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5001/api/v1/health/live || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 40s
       retries: 3
-
     volumes:
+      # Legacy prompt files; the backfill tool reads them (--prompts-dir agent_data).
       - ./agent_data:/voiceai/agent_data
+      # AWS Polly TTS reads the host credentials.
       - $HOME/.aws/credentials:/root/.aws/credentials:ro
       - $HOME/.aws/config:/root/.aws/config:ro
-    # Spec 0048: Redis is an optional cache (throttle/denylist); the app boots without it.
+    # No depends_on: Atlas is external and Redis is an optional cache
+    # (REDIS_CACHE_URL=redis://redis:6379 together with `--profile cache`).
     networks:
       - voiceai
 
+  # Example telephony trunks (local_setup/telephony_server). Each dials the
+  # carrier and hands the answered call to voiceai-app's websocket. None of them
+  # uses Redis: the `redis.asyncio` import in the Twilio/Plivo files is never
+  # called, so nothing here depends on the redis service.
   twilio-app:
     container_name: twilio-app
     build: .
@@ -33,12 +48,24 @@ services:
     restart: on-failure
     ports:
       - "8011:8001"
+    # Reads TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER; resolves
+    # its public URL from ngrok (tunnel names `twilio-app` and `voiceai-app`);
+    # mints the websocket ticket from voiceai-app with VOICEAI_API_KEY over
+    # VOICEAI_INTERNAL_URL (default http://voiceai-app:5001).
     env_file:
       - .env
     depends_on:
-      - redis
-      - ngrok
-      - voiceai-app
+      voiceai-app:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    # The image healthcheck probes the app on 5001; this service listens on 8001.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/docs || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     networks:
       - voiceai
 
@@ -49,12 +76,23 @@ services:
     restart: on-failure
     ports:
       - "8002:8002"
+    # Reads PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER; resolves its
+    # public URL from ngrok (tunnel names `plivo-app` and `voiceai-app` — uncomment
+    # `plivo-app` in local_setup/ngrok-config.yml); mints the websocket ticket from
+    # voiceai-app with VOICEAI_API_KEY over VOICEAI_INTERNAL_URL.
     env_file:
       - .env
     depends_on:
-      - redis
-      - ngrok
-      - voiceai-app
+      voiceai-app:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/docs || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     networks:
       - voiceai
 
@@ -65,15 +103,26 @@ services:
     restart: on-failure
     ports:
       - "8004:8004"
+    # Reads TALKO_API_BASE_URL, TALKO_API_KEY, TALKO_AI_DID, TALKO_PARTNER_ID.
+    # No ngrok: Tata streams to talko-service's static PSTN endpoint, which
+    # relays media to voiceai-app over the internal network.
     env_file:
       - .env
     depends_on:
-      - voiceai-app
+      voiceai-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/docs || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     networks:
       - voiceai
-    # No ngrok needed: Tata streams to talko-service's static PSTN endpoint,
-    # which relays media to voiceai-app over the internal network.
 
+  # Optional TTL cache (login throttle, JWT denylist) — never a database since
+  # spec 0048. Off by default; start it with `docker compose --profile cache up`
+  # and set REDIS_CACHE_URL=redis://redis:6379 in .env.
   redis:
     container_name: voiceai-redis
     image: redis:latest
@@ -84,10 +133,12 @@ services:
       - redisdata:/data
     networks:
       - voiceai
+    profiles:
+      - cache
 
-  # Local MongoDB for spec-0003 development (DB_BACKEND=mongo + DB_URL below).
-  # Off by default: nothing depends on it, so plain `docker compose up` skips it;
-  # start explicitly with `docker compose --profile mongo up`.
+  # Local MongoDB for development only (production is Atlas: MONGO_URL). Off by
+  # default; start it with `docker compose --profile mongo up` and set
+  # MONGO_URL=mongodb://mongo:27017 in .env.
   mongo:
     container_name: voiceai-mongo
     image: mongo:latest
@@ -101,10 +152,16 @@ services:
     profiles:
       - mongo
 
+  # Public tunnels for the Twilio/Plivo callbacks. The trunks look tunnels up by
+  # name (`twilio-app`, `plivo-app`, `voiceai-app`) in local_setup/ngrok-config.yml,
+  # which carries no authtoken: the agent reads NGROK_AUTHTOKEN, interpolated
+  # here from .env (never bake a token into the config file).
   ngrok:
     container_name: voiceai-ngrok
     image: ngrok/ngrok:latest
     restart: unless-stopped
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
     command:
       - "start"
       - "--all"

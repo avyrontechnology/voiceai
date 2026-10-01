@@ -160,10 +160,25 @@ def _build_tenant_resolver(auth_service: Any) -> Any:
     return auth_service.resolve_request_identity
 
 
-def _build_health_repository(redis_client: Any, db_client: Any) -> Any:
+def _build_health_repository(cache_client: Any, db_client: Any) -> Any:
+    """Build the health probes over the clients the app actually uses (spec 0053).
+
+    The Redis the single app talks to is the cache client (`redis_cache`:
+    `REDIS_CACHE_URL`, legacy `REDIS_URL` fallback), so readiness pings that one —
+    never the legacy single-URL `redis_client`, which would read "not configured"
+    on the documented production config or ping a server the app does not call.
+
+    Args:
+        cache_client: The container's `redis_cache` binding, or `None` when no
+            cache URL is effective (the probe then reports SKIPPED).
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `HealthRepository` probing exactly those two clients.
+    """
     from voiceai.modules.health.repository import HealthRepository
 
-    return HealthRepository(redis_client=redis_client, db_client=db_client)
+    return HealthRepository(redis_client=cache_client, db_client=db_client)
 
 
 def _build_health_service(repo: Any, logger: Any, started_at: Any) -> Any:
@@ -559,8 +574,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # by importing a module — the container is the single composition point.
     tenant_resolver = providers.Factory(_build_tenant_resolver, auth_service)
 
-    # Health Module
-    health_repository = providers.Factory(_build_health_repository, redis_client=redis_client, db_client=db_client)
+    # Health Module: readiness probes the Redis the app uses — the cache client, the
+    # same singleton the auth store holds (spec 0053). `redis_client` above is the
+    # legacy single-URL alias with no production consumer; never wire it here again.
+    health_repository = providers.Factory(_build_health_repository, cache_client=redis_cache, db_client=db_client)
     health_service = providers.Factory(
         _build_health_service,
         repo=health_repository,

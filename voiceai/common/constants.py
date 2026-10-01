@@ -99,6 +99,10 @@ ERROR_ID_LENGTH: Final[int] = 12
 INTERNAL_ERROR_TEMPLATE: Final[str] = "Something went wrong (ref {error_id})"
 DETAIL_KEY_PATH: Final[str] = "path"
 DETAIL_KEY_ERRORS: Final[str] = "errors"
+# Keys of one 422 per-field record under `details.errors[]` (spec 0052): where the request
+# failed and which rule it broke. Nothing else of a pydantic record may leave the service.
+VALIDATION_KEY_LOC: Final[str] = "loc"
+VALIDATION_KEY_TYPE: Final[str] = "type"
 # Keys of the `error` envelope fragment (`AppError.to_dict()`), part of the wire contract.
 ERROR_KEY_CODE: Final[str] = "code"
 ERROR_KEY_MESSAGE: Final[str] = "message"

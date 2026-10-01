@@ -11,8 +11,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from voiceai.common.pagination import Page, PaginationParams
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.voice.models import PlacedCall, TalkoPartnerConfig
 
 __all__ = ["PlaceCallRepository", "VoicePlaceCallRepository"]
@@ -98,10 +97,9 @@ class VoicePlaceCallRepository:
         """List all active partner records, in insertion order.
 
         Returns:
-            Every active partner record.
+            Every active partner record, walked across all pages (spec 0050).
         """
-        page: Page[TalkoPartnerConfig] = await self._partners.list(PaginationParams(page=1, page_size=100))
-        return list(page.items)
+        return [partner async for partner in walk_pages(self._partners)]
 
     async def delete_partner(self, partner_id: str) -> bool:
         """Soft-delete a partner record.

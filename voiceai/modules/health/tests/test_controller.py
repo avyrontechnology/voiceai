@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from typing import Any
 
 import httpx
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 
 from voiceai.common.constants import (
     API_PREFIX,
-    CONTAINER_KEY_REDIS,
     HTTP_OK,
     HTTP_SERVICE_UNAVAILABLE,
     REQUEST_ID_HEADER,
 )
 from voiceai.common.errors import ErrorCode
-from voiceai.modules.health.constants import LIVE_PATH, LIVENESS_FIELD, READY_PATH, ROUTE_PREFIX
+from voiceai.modules.health.constants import (
+    COMPONENT_REDIS,
+    LIVE_PATH,
+    LIVENESS_FIELD,
+    READY_PATH,
+    ROUTE_PREFIX,
+)
 from voiceai.modules.health.models import HealthState
 
 HEALTH_URL = f"{API_PREFIX}{ROUTE_PREFIX}"
@@ -42,18 +47,41 @@ class LeakyRedis:
         """Match the shutdown contract the container calls on teardown."""
 
 
+class AnsweringRedis:
+    """Redis double that answers the ping and counts how often it was asked."""
+
+    def __init__(self) -> None:
+        """Start with no pings recorded."""
+        self.ping_calls = 0
+
+    async def ping(self) -> bool:
+        """Answer like a reachable server."""
+        self.ping_calls += 1
+        return True
+
+    async def aclose(self) -> None:
+        """Match the shutdown contract the container calls on teardown."""
+
+
+def _redis_state(response: httpx.Response) -> str:
+    """Return the `redis` component state from a report envelope."""
+    components = {component["name"]: component["state"] for component in response.json()["data"]["components"]}
+    state: str = components[COMPONENT_REDIS]
+    return state
+
+
 @pytest.fixture
 async def unready_client(
     arch_app: FastAPI,
-    container_override: Callable[[FastAPI, str, Any], None],
     client_factory: Callable[..., httpx.AsyncClient],
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """Drive the real app with an unreachable redis behind the container's `redis` key.
+    """Drive the real app with an unreachable redis bound as the container's cache client.
 
-    The fake goes in by re-registering that key on the built application — the same seam
-    production wiring uses, so no module internal is patched.
+    The probe pings `redis_cache` — the one Redis the app uses (spec 0053) — so the fake goes
+    in by overriding that provider on the built application: the same seam production wiring
+    uses, so no module internal is patched.
     """
-    container_override(arch_app, CONTAINER_KEY_REDIS, LeakyRedis())
+    arch_app.state.container.redis_cache.override(providers.Object(LeakyRedis()))
     async with client_factory(arch_app) as client:
         yield client
 
@@ -115,3 +143,42 @@ async def test_liveness_survives_a_dead_dependency(unready_client: httpx.AsyncCl
 
     assert response.status_code == HTTP_OK
     assert response.json()["data"] == {LIVENESS_FIELD: HealthState.UP.value}
+
+
+async def test_readiness_reports_the_cache_client_as_up(
+    arch_app: FastAPI, client_factory: Callable[..., httpx.AsyncClient]
+) -> None:
+    """A reachable cache client is what the `redis` component answers for — one ping per call."""
+    cache = AnsweringRedis()
+    arch_app.state.container.redis_cache.override(providers.Object(cache))
+    async with client_factory(arch_app) as client:
+        response = await client.get(READY_URL)
+
+    assert response.status_code == HTTP_OK
+    assert _redis_state(response) == HealthState.UP.value
+    assert cache.ping_calls == 1
+
+
+async def test_readiness_ignores_the_legacy_redis_alias(
+    arch_app: FastAPI, client_factory: Callable[..., httpx.AsyncClient]
+) -> None:
+    """A dead client behind the legacy `redis_client` alias is not the app's Redis (spec 0053)."""
+    arch_app.state.container.redis_client.override(providers.Object(LeakyRedis()))
+    async with client_factory(arch_app) as client:
+        response = await client.get(READY_URL)
+
+    assert response.status_code == HTTP_OK
+    assert _redis_state(response) == HealthState.SKIPPED.value
+
+
+async def test_liveness_never_pings_the_cache(
+    arch_app: FastAPI, client_factory: Callable[..., httpx.AsyncClient]
+) -> None:
+    """Liveness touches no dependency, even with a cache client configured."""
+    cache = AnsweringRedis()
+    arch_app.state.container.redis_cache.override(providers.Object(cache))
+    async with client_factory(arch_app) as client:
+        response = await client.get(LIVE_URL)
+
+    assert response.status_code == HTTP_OK
+    assert cache.ping_calls == 0

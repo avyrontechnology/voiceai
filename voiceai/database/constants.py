@@ -92,3 +92,23 @@ MONGO_TIMEOUT_MS: Final[int] = 5000
 MONGO_SERVER_SELECTION_TIMEOUT_MS: Final[int] = 5000
 MONGO_CONNECT_TIMEOUT_MS: Final[int] = 5000
 MONGO_SOCKET_TIMEOUT_MS: Final[int] = 20000
+
+# Driver-level document fields and operators the repositories filter, sort and mutate on
+# (spec 0050). Selectors are built from these names, never from inline literals, so a
+# rename of the audit envelope is a one-line change here.
+MODEL_ID_FIELD: Final[str] = "id"
+#: Mongo's primary-key field; the model ``id`` rides it as a string (spec 0003).
+MONGO_ID_FIELD: Final[str] = "_id"
+IS_ACTIVE_FIELD: Final[str] = "is_active"
+CREATED_AT_FIELD: Final[str] = "created_at"
+UPDATED_AT_FIELD: Final[str] = "updated_at"
+UPDATED_BY_FIELD: Final[str] = "updated_by"
+MONGO_SET_OPERATOR: Final[str] = "$set"
+#: Ascending sort direction as the driver spells it.
+SORT_ASCENDING: Final[int] = 1
+#: The one listing order every paged read uses: creation time, then id as the tiebreak
+#: (uuid-hex ids carry no time order, so ``_id`` alone would not be chronological).
+LISTING_SORT: Final[tuple[tuple[str, int], ...]] = (
+    (CREATED_AT_FIELD, SORT_ASCENDING),
+    (MONGO_ID_FIELD, SORT_ASCENDING),
+)

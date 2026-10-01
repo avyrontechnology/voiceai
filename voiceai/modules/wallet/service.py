@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from voiceai.common.logger import get_logger
-from voiceai.modules.wallet.constants import IMPORT_LOG, TOPUP_LOG
+from voiceai.modules.wallet.constants import DEFAULT_LEDGER_LIMIT, IMPORT_LOG, TOPUP_LOG
 from voiceai.modules.wallet.exceptions import ensure_template_found
 from voiceai.modules.wallet.helpers import import_payload
 from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
@@ -43,8 +43,8 @@ class WalletService:
         logger.info(TOPUP_LOG, payload.amount_credits, entry.id)
         return wallet
 
-    async def list_ledger(self, limit: int = 50, entry_type: str | None = None) -> list[LedgerEntry]:
-        """List recent ledger entries."""
+    async def list_ledger(self, limit: int = DEFAULT_LEDGER_LIMIT, entry_type: str | None = None) -> list[LedgerEntry]:
+        """List the newest `limit` ledger entries, newest first, optionally of one type."""
         return await self._repository.list_ledger(limit=limit, entry_type=entry_type)
 
     @staticmethod

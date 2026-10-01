@@ -37,10 +37,9 @@ class TwilioOutputHandler(TelephonyOutputHandler):
                 "streamSid": self.stream_sid,
             }
             await self._send_text(json.dumps(message_clear))
-            self.mark_event_meta_data.clear_data()
         except asyncio.TimeoutError as e:
-            # Transient stall — keep the handler open (see TelephonyOutputHandler.handle).
-            logger.warning(f"Interruption clear send timed out, keeping socket open: {e}")
+            # One stall is transient; _send_text latches closed only after a streak of them (spec 0051).
+            logger.warning(f"Interruption clear send timed out (closed={self._closed}): {e}")
         except Exception as e:
             logger.info(f"WebSocket closed during interruption: {e}")
             self._closed = True

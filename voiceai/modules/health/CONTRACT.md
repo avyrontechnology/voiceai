@@ -9,6 +9,16 @@ Owner: `squad-platform` (`#squad-platform`).
 - `GET /api/v1/health/ready` — readiness, 200 when ready, 503 with
   `unavailable_components` detail otherwise.
 
+## Probed dependencies
+
+- `redis` — one `PING` on the container's **cache client** (`redis_cache`:
+  `REDIS_CACHE_URL`, legacy `REDIS_URL` fallback), the same client the JWT denylist
+  uses (spec 0053). `skipped` only when no cache URL is effective (both empty);
+  `down` when the ping fails or times out. The legacy single-URL `redis_client` is
+  never probed.
+- `database` — insert + get of the probe row on the deployment's backend.
+- `/live` probes nothing.
+
 ## Events
 
 - in: none. out: none.

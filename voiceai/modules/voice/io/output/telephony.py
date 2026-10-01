@@ -24,6 +24,8 @@ load_dotenv()
 # never returns. Bound every send so a dead socket fails fast instead of
 # freezing the caller (e.g. __cleanup_downstream_tasks) forever.
 OUTPUT_SEND_TIMEOUT_S = float(os.getenv("OUTPUT_SEND_TIMEOUT_S", "5"))
+# Timed-out sends IN A ROW that presume the socket dead and latch closed; one alone is transient (spec 0051).
+OUTPUT_SEND_MAX_CONSECUTIVE_TIMEOUTS = 3
 
 
 class TelephonyOutputHandler(DefaultOutputHandler):
@@ -38,10 +40,21 @@ class TelephonyOutputHandler(DefaultOutputHandler):
         self.stream_sid = None
         self.current_request_id: str | None = None
         self.rejected_request_ids: set[str] = set()
+        self._timeout_streak = 0
 
     async def _send_text(self, message: Any) -> None:
-        """Guarded send_text: raises asyncio.TimeoutError instead of hanging on a dead socket."""
-        await asyncio.wait_for(self.websocket.send_text(message), timeout=OUTPUT_SEND_TIMEOUT_S)
+        """Bounded send_text: raises asyncio.TimeoutError instead of hanging; a streak of them latches closed."""
+        try:
+            await asyncio.wait_for(self.websocket.send_text(message), timeout=OUTPUT_SEND_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self._timeout_streak += 1
+            if self._timeout_streak >= OUTPUT_SEND_MAX_CONSECUTIVE_TIMEOUTS and not self._closed:
+                self._closed = True
+                logger.warning(
+                    "%s output socket presumed dead after %d send timeouts", self.io_provider, self._timeout_streak
+                )
+            raise
+        self._timeout_streak = 0
 
     async def handle_interruption(self) -> None:
         """Interrupt playback and reset the handler for barge-in."""
@@ -190,10 +203,10 @@ class TelephonyOutputHandler(DefaultOutputHandler):
                 else:
                     logger.info("Not sending")
             except asyncio.TimeoutError:
-                # Transient stall (event-loop hiccup, throttled CPU) — drop
-                # this packet but STAY OPEN. Latching closed here used to
-                # mute the agent for the rest of the call with no log trace.
-                logger.warning(f"{self.io_provider} output send timed out, packet dropped, socket kept open")
+                # Transient stall (event-loop hiccup, throttled CPU) — drop this
+                # packet; only a streak of timeouts latches closed (_send_text,
+                # spec 0051). Latching on the first one used to mute the agent.
+                logger.warning(f"{self.io_provider} output send timed out, packet dropped, closed={self._closed}")
             except (WebSocketDisconnect, RuntimeError) as e:
                 self._closed = True  # Prevent further send attempts
                 logger.info(f"WebSocket send failed (client disconnected): {e}")

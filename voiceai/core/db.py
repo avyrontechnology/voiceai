@@ -144,10 +144,13 @@ def create_db(env: Environment) -> DatabaseClient:
             path=_ENV_PATH_DB_BACKEND,
             details={_DETAIL_KEY_BACKEND: env.db_backend},
         )
-    if not env.db_url:
+    # `MONGO_URL` wins over the legacy `DB_URL` (spec 0048 runbook): resolve once through
+    # the environment's own precedence rule so the factory and the docs cannot disagree.
+    db_url = env.db_url_effective
+    if not db_url:
         raise ConfigurationError(
             _MONGO_URL_MESSAGE,
             path=_ENV_PATH_DB_BACKEND,
             details={_DETAIL_KEY_BACKEND: env.db_backend},
         )
-    return MotorDatabase(env.db_url, env.db_name)
+    return MotorDatabase(db_url, env.db_name)

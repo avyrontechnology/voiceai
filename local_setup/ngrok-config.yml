@@ -1,13 +1,28 @@
+# ngrok agent config for the docker-compose `ngrok` service (specs 0048, 0054).
+#
+# No authtoken lives in this file: the agent reads NGROK_AUTHTOKEN from its
+# environment, which docker-compose.yml interpolates from .env. A token that was
+# ever committed here stays in git history and must be rotated in the ngrok
+# dashboard.
+#
+# Three tunnels is the free-plan cap per agent session; on a smaller plan delete
+# the trunk you do not run.
 region: us
 version: '2'
-authtoken: 3ImSgMJ059F9Lhj2jl893rsbQSU_5Yq679WGPAT3P9L4GiHdg
 tunnels:
+  # Twilio trunk: answer callback + carrier media socket (WS /media/{call_ref}).
+  # twilio_api_server.py resolves this tunnel by name at ngrok:4040/api/tunnels.
   twilio-app:
     addr: twilio-app:8001
     proto: http
-#  plivo-app:
-#    addr: plivo-app:8002
-#    proto: http
-#  bolna-app:
-#    addr: bolna-app:5001
-#    proto: http
+  # Plivo trunk: answer/hangup callbacks + carrier media socket.
+  # plivo_api_server.py resolves this tunnel by name.
+  plivo-app:
+    addr: plivo-app:8002
+    proto: http
+  # The single app, for carrier webhooks that land on it directly
+  # (POST /api/v1/voice/inbound/twilio). No trunk looks this tunnel up: the trunks
+  # relay media to the app over the compose network (spec 0054).
+  voiceai-app:
+    addr: voiceai-app:5001
+    proto: http

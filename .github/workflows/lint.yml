@@ -1,14 +1,25 @@
 name: Lint
 
-# Required check (spec 0000): mirrors `make lint-arch` + format check so CI == local.
+# Required check (spec 0000): mirrors `make lint lint-arch` + the format check so
+# CI == local. Spec 0048 (deploy-config): the venv is built with `make setup`
+# (uv, Python 3.10) first, because every make target runs `.venv/bin/...`.
 on:
   pull_request: {}
   push:
     branches:
+      - master
       - revamp/**
       - feat/**
+      - feature**
       - fix/**
   workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ruff:
@@ -21,17 +32,20 @@ jobs:
         with:
           python-version: '3.10.13'
 
-      - name: Ruff lint (repo + strict arch profile)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[dev]'
-          make lint lint-arch
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.10-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-py3.10-
 
-      - name: Ruff format check
+      - name: Install (make setup = uv venv .venv --python 3.10 + pip install -e '.[dev]')
         run: |
-          .venv/bin/ruff format --check --diff voiceai/common voiceai/core voiceai/database voiceai/modules tests/arch || ruff format --check --diff voiceai/common voiceai/core voiceai/database voiceai/modules tests/arch
+          python -m pip install --upgrade pip uv
+          make setup
 
-      - name: Requirements lint
-        run: |
-          python -m pip install --upgrade pip pre-commit
-          pre-commit run requirements-txt-fixer --files requirements.txt
+      - name: Ruff lint (repo config + strict arch profile)
+        run: make lint lint-arch
+
+      - name: Ruff format check (arch sources + tests/arch)
+        run: .venv/bin/ruff format --check --diff voiceai/common voiceai/core voiceai/database voiceai/modules voiceai/platform/repository_store.py tests/arch

@@ -10,9 +10,12 @@ keys, audit events and the denylist have exactly one home.
 Bridge, not target: M6 (spec 0018) migrates each family into its module and drops these
 collections. Documented debts until then:
 
-* ``_all`` pages the whole collection (every tenant) and filters in-process, because
-  every scoped listing is bounded by ``MAX_PAGE_SIZE`` and the legacy surface lists
-  everything.
+* ``_all`` materialises every row of the tenant: the legacy surface lists everything
+  and filters, sorts and windows in Python. Since spec 0050 the read is tenant-paged
+  at the driver (``walk_pages`` over the scoped repository), so it costs that tenant's
+  pages, never the whole collection — but it is still unbounded in the tenant's rows.
+* ``scan_family`` (the unauthenticated inbound lookup, spec 0047) is the one read that
+  pages a whole collection across tenants, by design.
 * ``insert`` on an existing id replaces it regardless of tenant, exactly like the auth
   store (legacy ids are unguessable hex, never user input).
 * Ledger order on Motor is ``created_at`` then ``_id``; same-instant entries may swap.
@@ -27,13 +30,11 @@ from typing import Any, Final
 
 from pydantic import Field
 
-from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.errors import ConfigurationError, NotFoundError
-from voiceai.common.pagination import PaginationParams
 from voiceai.common.tenancy import current_tenant
 from voiceai.database.base import BaseFields
 from voiceai.database.constants import Collections
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.platform.models import ApiKey, AuthEvent, Invite, SessionRecord, User
@@ -133,21 +134,20 @@ class RepositoryPlatformStore(MemoryStore):
             raise ConfigurationError(_UNKNOWN_FAMILY, details={_DETAIL_FAMILY: family}) from exc
 
     async def _pages(self, collection: Collections) -> list[PlatformRow]:
-        """Every active row of a collection across tenants, oldest first (paged)."""
-        repository = self._repositories[collection]
-        rows: list[PlatformRow] = []
-        page_number = 1
-        while True:
-            page = await repository.list(PaginationParams(page=page_number, page_size=MAX_PAGE_SIZE))
-            rows.extend(page.items)
-            if not page.has_next:
-                return rows
-            page_number += 1
+        """Every active row of a collection across tenants, oldest first (paged).
+
+        Tenant-blind on purpose: only `scan_family` may call it.
+        """
+        return [row async for row in walk_pages(self._repositories[collection])]
 
     async def _rows(self, collection: Collections) -> list[PlatformRow]:
-        """Every active row of this tenant, oldest first (paged over the whole collection)."""
-        tenant_id = current_tenant().tenant_id
-        return [row for row in await self._pages(collection) if row.tenant_id == tenant_id]
+        """Every active row of this tenant, oldest first.
+
+        Walks the tenant-scoped view (spec 0050): the driver pages this tenant's rows
+        alone, so another tenant's volume never costs this one a query and no row
+        past the first page is lost.
+        """
+        return [row async for row in walk_pages(self._scoped(collection))]
 
     # -- tenant-blind read for the inbound lookup (spec 0047 seam) -----------------------
 

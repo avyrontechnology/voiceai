@@ -29,15 +29,17 @@ class PlivoOutputHandler(TelephonyOutputHandler):
             return
         try:
             logger.info("interrupting because user spoke in between")
-            message_clear = {
-                "event": "clearAudio",
-                "streamId": self.stream_sid,
-            }
+            message_clear = {"event": "clearAudio", "streamId": self.stream_sid}
             await self._send_text(json.dumps(message_clear))
-            self.mark_event_meta_data.clear_data()
         except Exception as e:
             logger.info(f"WebSocket closed during interruption: {e}")
             self._closed = True
+        finally:
+            # Runs after the send attempt, stalled or not: marks landed mid-clear are wiped too (spec 0051).
+            try:
+                self.mark_event_meta_data.clear_data()
+            except Exception as e:
+                logger.warning(f"Mark clear_data failed during interruption: {e}")
 
     async def form_media_message(self, audio_data: Any, audio_format: Any = "audio/x-mulaw") -> Any:
         """Build the media message for an audio frame."""

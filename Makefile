@@ -44,15 +44,10 @@ sec:
 # (io/asr/tts — see [tool.coverage.run] omit in pyproject.toml). Providers carry
 # live-network branches no offline run can cover; their contracts are pinned by the
 # dedicated offline suites (golden fixtures, characterization, provider units) that run
-# green in test-all. The deselects below are exactly the documented known failures
-# (AGENTS.md §8 + the suite-baseline env failure); test-all still reports them loudly.
+# green in test-all. No deselects: spec 0051 burned the documented known failures down,
+# so cov and test-all run the same suite (only the git-ignored scripts/ import is skipped).
 cov:
 	$(PY) -m pytest -q --ignore=tests/test_seed_mongo_users.py \
-		--deselect tests/arch/common/test_constants.py::TestAppVersion::test_app_version_is_the_installed_distribution_version \
-		--deselect tests/test_prompt_resilience.py::test_missing_prompts_file_returns_empty_dict \
-		--deselect tests/test_prompt_resilience.py::test_missing_prompts_result_supports_get \
-		--deselect "tests/test_telephony_output_send_timeout.py::test_handle_interruption_does_not_hang_on_a_dead_socket[TwilioOutputHandler]" \
-		--deselect tests/test_telephony_output_send_timeout.py::test_handle_does_not_hang_sending_audio_on_a_dead_socket \
 		--cov=voiceai/common --cov=voiceai/core \
 		--cov=voiceai/database --cov=voiceai/modules \
 		--cov-report=term-missing:skip-covered --cov-fail-under=85

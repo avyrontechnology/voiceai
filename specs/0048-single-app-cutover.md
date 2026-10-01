@@ -214,6 +214,13 @@ give that for free and the frozen router observes the same "gone" semantics.
   quickstart tests rewritten or deleted (each deletion listed in the commit).
 - Coverage ≥ 85% on `voiceai/platform/mongo_store.py`, `core/app_factory.py`,
   `tooling/backfill_upstash_to_atlas.py`.
+- Deploy config (batch `deploy-config`): `tests/arch/core/test_env_sample.py` keeps
+  `.env.sample` complete and loadable (every `Environment` field named, no inline
+  comment in a value, `load_environment(.env.sample)` builds `db_backend == mongo` and
+  `voice_ws_enabled is True`); `tests/arch/core/test_db.py` pins `MONGO_URL` alone
+  selecting the Atlas URL; `tests/arch/core/test_container.py` pins readiness probing
+  the cache client; `tests/test_telephony_trunk_tickets.py` pins the trunks' ticketed
+  `<Stream>` URL and the 500 on a failed mint.
 
 ## Verification
 
@@ -254,6 +261,58 @@ denylist + readiness pings only).
 5. Shims registered for burn-down: none new; the ones deleted are
    `legacy-shim(spec-0002)` (`RedisAgentRepository`), `legacy-shim(spec-0006)`
    wallet seam, spec 0007 dual mount.
+6. Deploy configuration and operator docs (batch `deploy-config`, after Slice D;
+   no Python files): `.env.sample` re-keyed to the single app — every name checked
+   against `voiceai/core/environment.py` (`DB_BACKEND=mongo`, `MONGO_URL`/`DB_URL`,
+   `VOICE_WS_ENABLED=true`, `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` PEM, `ALLOWED_ORIGINS`,
+   `REDIS_CACHE_URL` optional; `REDIS_URL` no longer required). `README.md` and
+   `local_setup/README.md` name `uvicorn voiceai.app:app` as the only server, the
+   `/api/v1` prefix, the backfill runbook and what each telephony trunk reads.
+   `Dockerfile`/`docker-compose.yml`: no service `depends_on: redis` (the Twilio/
+   Plivo trunks import `redis.asyncio` but never call it — verified, not guessed),
+   Redis behind `--profile cache`, per-service healthchecks. CI: `lint`, `test`,
+   `security`, `modules` workflows run `make setup` (uv, Python 3.10) before the
+   make gates (`make check`, `make sec`) — they previously executed `.venv/bin/...`
+   without creating the venv and skipped `master`/`feature--*` pushes. No secrets.
+7. Review pass on the deploy configuration (batch `deploy-config`, 2026-10-01; owner
+   directive: "sirf verify audit hi mat karte raho, changes karo code me" — fix the
+   findings in code, do not re-document around them). Files outside the batch's declared
+   set are touched only where the working tree showed no concurrent edit; each is listed
+   here for the integrator:
+   - `voiceai/core/db.py`: `create_db` reads `env.db_url_effective` (`MONGO_URL`, legacy
+     `DB_URL` fallback), so the configuration `.env.sample`/`README.md`/`RUNBOOK.md`
+     prescribe (`MONGO_URL` set, `DB_URL` blank) boots. Pinned in
+     `tests/arch/core/test_db.py`.
+   - `voiceai/core/container.py`: `health_repository` probes `redis_cache`
+     (`REDIS_CACHE_URL`, legacy `REDIS_URL` fallback) — the client the app uses for the
+     login throttle and the JWT denylist — so `GET /api/v1/health/ready` reports the
+     cache that is configured. `redis_client` (legacy `REDIS_URL` only) keeps its
+     shutdown close and has no other consumer; retiring it is a follow-up spec. Test
+     seam: `container_override(app, "redis", fake)` binds `redis_cache`
+     (`tests/arch/conftest.py`); pinned in `tests/arch/core/test_container.py`.
+   - `tests/test_platform_auth.py`: the duplicate `signup_owner` (F811) is deleted;
+     `make lint` is green again.
+   - `local_setup/ngrok-config.yml`: carries no `authtoken` — the ngrok agent reads
+     `NGROK_AUTHTOKEN` from the container environment, which `docker-compose.yml`
+     interpolates from `.env`; tunnels `twilio-app` and `voiceai-app` are defined
+     (`plivo-app` stays commented for constrained ngrok plans; uncomment for the Plivo
+     trunk). The token that was committed must be rotated in the ngrok dashboard — it
+     stays in git history.
+   - `local_setup/telephony_server/{twilio,plivo}_api_server.py` (named a non-goal
+     above; changed because the shipped compose cannot place a call against the single
+     app otherwise — spec 0021's ticket contract is consumed, not changed): the answer
+     callback mints a single-use ticket (`POST /api/v1/auth/ws-ticket`, Bearer
+     `VOICEAI_API_KEY`, over `VOICEAI_INTERNAL_URL`) and points the carrier `<Stream>`
+     at `wss://<tunnel>/api/v1/chat/v1/{agent_id}?ticket=…`. Minted at answer time, not
+     dial time: the ticket lives 60 s and ringing can take longer. A failed mint answers
+     the carrier 500 instead of a ticket-less URL. Pinned in
+     `tests/test_telephony_trunk_tickets.py`.
+   - `tests/arch/core/test_env_sample.py`: `.env.sample` names every `Environment`
+     field, no value carries an inline comment, and `load_environment(.env.sample)`
+     builds `db_backend == mongo`, `voice_ws_enabled is True`.
+   Not done here: `make fmt` over the arch scope (57 files, several mid-edit by
+   concurrent batches — reformatting under another agent's edit is a collision), so the
+   integrator runs it once after the Python batches land.
 
 ## Burn-down
 
@@ -265,3 +324,13 @@ denylist + readiness pings only).
 - [x] Slice D (2026-10-01): deleted `local_setup/quickstart_server.py`, `RedisStore`, `RedisLike`/`RedisAgentRepository`/`FilePromptStore`, `platform/agent_records.py`, `wallet/adapters/legacy_store.py`, `create_platform_app`/`build_routers`, the spec-0007 dual-mount parity test, the quickstart tests, `_principal_from_mongo`; `depends_on: redis` dropped for the app; size-debt and tenancy ledgers updated. **Deviation (kept, not deleted):** the legacy `tests/test_platform_*` contract suites now run against the single app through `tests/auth_helpers.build_platform_test_app()` under `/api/v1` — they went from 70 red (no JWT) to green; retired only the tests of surfaces the modules own with a different contract (platform tools, platform voices, code-seeded templates). Two semantics changed with them and are deliberate: the wallet survives a workspace reset (module-owned money is not platform data), and the wallet ledger accepts the legacy `?type=` filter as an alias of `entry_type` (UI compat).
 - [x] Slice E (2026-10-01): runbook written; route inventory pinned; gates green (`make lint`, `lint-arch`, `type`, `sec`, `make test` 1978/0; `make test-all` shows only the 7 pre-existing failures already deselected in `make cov`). Upstash before/after counts: operator step after deploy — record here.
 - [x] Owner decision: bare paths retire with quickstart, no alias mount (UI is fixed instead).
+- [x] Deploy config + operator docs (batch `deploy-config`, 2026-10-01; no Python files, one line per change):
+  - `.env.sample`: rewritten for the single app — `DB_BACKEND=mongo` + `MONGO_URL` (`DB_URL` legacy alias), `VOICE_WS_ENABLED=true`, JWT RS256 PEM pair (openssl recipe, `\n` form for Docker `env_file`), `ALLOWED_ORIGINS` exact-origin rule, cookie knobs, `REDIS_CACHE_URL` optional (`REDIS_URL` only a fallback, no longer required), `TWILIO_AUTH_TOKEN`/`TALKO_SERVICE_BASE_URL` (app), blob store, provider keys, one block per trunk; all 26 `Environment` fields present, verified by loading the file through `load_environment`.
+  - `README.md`: the "Local example setup" story (four containers, "redis: for persisting agents & prompt data") replaced by "Running the server" (`uvicorn voiceai.app:app` is the only server, `/api/v1`, health, WS ticket contract, required/optional env, gates, runbook) and a "Local Docker setup" service table with the env each trunk reads.
+  - `local_setup/README.md`: "redis: for persisting agents & prompt data" removed; per-service table with the env each trunk reads (from their `os.getenv` calls), ngrok tunnel-name requirement, `cache`/`mongo` profiles, health checks, WS contract note (Twilio/Plivo trunks still dial the retired bare path without a ticket — spec 0021/M2).
+  - `Dockerfile`: `EXPOSE` gains 8004 (talko trunk); healthcheck/CMD comments name the single app; CMD unchanged.
+  - `docker-compose.yml`: `depends_on: redis` removed from `twilio-app`/`plivo-app` (their `redis.asyncio` import is never called); `redis` behind `--profile cache`; `mongo` comment says production is Atlas; trunks wait for `voiceai-app` `service_healthy` and get their own `/docs` healthchecks (the image healthcheck probes 5001); comments list the env each service reads.
+  - `.github/workflows/{lint,test,security,modules}.yml`: `pip install uv` + `make setup` before every make gate (they ran `.venv/bin/...` without creating the venv, so every run failed; the `|| ruff format` fallback in lint hid it); triggers gain `master` and `feature**` (`feature--dev--2026` matched nothing); `security` runs `make sec` (same bandit pin and scope as local); lint drops the `requirements-txt-fixer` step (not a make gate; fails on the current `requirements.txt` order); modules matrix gains `tools`/`chat`/`catalog`/`voices` (each verified ≥ 85% locally) and the dup job runs `make dup`; uv cache via `actions/cache`; concurrency cancel-in-progress. `auto-release.yml`/`publish.yml` untouched (release automation, `workflow_dispatch` by design). No secrets added.
+  - `voiceai/platform/RUNBOOK.md`: new "Process and configuration" section (env table, health, gates), cutover gains the `--tenant`/`REDIS_URL` notes and a rollback step, day two gains the telephony/WS-ticket note.
+  - review pass (deploy-config, 2026-10-01): `.github/workflows/security.yml` header corrected — the `dev` extra lists `bandit` unpinned (the old CI step pinned `1.9.4`), so the comment no longer claims a pin; pinning belongs in `pyproject.toml` (outside this batch).
+- [ ] Observed by `deploy-config`, outside its file set (owner to route): (a) `local_setup/telephony_server/{twilio,plivo}_api_server.py` point the carrier `<Stream>` at bare `/chat/v1/{agent_id}` with no `?ticket=` — cannot complete a call against the single app; (b) `local_setup/ngrok-config.yml` has no `voiceai-app` tunnel (the old `bolna-app:5001` entry is commented out) and carries a committed ngrok authtoken — rotate it and replace with a placeholder; (c) `make lint` is red on `HEAD` (`tests/test_platform_auth.py:35` F811 `signup_owner`) and `ruff format --check` on the arch scope reports 57 files — `make check` and the lint workflow stay red until `make fmt` + that fix land; (d) `requirements.txt` is not in `requirements-txt-fixer` order; (e) AGENTS.md §6 still says the workflows are `workflow_dispatch`-only.

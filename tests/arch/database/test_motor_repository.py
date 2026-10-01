@@ -14,13 +14,16 @@ from typing import Any
 
 import pytest
 
+from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.errors import NotFoundError
 from voiceai.common.pagination import PaginationParams
-from voiceai.database.constants import Collections
+from voiceai.database.constants import IS_ACTIVE_FIELD, LISTING_SORT, TENANT_ID_FIELD, Collections
 from voiceai.database.repository import BaseRepository, MotorRepository
+from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules.health.models import HealthCheckRecord
 
 PAST = datetime(2024, 1, 1, tzinfo=timezone.utc)
+NOTE_FIELD = "note"
 
 
 class _Cursor:
@@ -83,12 +86,15 @@ class _Collection:
         return self._documents.get(selector.get("_id"))
 
     def find(self, selector: Any) -> _Cursor:
-        """Serve active documents for an active-only filter."""
+        """Serve the documents matching an equality selector, the way the driver would for scalars."""
         self.calls.append(("find", selector))
-        assert selector == {"is_active": True}, selector
-        cursor = _Cursor([d for d in self._documents.values() if d.get("is_active", True)])
+        cursor = _Cursor(self._select(selector))
         cursor.calls = self.calls
         return cursor
+
+    def _select(self, selector: Any) -> list[dict[str, Any]]:
+        """Equality-match every selector pair (an empty selector is every document)."""
+        return [d for d in self._documents.values() if all(d.get(key) == value for key, value in selector.items())]
 
     async def update_one(self, selector: Any, mutation: Any) -> Any:
         """Apply a `$set` to a live document; mimic matched semantics."""
@@ -103,9 +109,9 @@ class _Collection:
         return outcome
 
     async def count_documents(self, selector: Any) -> int:
-        """Count active documents."""
+        """Count the documents matching the selector."""
         self.calls.append(("count_documents", selector))
-        return sum(1 for d in self._documents.values() if d.get("is_active", True))
+        return len(self._select(selector))
 
 
 class _Database:
@@ -260,3 +266,77 @@ async def test_list_pages_active_documents_oldest_first(
 
     page = await repo.list(PaginationParams(page=2, page_size=2))
     assert [model.id for model in page.items] == ["row-3", "row-4"]
+
+
+async def test_list_where_sends_the_compound_active_selector_and_pages(
+    collection: _Collection, repo: BaseRepository[HealthCheckRecord]
+) -> None:
+    """The server filters and windows: one count plus one sorted/skipped/limited find per page."""
+    for index in range(5):
+        await repo.insert(HealthCheckRecord(id=f"row-{index}", note="a" if index % 2 == 0 else "b"))
+    selector = {NOTE_FIELD: "a", IS_ACTIVE_FIELD: True}
+
+    collection.calls.clear()
+    first = await repo.list_where({NOTE_FIELD: "a"}, PaginationParams(page=1, page_size=2))
+    second = await repo.list_where({NOTE_FIELD: "a"}, PaginationParams(page=2, page_size=2))
+
+    assert first.total == 3
+    assert [model.id for model in first.items] == ["row-0", "row-2"]
+    assert [model.id for model in second.items] == ["row-4"]
+    assert ("count_documents", selector) in collection.calls
+    assert ("find", selector) in collection.calls
+    assert ("sort", list(LISTING_SORT)) in collection.calls
+    assert ("skip", 0) in collection.calls
+    assert ("skip", 2) in collection.calls
+    assert ("limit", 2) in collection.calls
+
+
+async def test_list_where_cannot_widen_a_read_to_soft_deleted_rows(
+    collection: _Collection, repo: BaseRepository[HealthCheckRecord]
+) -> None:
+    """The active guard is applied last: an ``is_active=False`` filter reads nothing."""
+    await repo.insert(HealthCheckRecord(id="gone"))
+    assert await repo.soft_delete("gone") is True
+
+    collection.calls.clear()
+    page = await repo.list_where({IS_ACTIVE_FIELD: False}, PaginationParams())
+
+    assert (page.items, page.total) == ([], 0)
+    assert ("find", {IS_ACTIVE_FIELD: True}) in collection.calls
+
+
+async def test_scoped_view_pages_a_tenant_past_max_page_size_on_motor(
+    collection: _Collection, repo: BaseRepository[HealthCheckRecord]
+) -> None:
+    """Spec 0050 end to end on the driver shape: 150 tenant rows come back across two pages."""
+    acme = TenantScopedRepository(repo, "acme", Collections.HEALTH_CHECKS)
+    globex = TenantScopedRepository(repo, "globex", Collections.HEALTH_CHECKS)
+    inserted = {(await acme.insert(HealthCheckRecord())).id for _ in range(MAX_PAGE_SIZE + 50)}
+    for _ in range(20):
+        await globex.insert(HealthCheckRecord())
+
+    collection.calls.clear()
+    first = await acme.list(PaginationParams(page=1, page_size=MAX_PAGE_SIZE))
+    second = await acme.list(PaginationParams(page=2, page_size=MAX_PAGE_SIZE))
+
+    assert first.total == MAX_PAGE_SIZE + 50
+    assert len(first.items) == MAX_PAGE_SIZE
+    assert len(second.items) == 50
+    assert {model.id for model in first.items} | {model.id for model in second.items} == inserted
+    assert all(model.tenant_id == "acme" for model in first.items + second.items)
+    assert ("find", {TENANT_ID_FIELD: "acme", IS_ACTIVE_FIELD: True}) in collection.calls
+
+
+async def test_find_many_is_a_bounded_lookup(collection: _Collection, repo: BaseRepository[HealthCheckRecord]) -> None:
+    """The lookup limit is clamped to ``MAX_PAGE_SIZE`` at the driver and never goes negative (spec 0050)."""
+    for _ in range(MAX_PAGE_SIZE + 1):
+        await repo.insert(HealthCheckRecord(note="same"))
+
+    collection.calls.clear()
+    capped = await repo.find_many(NOTE_FIELD, "same", limit=MAX_PAGE_SIZE + 1)
+    none = await repo.find_many(NOTE_FIELD, "same", limit=-1)
+
+    assert len(capped) == MAX_PAGE_SIZE
+    assert ("limit", MAX_PAGE_SIZE) in collection.calls
+    assert none == []
+    assert ("limit", 0) in collection.calls

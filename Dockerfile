@@ -16,10 +16,13 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-EXPOSE 5001 8001 8002
+# 5001: the single app (uvicorn voiceai.app:app). 8001/8002/8004: the example
+# telephony trunks when docker-compose runs this same image with another `command`.
+EXPOSE 5001 8001 8002 8004
 
-# Greenfield liveness: the thin entry serves every module, so the probe hits the
-# dependency-free `/api/v1/health/live` (T7 cutover flipped the entry here).
+# Liveness for the single app (spec 0048): dependency-free, so an Atlas or Redis
+# outage degrades /api/v1/health/ready instead of restarting the process.
+# docker-compose overrides this per service for the telephony trunks.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:5001/api/v1/health/live || exit 1
 
@@ -42,4 +45,6 @@ COPY . ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps .
 
+# The only server (spec 0048): environment -> container -> app, every route
+# under /api/v1. Quickstart and Redis-as-database are gone.
 CMD ["uvicorn", "voiceai.app:app", "--host", "0.0.0.0", "--port", "5001"]

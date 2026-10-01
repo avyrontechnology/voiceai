@@ -3,7 +3,9 @@ name: Modules
 # Per-module scope (spec 0019): runs only for PRs touching module sources, one
 # job per module plus the dup gate. Native path filters (no external actions);
 # the small matrix fan-out (all modules on any modules/ change) is deliberate —
-# robust over clever, no untestable bash-to-JSON plumbing.
+# robust over clever, no untestable bash-to-JSON plumbing. Spec 0048
+# (deploy-config): every job builds the venv with `make setup` (uv, Python 3.10)
+# because `make cov-module` / `make dup` run `.venv/bin/python`.
 on:
   pull_request:
     paths:
@@ -13,8 +15,10 @@ on:
       - voiceai/database/**
   push:
     branches:
+      - master
       - revamp/**
       - feat/**
+      - feature**
       - fix/**
     paths:
       - voiceai/modules/**
@@ -26,13 +30,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   module-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: [health, agents, voice, auth, wallet]
+        module: [health, agents, voice, auth, wallet, tools, chat, catalog, voices]
     steps:
       - uses: actions/checkout@v4
 
@@ -40,12 +48,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10.13'
-          cache: pip
 
-      - name: Install
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.10-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-py3.10-
+
+      - name: Install (make setup = uv venv .venv --python 3.10 + pip install -e '.[dev]')
         run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[dev]'
+          python -m pip install --upgrade pip uv
+          make setup
 
       - name: Module scope (tests + 85% coverage gate)
         run: make cov-module MODULE=${{ matrix.module }}
@@ -60,5 +74,17 @@ jobs:
         with:
           python-version: '3.10.13'
 
-      - name: Duplicated-block gate
-        run: python voiceai/tooling/dup_blocks.py
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.10-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-py3.10-
+
+      - name: Install (make setup = uv venv .venv --python 3.10 + pip install -e '.[dev]')
+        run: |
+          python -m pip install --upgrade pip uv
+          make setup
+
+      - name: Duplicated-block gate (make dup)
+        run: make dup

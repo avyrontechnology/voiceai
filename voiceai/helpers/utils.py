@@ -482,13 +482,13 @@ async def get_prompt_responses(assistant_id, local=False):
             with open(filepath, "r") as json_file:
                 data = json.load(json_file)
         except Exception as e:
-            # Missing/unreadable prompts must degrade to empty prompts, not a
-            # str/None that crashes callers doing `prompt_responses.get(...)`
-            # mid-call (observed: inbound AI call dropped after WS accept).
-            # Missing/unreadable file is not exceptional (fresh record, wiped
-            # ephemeral disk): callers treat None as "no stored prompts".
-            # Never return a non-dict sentinel — load_prompt calls .get() on this.
-            logger.error(f"Could not load up the dataset {e}; using empty prompts")
+            # A missing/unreadable file is not exceptional (fresh record, wiped
+            # ephemeral disk). Contract (spec 0051): answer None — "no stored
+            # prompts" — never raise and never a str. Every consumer degrades
+            # None to empty prompts itself (session/prompts.load_prompt checks
+            # isinstance(dict); agents.utils.read_conversation_details types
+            # `dict | None`), so nothing calls .get() on this result directly.
+            logger.warning(f"Could not load up the dataset {e}; no stored prompts (callers degrade to empty prompts)")
             data = None
     else:
         key = f"{assistant_id}/conversation_details.json"

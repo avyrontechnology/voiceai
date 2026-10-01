@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from voiceai.common.constants import MAX_PAGE_SIZE
-from voiceai.common.pagination import PaginationParams
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.tools.models import ToolDefinition
 
 __all__ = ["ToolsRepository"]
@@ -54,9 +52,8 @@ class ToolsRepository:
         return await self._store.get(tool_id)
 
     async def list_all(self) -> Sequence[ToolDefinition]:
-        """Return every active row in this view (scoped views stay in-tenant)."""
-        page = await self._store.list(PaginationParams(page=1, page_size=MAX_PAGE_SIZE))
-        return list(page.items)
+        """Return every active row in this view, walking all pages (scoped views stay in-tenant)."""
+        return [row async for row in walk_pages(self._store)]
 
     async def delete_tool(self, tool_id: str) -> bool:
         """Soft-delete one row; foreign rows read as missing."""

@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.database.constants import TENANT_ID_FIELD
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.catalog.models import CatalogEntry
 
 __all__ = ["CatalogRepository"]
@@ -56,7 +55,15 @@ class CatalogRepository:
         """
         entry = await self._store.get(catalog_id)
         return entry if entry is not None and entry.tenant_id == SYSTEM_TENANT_ID else None
+
     async def list_all(self) -> Sequence[CatalogEntry]:
-        """Return every active system row (dropdowns, census, admin views)."""
-        rows = await self._store.find_many(TENANT_ID_FIELD, SYSTEM_TENANT_ID, limit=MAX_PAGE_SIZE)
+        """Return every active system row (dropdowns, census, admin views).
+
+        Walks every page of the system-tenant selector (spec 0050): the bounded
+        `find_many` lookup this used to call stops at `MAX_PAGE_SIZE` rows, so a
+        catalog past one page silently lost models. The selector is applied by
+        the backend; the re-check keeps a tenant row out even if a store
+        misbehaves.
+        """
+        rows = [row async for row in walk_pages(self._store, {TENANT_ID_FIELD: SYSTEM_TENANT_ID})]
         return [row for row in rows if row.is_active and row.tenant_id == SYSTEM_TENANT_ID]

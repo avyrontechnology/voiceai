@@ -6,6 +6,12 @@ auth, one SET per logout) plus one PING per health report. With every Redis URL
 empty the stack still serves (probes report SKIPPED, revocation reads fall
 through to the store). A counting double backs the providers, so any future
 Redis touchpoint without an isolated URL breaks these tests by design.
+
+Spec 0053: the health PING is billed to the **cache client** (`redis_cache`), the
+one Redis the app uses — the same client the denylist reads. The legacy
+single-URL alias (`redis_client`) is never touched; the health tests below count
+on `redis_cache` for that reason. The cost itself is unchanged: one PING per
+report or readiness call, none for liveness.
 """
 
 from __future__ import annotations
@@ -18,6 +24,10 @@ from fastapi import FastAPI
 from voiceai.common.constants import API_PREFIX
 from voiceai.core.environment import Environment
 from voiceai.modules.auth.constants import REFRESH_COOKIE
+
+#: The documented production shape (spec 0048): an isolated cache URL, no legacy `REDIS_URL`.
+CACHE_ONLY_URL = "redis://cache:6379/0"
+PING = "ping"
 
 
 class CountingCache:
@@ -148,15 +158,91 @@ async def test_unconfigured_stack_serves_without_any_client(isolated_app: FastAP
         assert me.status_code == 200, me.text
 
 
+def _redis_state(response: httpx.Response) -> str:
+    """Return the `redis` component state from a health report envelope."""
+    components = {c["name"]: c["state"] for c in response.json()["data"]["components"]}
+    state: str = components["redis"]
+    return state
+
+
 async def test_configured_health_costs_exactly_one_ping(isolated_app: FastAPI, client_factory) -> None:
-    """With a client present the report pings once; liveness never touches Redis."""
+    """With a cache client present the report pings it once; liveness never touches Redis.
+
+    Counts on `redis_cache` since spec 0053 (it counted on `redis_client` before): the
+    probe moved to the client the app uses, the budget — exactly one PING — did not.
+    """
     container = isolated_app.state.container
     cache = CountingCache()
-    container.redis_client.override(providers.Object(cache))
+    container.redis_cache.override(providers.Object(cache))
     async with client_factory(isolated_app) as client:
         report = await client.get(f"{API_PREFIX}/health")
         assert report.status_code == 200
         live = await client.get(f"{API_PREFIX}/health/live")
         assert live.status_code == 200
 
-    assert cache.calls == ["ping"]
+    assert _redis_state(report) == "up"
+    assert cache.calls == [PING]
+
+
+async def test_readiness_costs_exactly_one_ping_on_the_cache_client(isolated_app: FastAPI, client_factory) -> None:
+    """A load balancer polling readiness bills one PING per call, on the cache client only."""
+    container = isolated_app.state.container
+    cache = CountingCache()
+    legacy = CountingCache()
+    container.redis_cache.override(providers.Object(cache))
+    container.redis_client.override(providers.Object(legacy))
+    async with client_factory(isolated_app) as client:
+        ready = await client.get(f"{API_PREFIX}/health/ready")
+
+    assert ready.status_code == 200
+    assert _redis_state(ready) == "up"
+    assert cache.calls == [PING]
+    assert legacy.calls == []
+
+
+async def test_legacy_alias_alone_is_never_probed(isolated_app: FastAPI, client_factory) -> None:
+    """A client bound only to the legacy `redis_client` alias is not the app's Redis: zero touches."""
+    container = isolated_app.state.container
+    legacy = CountingCache()
+    container.redis_client.override(providers.Object(legacy))
+    async with client_factory(isolated_app) as client:
+        report = await client.get(f"{API_PREFIX}/health")
+        ready = await client.get(f"{API_PREFIX}/health/ready")
+
+    assert ready.status_code == 200
+    assert _redis_state(report) == "skipped"
+    assert legacy.calls == []
+
+
+async def test_cache_url_without_legacy_url_is_probed_over_http(
+    arch_environment: Environment, client_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The documented production config reports the cache, not "redis not configured" (spec 0053).
+
+    `REDIS_CACHE_URL` set and `REDIS_URL` empty used to read `skipped` while the
+    denylist depended on that Redis. The client is the one the real factory built;
+    only its `ping` is replaced, so no socket opens.
+    """
+    from voiceai.core.app_factory import create_app
+    from voiceai.core.container import aclose_container, build_container
+
+    env = arch_environment.model_copy(update={"redis_url": "", "redis_cache_url": CACHE_ONLY_URL})
+    container = build_container(env)
+    app = create_app(env=env, container=container)
+    assert container.redis_client() is None
+    pings: list[str] = []
+
+    async def _ping() -> bool:
+        pings.append(PING)
+        return True
+
+    monkeypatch.setattr(container.redis_cache(), PING, _ping)
+    async with client_factory(app) as client:
+        ready = await client.get(f"{API_PREFIX}/health/ready")
+        live = await client.get(f"{API_PREFIX}/health/live")
+
+    assert ready.status_code == 200
+    assert live.status_code == 200
+    assert _redis_state(ready) == "up"
+    assert pings == [PING]
+    await aclose_container(container)

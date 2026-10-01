@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
-from voiceai.common.constants import MAX_PAGE_SIZE
+from voiceai.common.constants import MAX_PAGE_SIZE, MIN_PAGE
 from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import NotFoundError
 from voiceai.common.pagination import Page, PaginationParams, paginate
@@ -15,6 +15,13 @@ from voiceai.database.constants import (
     DETAIL_COLLECTION,
     DETAIL_ITEM_ID,
     DOCUMENT_NOT_FOUND_MESSAGE,
+    IS_ACTIVE_FIELD,
+    LISTING_SORT,
+    MODEL_ID_FIELD,
+    MONGO_ID_FIELD,
+    MONGO_SET_OPERATOR,
+    UPDATED_AT_FIELD,
+    UPDATED_BY_FIELD,
     Collections,
 )
 
@@ -31,6 +38,12 @@ class BaseRepository(Protocol[TModel]):
     shape, and the container injects whichever backend the deployment runs (AGENTS.md rule 9).
     Implementations take and return module models, never raw driver documents (rule 1d), and
     deletes are soft — reads never surface a document with ``is_active=False`` (rule 5).
+
+    Reads come in three shapes (spec 0050): ``get`` by id; bounded *lookups* —
+    ``find_one``/``find_many``, at most ``MAX_PAGE_SIZE`` rows, for natural-key and
+    small-fan-out reads served by an index; and paged *listings* — ``list``/``list_where``,
+    a ``Page`` with a total where every match is reachable by walking pages. Code that must
+    see every match walks a listing; it never windows a lookup in Python.
     """
 
     async def insert(self, model: TModel) -> TModel:
@@ -46,7 +59,30 @@ class BaseRepository(Protocol[TModel]):
         ...
 
     async def list(self, params: PaginationParams) -> Page[TModel]:
-        """Return one page of active documents in insertion order."""
+        """Return one page of active documents, oldest first.
+
+        The unfiltered listing: identical to ``list_where({}, params)`` in order and totals.
+        """
+        ...
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[TModel]:
+        """Return one page of active documents matching every filter, oldest first.
+
+        The paged counterpart of ``find_many`` (spec 0050): the backend applies ``filters``
+        and the page window itself, so every match is reachable by walking pages and
+        ``Page.total`` counts all of them.
+
+        Args:
+            filters: ``{field: value}`` equality filters, ANDed. Field names are code
+                constants at call sites (never user input) and values are BSON scalars;
+                an empty mapping is the unfiltered listing. The active-only guard cannot
+                be widened through it — reads never surface a soft-deleted document.
+            params: Page number and bounded page size (see ``common.pagination``).
+
+        Returns:
+            The requested window plus the total number of active matches.
+        """
         ...
 
     async def update(self, model: TModel) -> TModel:
@@ -71,7 +107,12 @@ class BaseRepository(Protocol[TModel]):
 
     # why: BSON scalars are open-typed at the driver boundary.
     async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
-        """Return active documents where `field` equals `value`, oldest first.
+        """Return up to ``limit`` active documents where `field` equals `value`, oldest first.
+
+        A bounded lookup, not a listing: the result is clamped to ``MAX_PAGE_SIZE`` and
+        carries no total, which fits natural-key and small-fan-out reads (a session by its
+        hash, an agent's handful of chat sessions). Code that must see every match pages
+        with ``list_where`` instead (spec 0050).
 
         Args:
             field: Document field to match (a code constant, never user input).
@@ -79,6 +120,54 @@ class BaseRepository(Protocol[TModel]):
             limit: Maximum rows, clamped to `MAX_PAGE_SIZE`.
         """
         ...
+
+
+# why: BSON scalars are open-typed at the driver boundary.
+async def walk_pages(
+    repository: BaseRepository[TModel], filters: Mapping[str, Any] | None = None
+) -> AsyncIterator[TModel]:
+    """Yield every active match of ``filters``, page by page, until the listing is exhausted.
+
+    The one page-walker (spec 0050). Module code that must see every row of a listing
+    — a tenant's tools or voices, the provider catalog, an agent index — iterates this
+    instead of reading page one with ``page_size=MAX_PAGE_SIZE`` (which silently caps
+    at ``MAX_PAGE_SIZE`` rows) or re-spelling the ``has_next`` loop. Each page is one
+    driver query of ``MAX_PAGE_SIZE`` rows and the walk is lazy, so a consumer that
+    stops early never fetches the rest. The walk ends at the first page that is empty
+    or reports no next page, so a backend whose total and rows disagree can never
+    spin it forever.
+
+    Offset paging is not a snapshot: a row inserted or deleted while walking can shift
+    a page boundary, so a walk over a live collection may repeat or miss one row at
+    the seam. That is acceptable for the read-mostly listings this serves.
+
+    Args:
+        repository: Any protocol implementation, tenant-scoped or not.
+        filters: ``{field: value}`` equality filters (code constants, ANDed); ``None``
+            or empty walks the unfiltered listing.
+
+    Yields:
+        Every active match, in the backend's listing order.
+    """
+    selector: Mapping[str, Any] = filters if filters is not None else {}
+    page_number = MIN_PAGE
+    while True:
+        page = await repository.list_where(selector, PaginationParams(page=page_number, page_size=MAX_PAGE_SIZE))
+        for row in page.items:
+            yield row
+        if not page.items or not page.has_next:
+            return
+        page_number += 1
+
+
+def _bounded(limit: int) -> int:
+    """Clamp a lookup limit into ``[0, MAX_PAGE_SIZE]`` — the bound every lookup shares."""
+    return max(0, min(limit, MAX_PAGE_SIZE))
+
+
+def _matches(model: BaseFields, filters: Mapping[str, Any]) -> bool:  # why: BSON scalars are open
+    """Report whether ``model`` satisfies every ``{field: value}`` equality filter."""
+    return all(getattr(model, field, None) == value for field, value in filters.items())
 
 
 class InMemoryRepository(Generic[TModel]):
@@ -136,17 +225,34 @@ class InMemoryRepository(Generic[TModel]):
         return model if model.is_active else None
 
     async def list(self, params: PaginationParams) -> Page[TModel]:
-        """Read one page of active documents.
+        """Read one page of active documents in insertion order.
 
         Args:
             params: Page number and bounded page size (see ``common.pagination``).
 
         Returns:
-            The requested window plus the total number of active documents.
+            The requested window plus the total number of active documents — exactly
+            ``list_where`` with no filters.
         """
-        active = self._active_models()
-        window = active[params.skip : params.skip + params.limit]
-        return paginate(window, len(active), params)
+        return await self.list_where({}, params)
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[TModel]:
+        """Read one page of the active documents matching every filter, in insertion order.
+
+        The filter runs over every active document before the window is cut, so the total
+        is exact and no page is ever served from a bounded lookup (spec 0050).
+
+        Args:
+            filters: ``{field: value}`` equality filters (code constants, ANDed).
+            params: Page number and bounded page size (see ``common.pagination``).
+
+        Returns:
+            The requested window plus the total number of active matches.
+        """
+        matched = [model for model in self._active_models() if _matches(model, filters)]
+        window = matched[params.skip : params.skip + params.limit]
+        return paginate(window, len(matched), params)
 
     async def update(self, model: TModel) -> TModel:
         """Replace a stored active document with the given state and stamp it as modified.
@@ -207,15 +313,19 @@ class InMemoryRepository(Generic[TModel]):
     async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
         """Return the active document where `field` equals `value`, or `None`."""
         for model in self._active_models():
-            if getattr(model, field, None) == value:
+            if _matches(model, {field: value}):
                 return model
         return None
 
     # why: BSON scalars are open-typed at the driver boundary.
     async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
-        """Return active documents where `field` equals `value`, oldest first."""
-        matched = [model for model in self._active_models() if getattr(model, field, None) == value]
-        return matched[: max(0, min(limit, MAX_PAGE_SIZE))]
+        """Return up to ``limit`` active documents where `field` equals `value`, oldest first.
+
+        A bounded lookup (see the protocol): clamped to ``MAX_PAGE_SIZE``, no total. Page
+        with ``list_where`` to see every match.
+        """
+        matched = [model for model in self._active_models() if _matches(model, {field: value})]
+        return matched[: _bounded(limit)]
 
     def _active_models(self) -> Sequence[TModel]:
         """Return every non-deleted document of this collection, in insertion order.
@@ -236,7 +346,9 @@ class MotorRepository(Generic[TModel]):
     contract atomic where the in-memory shape reads-then-writes (insert-upsert,
     guarded replace, guarded `$set`); the one deliberate, documented divergence is
     listing order — uuid-hex ids carry no time order, so listing sorts by
-    ``created_at`` ascending with ``_id`` tiebreak instead of insertion order.
+    ``created_at`` ascending with ``_id`` tiebreak (``LISTING_SORT``) instead of
+    insertion order. Every selector is built from the ``database.constants`` field
+    names, never an inline literal.
 
     Args:
         db: The motor database handle (``client[db_name]``); ``db[collection.value]``
@@ -256,16 +368,27 @@ class MotorRepository(Generic[TModel]):
     def _to_document(self, model: TModel, item_id: str) -> dict[str, Any]:
         """Render a model as a driver document keyed by string ``_id``."""
         # why: stored docs are driver-shaped; only this class reads and writes them.
-        document = model.model_dump(exclude={"id"})
-        document["_id"] = item_id
+        document = model.model_dump(exclude={MODEL_ID_FIELD})
+        document[MONGO_ID_FIELD] = item_id
         return document
 
     def _to_model(self, document: dict[str, Any]) -> TModel:
         """Validate a driver document back into the module model."""
         # why: stored docs are driver-shaped; only this class reads them.
         payload = dict(document)
-        payload["id"] = payload.pop("_id")
+        payload[MODEL_ID_FIELD] = payload.pop(MONGO_ID_FIELD)
         return self._model_type.model_validate(payload)
+
+    @staticmethod
+    def _active_selector(filters: Mapping[str, Any]) -> dict[str, Any]:  # why: driver-shaped selector
+        """Render equality filters as a driver selector restricted to live documents.
+
+        The active flag is applied last, so no filter can widen a read to soft-deleted
+        rows (rule 5).
+        """
+        selector: dict[str, Any] = dict(filters)  # why: driver-shaped selector
+        selector[IS_ACTIVE_FIELD] = True
+        return selector
 
     def _not_found(self, item_id: str | None) -> NotFoundError:
         """Build the envelope-safe missing-document error."""
@@ -292,7 +415,7 @@ class MotorRepository(Generic[TModel]):
         if not stored.id:
             stored.id = uuid4().hex
         item_id = stored.id
-        await self._collection.replace_one({"_id": item_id}, self._to_document(stored, item_id), upsert=True)
+        await self._collection.replace_one({MONGO_ID_FIELD: item_id}, self._to_document(stored, item_id), upsert=True)
         return stored
 
     async def get(self, item_id: str) -> TModel | None:
@@ -304,7 +427,7 @@ class MotorRepository(Generic[TModel]):
         Returns:
             The document, or ``None`` when it is unknown or soft-deleted.
         """
-        document = await self._collection.find_one({"_id": item_id})
+        document = await self._collection.find_one({MONGO_ID_FIELD: item_id})
         if document is None:
             return None
         model = self._to_model(document)
@@ -317,11 +440,29 @@ class MotorRepository(Generic[TModel]):
             params: Page number and bounded page size (see ``common.pagination``).
 
         Returns:
-            The requested window plus the total number of active documents.
+            The requested window plus the total number of active documents — exactly
+            ``list_where`` with no filters.
         """
-        selector = {"is_active": True}
-        total = await self._collection.count_documents(selector)
-        cursor = self._collection.find(selector).sort([("created_at", 1), ("_id", 1)])
+        return await self.list_where({}, params)
+
+    # why: BSON scalars are open-typed at the driver boundary.
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[TModel]:
+        """Read one page of the active documents matching every filter, oldest first.
+
+        One ``count_documents`` plus one sorted, skipped and limited ``find``, both on the
+        same selector: the server filters and windows, so every match is reachable across
+        pages and the total is exact (spec 0050).
+
+        Args:
+            filters: ``{field: value}`` equality filters (code constants, ANDed).
+            params: Page number and bounded page size (see ``common.pagination``).
+
+        Returns:
+            The requested window plus the total number of active matches.
+        """
+        selector = self._active_selector(filters)
+        total: int = await self._collection.count_documents(selector)
+        cursor = self._collection.find(selector).sort(list(LISTING_SORT))
         window = await cursor.skip(params.skip).limit(params.limit).to_list(length=params.limit)
         return paginate([self._to_model(document) for document in window], total, params)
 
@@ -345,7 +486,7 @@ class MotorRepository(Generic[TModel]):
         stored = model.model_copy(deep=True)
         stored.touch()
         outcome = await self._collection.replace_one(
-            {"_id": item_id, "is_active": True}, self._to_document(stored, item_id)
+            self._active_selector({MONGO_ID_FIELD: item_id}), self._to_document(stored, item_id)
         )
         if outcome.matched_count == 0:
             raise self._not_found(item_id)
@@ -362,25 +503,32 @@ class MotorRepository(Generic[TModel]):
             ``True`` when this call deactivated the document; ``False`` when it was unknown or
             already inactive, so callers can stay idempotent without a second read.
         """
-        mutation: dict[str, Any] = {"is_active": False, "updated_at": utc_now()}  # why: driver-shaped $set payload
+        # why: driver-shaped $set payload
+        mutation: dict[str, Any] = {IS_ACTIVE_FIELD: False, UPDATED_AT_FIELD: utc_now()}
         if user_id is not None:
-            mutation["updated_by"] = user_id
-        outcome = await self._collection.update_one({"_id": item_id, "is_active": True}, {"$set": mutation})
+            mutation[UPDATED_BY_FIELD] = user_id
+        outcome = await self._collection.update_one(
+            self._active_selector({MONGO_ID_FIELD: item_id}), {MONGO_SET_OPERATOR: mutation}
+        )
         matched: int = outcome.matched_count
         return matched == 1
 
     async def find_one(self, field: str, value: Any) -> TModel | None:  # why: BSON scalars are open
         """Return the active document where `field` equals `value`, or `None`."""
-        document = await self._collection.find_one({field: value, "is_active": True})
+        document = await self._collection.find_one(self._active_selector({field: value}))
         return self._to_model(document) if document is not None else None
 
     # why: BSON scalars are open-typed at the driver boundary.
     async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[TModel]:
-        """Return active documents where `field` equals `value`, oldest first."""
-        bounded = max(0, min(limit, MAX_PAGE_SIZE))
+        """Return up to ``limit`` active documents where `field` equals `value`, oldest first.
+
+        A bounded lookup (see the protocol): clamped to ``MAX_PAGE_SIZE``, no total. Page
+        with ``list_where`` to see every match.
+        """
+        bounded = _bounded(limit)
         window = (
-            await self._collection.find({field: value, "is_active": True})
-            .sort([("created_at", 1), ("_id", 1)])
+            await self._collection.find(self._active_selector({field: value}))
+            .sort(list(LISTING_SORT))
             .limit(bounded)
             .to_list(length=bounded)
         )

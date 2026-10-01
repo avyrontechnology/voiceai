@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 
+from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.errors import ConfigurationError, TenantNotBoundError
+from voiceai.common.pagination import Page, PaginationParams
 from voiceai.common.tenancy import TenantContext, bind_tenant
 from voiceai.core.container import build_container
 from voiceai.core.db import InMemoryDatabase
 from voiceai.core.environment import Environment
+from voiceai.database.constants import TENANT_ID_FIELD, Collections
+from voiceai.database.repository import BaseRepository, InMemoryRepository
 from voiceai.modules.auth.repository import MongoAuthStore
 from voiceai.platform.models import (
     ApiKey,
@@ -46,6 +50,9 @@ from voiceai.platform.store import MemoryStore
 TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+#: More rows than one driver page holds (spec 0050): listings must walk past it.
+ROWS_PAST_ONE_PAGE = MAX_PAGE_SIZE + 30
+FOREIGN_ROWS = 4
 
 Scenario = Callable[[MemoryStore], Awaitable[list[Any]]]
 
@@ -115,6 +122,15 @@ WALLET_1 = Wallet(balance_credits=42, updated_at=T0)
 LEDGER_ROWS = [
     LedgerEntry(entry_id=f"l{index}", type="topup" if index % 2 else "debit", amount_credits=index, created_at=T0)
     for index in range(1, 7)
+]
+MANY_NUMBERS = [
+    PhoneNumber(number_id=f"many-{index}", number=f"+9100{index}", created_at=T0) for index in range(ROWS_PAST_ONE_PAGE)
+]
+MANY_LEDGER_ROWS = [
+    LedgerEntry(
+        entry_id=f"many-{index}", type="debit" if index % 10 == 0 else "topup", amount_credits=index, created_at=T0
+    )
+    for index in range(ROWS_PAST_ONE_PAGE)
 ]
 
 
@@ -279,6 +295,21 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
     ]
 
 
+async def _past_one_page(store: MemoryStore) -> list[Any]:
+    for number in MANY_NUMBERS:
+        await store.save_number(number)
+    for entry in MANY_LEDGER_ROWS:
+        await store.add_ledger_entry(entry)
+    return [
+        await store.list_numbers(),  # every row, not the first page
+        await store.list_ledger(limit=5),  # newest five sit past the first page
+        await store.list_ledger(limit=3, entry_type="debit"),
+        await store.reset_platform(),  # clears rows past the first page too
+        await store.list_numbers(),
+        await store.list_ledger(),
+    ]
+
+
 SCENARIOS: dict[str, Scenario] = {
     "numbers_crud": _numbers_crud,
     "kbs_webhooks": _kbs_webhooks,
@@ -290,6 +321,7 @@ SCENARIOS: dict[str, Scenario] = {
     "inbound_vector_subs_integrations": _inbound_vector_subs_integrations,
     "organization_wallet_ledger": _organization_wallet_ledger,
     "reset_platform": _reset_platform,
+    "past_one_page": _past_one_page,
 }
 
 
@@ -327,6 +359,58 @@ async def test_rows_are_invisible_to_other_tenants(bridge: RepositoryPlatformSto
     with _bound(TENANT_A):
         assert (await bridge.get_number("n1")) is not None
         assert (await bridge.get_organization()).name == ORG_1.name
+
+
+async def test_listing_walks_every_own_row_past_one_page(bridge: RepositoryPlatformStore) -> None:
+    """130 rows for one tenant all list, in order; another tenant's rows never do (spec 0050)."""
+    with _bound(TENANT_A):
+        for number in MANY_NUMBERS:
+            await bridge.save_number(number)
+    with _bound(TENANT_B):
+        for index in range(FOREIGN_ROWS):
+            await bridge.save_number(PhoneNumber(number_id=f"foreign-{index}", number=f"+9200{index}"))
+        foreign = [number.number_id for number in await bridge.list_numbers()]
+    with _bound(TENANT_A):
+        own = [number.number_id for number in await bridge.list_numbers()]
+        everything = await bridge.scan_family("numbers")  # the tenant-blind inbound read
+
+    assert own == [number.number_id for number in MANY_NUMBERS]
+    assert foreign == [f"foreign-{index}" for index in range(FOREIGN_ROWS)]
+    assert len(everything) == ROWS_PAST_ONE_PAGE + FOREIGN_ROWS
+
+
+class _RecordingRepository(InMemoryRepository[PlatformRow]):
+    """The in-memory backend, recording the selector of every page query it serves."""
+
+    def __init__(self, db: InMemoryDatabase, collection: Collections) -> None:
+        super().__init__(db, collection, PlatformRow)
+        self.selectors: list[dict[str, Any]] = []
+
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[PlatformRow]:
+        self.selectors.append(dict(filters))
+        return await super().list_where(filters, params)
+
+
+async def test_tenant_listing_pages_only_that_tenant(database: InMemoryDatabase, auth_store: MongoAuthStore) -> None:
+    """A tenant listing is tenant-paged at the driver: a neighbour's volume costs it no query."""
+    numbers = _RecordingRepository(database, Collections.PLATFORM_NUMBERS)
+    repositories: dict[Collections, BaseRepository[PlatformRow]] = {
+        collection: InMemoryRepository(database, collection, PlatformRow) for collection in PLATFORM_COLLECTIONS
+    }
+    repositories[Collections.PLATFORM_NUMBERS] = numbers
+    store = RepositoryPlatformStore(auth_store, repositories)
+    with _bound(TENANT_B):
+        for number in MANY_NUMBERS:
+            await store.save_number(number)
+    with _bound(TENANT_A):
+        await store.save_number(NUMBER_2)
+        listed = await store.list_numbers()
+        tenant_queries = list(numbers.selectors)
+        await store.scan_family("numbers")
+
+    assert [number.number_id for number in listed] == [NUMBER_2.number_id]
+    assert tenant_queries == [{TENANT_ID_FIELD: TENANT_A}]  # one page, this tenant's selector
+    assert numbers.selectors[1:] == [{}, {}]  # the inbound scan pages the whole collection
 
 
 async def test_rows_carry_the_tenant_stamp(database: InMemoryDatabase, bridge: RepositoryPlatformStore) -> None:

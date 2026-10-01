@@ -66,58 +66,59 @@ graph LR;
 Refer to the [docs](https://docs.bolna.ai/providers) for a deepdive into all supported providers.
 
 
-## Local example setup [will be moved to a different repository]
-A basic local setup includes usage of [Twilio](local_setup/telephony_server/twilio_api_server.py) or [Plivo](local_setup/telephony_server/plivo_api_server.py) for telephony. The Docker setup (`Dockerfile`, `docker-compose.yml`, `start.sh`) lives at the repo root and builds the `voiceai` package from local source. One will need to populate an environment `.env` file from `.env.sample`.
+## Running the server
 
-The setup consists of four containers:
-
-1. Telephony web server:
-   * Choosing Twilio: for initiating the calls one will need to set up a [Twilio account](https://www.twilio.com/docs/usage/tutorials/how-to-use-your-free-trial-account)
-   * Choosing Plivo: for initiating the calls one will need to set up a [Plivo account](https://www.plivo.com/)
-2. VoiceAI server: for creating and handling agents 
-3. `ngrok`: for tunneling. One will need to add the `authtoken` to `ngrok-config.yml`
-4. `redis`: for persisting agents & prompt data
-
-### Quick Start
-
-The easiest way to get started is to use the provided script:
+`voiceai.app` is the only server (spec 0048): one process, MongoDB Atlas as the
+system of record, Redis as an optional cache. There is no quickstart server any
+more, and Redis no longer persists agents or prompts.
 
 ```bash
-chmod +x start.sh
-./start.sh
+make setup                        # uv venv .venv --python 3.10 + dev deps
+cp .env.sample .env               # fill MONGO_URL, the JWT PEM pair, ALLOWED_ORIGINS, provider keys
+.venv/bin/uvicorn voiceai.app:app --host 0.0.0.0 --port 5001
 ```
 
-This script will check for Docker dependencies, build all services with BuildKit enabled, and start them in detached mode.
+- Every route is under `/api/v1` (`GET /api/v1/health/live`, `GET /api/v1/health/ready`;
+  OpenAPI at `/docs`). Bare (un-prefixed) paths are gone.
+- The realtime voice websocket is `WS /api/v1/chat/v1/{agent_id}?ticket=<ticket>`: dark
+  unless `VOICE_WS_ENABLED=true`, and the single-use ticket comes from
+  `POST /api/v1/auth/ws-ticket`. Inbound Twilio calls land on
+  `POST /api/v1/voice/inbound/twilio` (needs `TWILIO_AUTH_TOKEN`).
+- Required env: `DB_BACKEND=mongo`, `MONGO_URL` (Atlas; legacy alias `DB_URL`),
+  `VOICE_WS_ENABLED=true`, `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` (RS256 PEM pair; both or
+  neither), `ALLOWED_ORIGINS` (exact origins of the UI). Optional: `REDIS_CACHE_URL`
+  (shared login throttle + JWT denylist; `REDIS_URL` is no longer required). Every knob
+  is commented in `.env.sample` and declared in `voiceai/core/environment.py`.
+- Gates: `make check` (lint, strict arch lint, mypy, tests, bandit) and `make sec`; CI
+  runs the same after `make setup` (`.github/workflows/`).
+- Migrating from the retired quickstart/Redis deployment: `voiceai/platform/RUNBOOK.md`
+  (census, idempotent backfill via `voiceai/tooling/backfill_upstash_to_atlas.py`, switch).
 
-### Manual Setup
+## Local Docker setup (telephony examples)
 
-Alternatively, you can manually build and run the services:
+`docker-compose.yml` runs the same image for every service; the full walkthrough is in
+[`local_setup/README.md`](local_setup/README.md). Populate `.env` from `.env.sample` first.
 
-1. Make sure you have Docker with Docker Compose V2 installed
-2. Enable BuildKit for faster builds:
-   ```bash
-   export DOCKER_BUILDKIT=1
-   export COMPOSE_DOCKER_CLI_BUILD=1
-   ```
-3. Build the images:
-   ```bash
-   docker compose build
-   ```
-4. Run the services:
-   ```bash
-   docker compose up -d
-   ```
-
-To run specific services only:
+| Service | What it is | Needs |
+|---|---|---|
+| `voiceai-app` | the single app above, port 5001 | `.env` (Atlas URL, JWT pair, origins, provider keys) |
+| `twilio-app` / `plivo-app` | example outbound trunks ([Twilio](local_setup/telephony_server/twilio_api_server.py), [Plivo](local_setup/telephony_server/plivo_api_server.py)) | `TWILIO_*` / `PLIVO_*` keys, `VOICEAI_API_KEY` (an API key with the `calls:write` scope), the `ngrok` service |
+| `talko-app` | [Talko / Tata Tele](local_setup/telephony_server/talko_api_server.py) trunk | `TALKO_API_BASE_URL`, `TALKO_API_KEY`, `TALKO_AI_DID`, `TALKO_PARTNER_ID` |
+| `ngrok` | public tunnels for the Twilio/Plivo callbacks | `NGROK_AUTHTOKEN` in `.env` (tunnels in `local_setup/ngrok-config.yml`, no token there) |
+| `redis` (`--profile cache`) | optional cache only, never a database | `REDIS_CACHE_URL=redis://redis:6379` |
+| `mongo` (`--profile mongo`) | local MongoDB for development; production uses Atlas | `MONGO_URL=mongodb://mongo:27017` |
 
 ```bash
-docker compose up -d voiceai-app twilio-app
-# or
-docker compose up -d voiceai-app plivo-app
+./start.sh                                    # or: docker compose build && docker compose up -d
+docker compose up -d voiceai-app twilio-app   # the app + one trunk
+docker compose --profile cache up -d          # add the Redis cache
 ```
 
-Once the docker containers are up, you can now start to create your agents and instruct them to initiate calls.
-
+None of the telephony trunks uses Redis. Twilio/Plivo resolve their public URLs from
+`http://ngrok:4040/api/tunnels` by tunnel name (`twilio-app`, `plivo-app`, `voiceai-app`);
+Talko needs no tunnel. When the carrier answers, the Twilio/Plivo trunks mint a single-use
+ticket from `voiceai-app` (`POST /api/v1/auth/ws-ticket` with `VOICEAI_API_KEY`) and point
+the carrier `<Stream>` at `wss://<voiceai-app tunnel>/api/v1/chat/v1/{agent_id}?ticket=…`.
 
 ## Example agents to create, use and start making calls
 You may try out different agents from [example.bolna.dev](https://examples.bolna.dev).

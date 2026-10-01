@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -10,11 +10,15 @@ import pytest
 
 from voiceai.common.constants import MAX_PAGE_SIZE
 from voiceai.common.errors import NotFoundError, TenantNotBoundError
-from voiceai.common.pagination import PaginationParams
+from voiceai.common.pagination import Page, PaginationParams, paginate
 from voiceai.database.base import BaseFields
-from voiceai.database.constants import Collections
-from voiceai.database.repository import BaseRepository
+from voiceai.database.constants import TENANT_ID_FIELD, Collections
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.database.scoped import TenantScopedRepository
+
+NAME_FIELD = "name"
+#: A walker that never stops must fail loudly instead of hanging the suite.
+QUERY_BUDGET = 10
 
 
 class _Row(BaseFields):
@@ -24,10 +28,16 @@ class _Row(BaseFields):
 
 
 class _FakeRepository:
-    """In-memory protocol implementation with no tenant awareness of its own."""
+    """In-memory protocol implementation with no tenant awareness of its own.
+
+    ``list_where_calls`` records every selector the scoped view sends, and ``leak``
+    simulates a misbehaving backend that appends foreign rows to every page.
+    """
 
     def __init__(self) -> None:
         self._documents: dict[str, _Row] = {}
+        self.list_where_calls: list[dict[str, Any]] = []
+        self.leak: list[_Row] = []
 
     async def insert(self, model: _Row) -> _Row:
         stored = model.model_copy(deep=True)
@@ -42,6 +52,17 @@ class _FakeRepository:
 
     async def list(self, params: PaginationParams) -> Any:
         raise AssertionError("scoped list must not delegate to the global listing")
+
+    async def list_where(self, filters: Mapping[str, Any], params: PaginationParams) -> Page[_Row]:
+        self.list_where_calls.append(dict(filters))
+        assert len(self.list_where_calls) <= QUERY_BUDGET, "page-walker did not stop"
+        matched = [
+            model
+            for model in self._documents.values()
+            if model.is_active and all(getattr(model, field, None) == value for field, value in filters.items())
+        ]
+        window = matched[params.skip : params.skip + params.limit]
+        return paginate([*window, *self.leak], len(matched) + len(self.leak), params)
 
     async def update(self, model: _Row) -> _Row:
         stored = model.model_copy(deep=True)
@@ -63,9 +84,9 @@ class _FakeRepository:
         return None
 
     async def find_many(self, field: str, value: Any, *, limit: int = MAX_PAGE_SIZE) -> Sequence[_Row]:
-        return [model for model in self._documents.values() if model.is_active and getattr(model, field, None) == value][
-            : max(0, min(limit, MAX_PAGE_SIZE))
-        ]
+        return [
+            model for model in self._documents.values() if model.is_active and getattr(model, field, None) == value
+        ][: max(0, min(limit, MAX_PAGE_SIZE))]
 
 
 def _scoped(tenant_id: str = "acme") -> tuple[TenantScopedRepository[_Row], _FakeRepository]:
@@ -129,6 +150,53 @@ async def test_list_pages_only_the_bound_tenant() -> None:
     assert page.total == 2
 
 
+async def test_list_stamps_the_bound_tenant_into_the_selector_the_backend_pages() -> None:
+    """The backend pages a tenant-stamped selector: one driver query per page (spec 0050)."""
+    scoped, inner = _scoped()
+
+    await scoped.list(_params(page=3, size=25))
+
+    assert inner.list_where_calls == [{TENANT_ID_FIELD: "acme"}]
+
+
+async def test_list_where_adds_the_tenant_to_business_field_filters() -> None:
+    """A business-field filter reaches the backend ANDed with the bound tenant."""
+    scoped, inner = _scoped()
+    await scoped.insert(_Row(name="hook"))
+    await scoped.insert(_Row(name="other"))
+    await inner.insert(_Row(name="hook", tenant_id="globex"))
+
+    page = await scoped.list_where({NAME_FIELD: "hook"}, _params())
+
+    assert inner.list_where_calls == [{NAME_FIELD: "hook", TENANT_ID_FIELD: "acme"}]
+    assert [row.tenant_id for row in page.items] == ["acme"]
+    assert page.total == 1
+
+
+async def test_list_where_for_a_foreign_or_missing_tenant_never_consults_the_backend() -> None:
+    """A tenant filter that is not the binding short-circuits to an empty page before I/O."""
+    scoped, inner = _scoped()
+    await scoped.insert(_Row(name="a-1"))
+
+    foreign = await scoped.list_where({TENANT_ID_FIELD: "globex"}, _params())
+    legacy = await scoped.list_where({TENANT_ID_FIELD: None}, _params())
+
+    assert (foreign.items, foreign.total) == ([], 0)
+    assert (legacy.items, legacy.total) == ([], 0)
+    assert inner.list_where_calls == []
+
+
+async def test_list_where_drops_rows_a_misbehaving_backend_leaks() -> None:
+    """Defense in depth: foreign or inactive rows in a page never leave the scoped view."""
+    scoped, inner = _scoped()
+    own = await scoped.insert(_Row(name="a-1"))
+    inner.leak = [_Row(name="g-1", tenant_id="globex"), _Row(name="a-dead", tenant_id="acme", is_active=False)]
+
+    page = await scoped.list(_params())
+
+    assert [row.id for row in page.items] == [own.id]
+
+
 async def test_update_and_delete_reject_foreign_rows_opaquely() -> None:
     """Cross-tenant writes fail as not-found; the row is untouched."""
     scoped, inner = _scoped()
@@ -174,3 +242,32 @@ async def test_scoped_view_satisfies_the_repository_protocol() -> None:
     view: BaseRepository[_Row] = scoped
 
     assert await view.get("missing") is None
+
+
+async def test_walk_pages_sends_one_stamped_selector_per_page_and_stops() -> None:
+    """The walker pages the tenant-stamped selector once per page and stops when ``has_next`` is false."""
+    scoped, inner = _scoped()
+    for index in range(MAX_PAGE_SIZE + 1):
+        await scoped.insert(_Row(name=f"n-{index}"))
+
+    rows = [row async for row in walk_pages(scoped)]
+    nothing = [row async for row in walk_pages(scoped, {NAME_FIELD: "absent"})]
+
+    assert len(rows) == MAX_PAGE_SIZE + 1
+    assert nothing == []
+    assert inner.list_where_calls == [
+        {TENANT_ID_FIELD: "acme"},
+        {TENANT_ID_FIELD: "acme"},
+        {NAME_FIELD: "absent", TENANT_ID_FIELD: "acme"},
+    ]
+
+
+async def test_walk_pages_stops_on_an_empty_page_from_a_leaking_backend() -> None:
+    """A backend whose total counts rows the view drops cannot spin the walker forever."""
+    scoped, inner = _scoped()
+    inner.leak = [_Row(id=f"foreign-{index}", tenant_id="globex") for index in range(MAX_PAGE_SIZE + 1)]
+
+    rows = [row async for row in walk_pages(scoped)]
+
+    assert rows == []
+    assert len(inner.list_where_calls) == 1

@@ -7,11 +7,25 @@ directly it asks Talko (Tata Tele) to dial:
         -> Talko POST /call {enable_ai_bridge: true, dedicated_did,
                              context_data: {voiceai_agent_id}}
         -> Tata dials the customer; on answer Tata streams media to Talko's
-           PSTN socket, which relays it to /chat/v1/{agent_id} (see
-           talko-service src/components/pstn/voiceai_relay.py).
+           PSTN socket, which relays it to the agent's call socket on the
+           single app (see talko-service src/components/pstn/voiceai_relay.py).
 
 No TwiML/connect callback is needed: Tata's stream URL is Talko's static
 PSTN endpoint (vendor_config callback), not a per-call URL like Twilio.
+
+This trunk builds no websocket URL and holds no voiceai credential: the relay
+in talko-service opens the media socket, so it must speak the single app's
+contract (spec 0054; the quickstart contract it was written against is retired):
+
+    mint    POST {VOICEAI_API_BASE_URL}/auth/ws-ticket, Bearer VOICEAI_API_KEY
+            -> the ticket is at ["data"]["ticket"] of the JSON envelope
+    socket  {VOICEAI_WS_BASE_URL}/chat/v1/{agent_id}?ticket=<ticket>
+            (the parameter is `ticket`; `token` is closed with code 4401)
+
+with VOICEAI_API_BASE_URL = http://voiceai-app:5001/api/v1 and
+VOICEAI_WS_BASE_URL = ws://voiceai-app:5001/api/v1 in talko-service's
+environment (both carry the /api/v1 prefix — bare paths are gone), and
+VOICEAI_API_KEY an API key whose owner's role carries calls:write.
 
 Env:
     TALKO_API_BASE_URL  e.g. http://talko-service:8003/talko-service/v1

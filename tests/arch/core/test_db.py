@@ -32,6 +32,39 @@ class TestCreateDb:
             create_db(env)
         assert raised.value.details["path"] == "DB_BACKEND"
 
+    def test_mongo_url_alone_selects_the_mongo_backend(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Spec 0048 runbook: `MONGO_URL` is the documented knob; `DB_URL` is only a legacy alias."""
+        built: list[tuple[str, str]] = []
+
+        def fake_motor(url: str, name: str) -> object:
+            built.append((url, name))
+            return object()
+
+        monkeypatch.setattr("voiceai.core.db.MotorDatabase", fake_motor)
+        env = arch_environment.model_copy(
+            update={"db_backend": "mongo", "db_url": "", "mongo_url": "mongodb://atlas:27017"}
+        )
+        create_db(env)
+        assert built == [("mongodb://atlas:27017", env.db_name)]
+
+    def test_mongo_url_wins_over_the_legacy_db_url(
+        self, arch_environment: Environment, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        built: list[str] = []
+
+        def fake_motor(url: str, name: str) -> object:
+            built.append(url)
+            return object()
+
+        monkeypatch.setattr("voiceai.core.db.MotorDatabase", fake_motor)
+        env = arch_environment.model_copy(
+            update={"db_backend": "mongo", "db_url": "mongodb://legacy:27017", "mongo_url": "mongodb://atlas:27017"}
+        )
+        create_db(env)
+        assert built == ["mongodb://atlas:27017"]
+
     def test_unknown_backend_fails_at_startup(self, arch_environment: Environment) -> None:
         env = arch_environment.model_copy(update={"db_backend": "mongo"})
         object.__setattr__(env, "db_backend", "postgres")
