@@ -794,12 +794,22 @@ async def _load_graph(store: MemoryStore, graph_id: str) -> GraphDoc:
 
 
 def _parse_definition(raw: dict) -> GraphDefinition:
+    """Validate a stored graph definition, raising an opaque 422 on failure.
+
+    The 422 detail carries dotted locations plus pydantic error types only
+    (via `common.responses.public_validation_errors`) — never validator `msg`
+    text, which can embed input for some error types (spec 0052, error opacity).
+    """
     from pydantic import ValidationError as PydanticValidationError
+
+    from voiceai.common.responses import public_validation_errors
 
     try:
         return GraphDefinition(**raw)
     except PydanticValidationError as exc:
-        details = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in exc.errors())
+        details = "; ".join(
+            f"{'.'.join(map(str, r['loc']))}: {r['type']}" for r in public_validation_errors(exc.errors())
+        )
         raise HTTPException(status_code=422, detail=f"Invalid graph definition: {details}")
 
 
@@ -940,12 +950,22 @@ async def _load_workflow(store: MemoryStore, workflow_id: str):
 
 
 def _parse_workflow_definition(raw: dict) -> WorkflowDefinition:
+    """Validate a stored workflow definition, raising an opaque 422 on failure.
+
+    The 422 detail carries dotted locations plus pydantic error types only
+    (via `common.responses.public_validation_errors`) — never validator `msg`
+    text, which can embed input for some error types (spec 0052, error opacity).
+    """
     from pydantic import ValidationError as PydanticValidationError
+
+    from voiceai.common.responses import public_validation_errors
 
     try:
         return WorkflowDefinition(**raw)
     except PydanticValidationError as exc:
-        details = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in exc.errors())
+        details = "; ".join(
+            f"{'.'.join(map(str, r['loc']))}: {r['type']}" for r in public_validation_errors(exc.errors())
+        )
         raise HTTPException(status_code=422, detail=f"Invalid workflow definition: {details}")
 
 

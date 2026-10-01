@@ -22,6 +22,7 @@ Run: ``uvicorn twilio_api_server:app --port 8001 --app-dir local_setup/telephony
 the ngrok tunnel named ``twilio-app``.
 """
 
+import concurrent.futures
 import logging
 import os
 
@@ -34,6 +35,7 @@ from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from trunk_bridge import (
     CALL_REF_PARAM,
+    CARRIER_DIAL_TIMEOUT_S,
     MEDIA_WS_PATH,
     BridgeSettings,
     CarrierRejectedError,
@@ -98,18 +100,26 @@ def make_call(call_details: CallDetails) -> PlainTextResponse:
     settings.require_configured()
     public_url = resolve_public_url(TUNNEL_NAME)
     call_ref = pending_dials.register(call_details.agent_id, public_url)
+    dial_url = answer_url(public_url, CONNECT_PATH, call_ref)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        twilio_client.calls.create(
-            to=call_details.recipient_phone_number,
-            from_=twilio_phone_number,
-            url=answer_url(public_url, CONNECT_PATH, call_ref),
-            method="POST",
-            record=True,
+        future = executor.submit(
+            lambda: twilio_client.calls.create(
+                to=call_details.recipient_phone_number,
+                from_=twilio_phone_number,
+                url=dial_url,
+                method="POST",
+                record=True,
+            )
         )
-    except Exception as exc:  # noqa: BLE001 - any SDK failure is one refused dial
-        pending_dials.claim(call_ref)
-        logger.warning("twilio dial failed for agent %s (%s)", call_details.agent_id, type(exc).__name__)
-        raise CarrierRejectedError() from exc
+        try:
+            future.result(timeout=CARRIER_DIAL_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - any SDK failure or dial timeout is one refused dial
+            pending_dials.claim(call_ref)
+            logger.warning("twilio dial failed for agent %s (%s)", call_details.agent_id, type(exc).__name__)
+            raise CarrierRejectedError() from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     logger.info("twilio dial placed for agent %s", call_details.agent_id)
     return PlainTextResponse("done", status_code=200)
 

@@ -36,11 +36,13 @@ def wire_tool_list(tools: list[ToolDefinition]) -> dict[str, Any]:
 
 
 def validation_field_paths(exc: ValidationError) -> list[str]:
-    """Reduce a validation failure to its dotted field paths (spec 0049).
+    """Reduce a validation failure to its dotted field paths (spec 0049, hardened spec 0052).
 
     Locations are client-safe (they name the schema, not the input); the
     messages are not (pydantic echoes the offending value), so only the
-    locations leave this function.
+    locations leave this function. A record without a `loc` sequence contributes
+    nothing instead of raising `KeyError`, so a malformed record can never turn
+    a 400 into a 500.
 
     Args:
         exc: The pydantic failure.
@@ -48,4 +50,10 @@ def validation_field_paths(exc: ValidationError) -> list[str]:
     Returns:
         Sorted, de-duplicated dotted paths such as `["kind", "parameters.x"]`.
     """
-    return sorted({".".join(str(part) for part in error["loc"]) for error in exc.errors()})
+    paths: set[str] = set()
+    for error in exc.errors():
+        raw_loc: Any = error.get("loc", ())
+        loc: tuple[Any, ...] | list[Any] = raw_loc if isinstance(raw_loc, (list, tuple)) else ()
+        if loc:
+            paths.add(".".join(str(part) for part in loc))
+    return sorted(paths)

@@ -282,8 +282,13 @@ def _public_loc_segment(segment: object) -> str | int:
         segment: A field name, a list index, or (rarely) another hashable key.
 
     Returns:
-        The segment unchanged when it is a `str` or an `int`; its `str()` otherwise.
+        The segment unchanged when it is a `str` or a non-`bool` `int`; its `str()`
+        otherwise. `bool` is checked first because it subclasses `int` — without the
+        guard `True` would survive as `1` and misaddress a list index (spec 0052
+        hardening).
     """
+    if isinstance(segment, bool):
+        return str(segment)
     if isinstance(segment, str | int):
         return segment
     return str(segment)
@@ -303,15 +308,21 @@ def public_validation_errors(errors: Iterable[Mapping[str, Any]]) -> list[dict[s
 
     Returns:
         One `{"loc": [...], "type": "..."}` mapping per record, in the same order. `loc` holds
-        field names and list indexes; `type` is the pydantic error type (e.g. `missing`).
+        field names and list indexes (`[]` when missing or not a `list`/`tuple`, so a `None`
+        or `str` location never escapes); `type` is the pydantic error type (`""` when
+        missing or `None`).
     """
-    return [
-        {
-            VALIDATION_KEY_LOC: [_public_loc_segment(segment) for segment in record.get(VALIDATION_KEY_LOC, ())],
-            VALIDATION_KEY_TYPE: str(record.get(VALIDATION_KEY_TYPE, "")),
-        }
-        for record in errors
-    ]
+    reduced: list[dict[str, Any]] = []  # why: JSON-able per-record allow-list
+    for record in errors:
+        raw_loc: Any = record.get(VALIDATION_KEY_LOC, ())  # why: pydantic loc is untyped
+        if isinstance(raw_loc, (list, tuple)):
+            loc: list[str | int] = [_public_loc_segment(segment) for segment in raw_loc]
+        else:
+            loc = []
+        raw_type: Any = record.get(VALIDATION_KEY_TYPE, "")  # why: pydantic type is untyped
+        typ: str = "" if raw_type is None else str(raw_type)
+        reduced.append({VALIDATION_KEY_LOC: loc, VALIDATION_KEY_TYPE: typ})
+    return reduced
 
 
 async def _validation_exception_handler(request: Request, exc: Exception) -> Response:

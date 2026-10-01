@@ -56,6 +56,7 @@ WS_TICKET_PATH = "/api/v1/auth/ws-ticket"
 CHAT_WS_PATH = "/api/v1/chat/v1/{agent_id}"
 WS_TICKET_PARAM = "ticket"
 TICKET_TIMEOUT_S = 10
+WS_CONNECT_TIMEOUT_S = 10
 WS_SCHEMES = {"http": "ws", "https": "wss"}
 
 
@@ -82,7 +83,13 @@ def mint_ws_ticket(api_url, api_key):
         timeout=TICKET_TIMEOUT_S,
     )
     response.raise_for_status()
-    return response.json()["data"]["ticket"]
+    try:
+        ticket = response.json()["data"]["ticket"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("Ticket mint failed.") from exc
+    if not isinstance(ticket, str) or not ticket:
+        raise RuntimeError("Ticket mint failed.")
+    return ticket
 
 # Audio queue to store audio frames
 input_queue = asyncio.Queue()
@@ -205,7 +212,7 @@ async def main():
     # and never log the URL that carries it.
     uri = chat_uri(api_url, assistant_id, mint_ws_ticket(api_url, api_key))
     stream = start_audio_stream()  # keep a reference: the output stream plays until exit
-    async with websockets.connect(uri, open_timeout=None) as ws:
+    async with websockets.connect(uri, open_timeout=WS_CONNECT_TIMEOUT_S) as ws:
         global play_audio_task
         tasks = [microphone(), emitter(ws), receiver(ws)]
         play_audio_task = asyncio.create_task(play_audio())

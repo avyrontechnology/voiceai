@@ -280,6 +280,9 @@ class TestHealthProbesTheCacheClient:
         container = build_container(arch_environment)
         container.redis_cache.override(providers.Object(fake_redis))
 
+        assert container.health_repository()._redis is fake_redis
+        assert container.auth_store()._cache is fake_redis
+
         component = await container.health_repository().probe_redis()
 
         assert component.state is HealthState.UP
@@ -341,9 +344,9 @@ def test_container_override_fixture_swaps_a_built_dependency(
 ) -> None:
     """The fixture peers use to inject fakes must survive an already-built container."""
     container = build_container(arch_environment)
-    assert container.redis_client() is None
+    assert container.redis_cache() is None
     container_override(container, "redis", fake_redis)
-    assert cast("Any", container.redis_client()) is fake_redis
+    assert cast("Any", container.redis_cache()) is fake_redis
 
 
 class _FakeMotorDatabase:

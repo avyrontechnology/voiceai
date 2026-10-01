@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from voiceai.common.constants import MAX_PAGE_SIZE
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.chat import constants as C
 from voiceai.modules.chat.models import ChatSession
 
@@ -59,6 +59,9 @@ class ChatSessionsRepository:
     async def list_sessions(self, agent_id: str, *, limit: int = MAX_PAGE_SIZE) -> Sequence[ChatSession]:
         """Return active sessions for one agent, oldest first, bounded.
 
+        Walks every driver page for this tenant's matches (spec 0050), so an
+        agent history past one page loses no row; `limit` is a post-filter cap.
+
         Args:
             agent_id: The agent whose histories to list.
             limit: Maximum rows, clamped to `MAX_PAGE_SIZE`.
@@ -66,5 +69,7 @@ class ChatSessionsRepository:
         Returns:
             This tenant's sessions for the agent (empty when none).
         """
-        rows = await self._store.find_many(C.AGENT_ID_FIELD, agent_id, limit=limit)
-        return [row for row in rows if row.is_active and row.agent_id == agent_id]
+        bounded = max(0, min(limit, MAX_PAGE_SIZE))
+        rows = [row async for row in walk_pages(self._store, {C.AGENT_ID_FIELD: agent_id})]
+        matched = [row for row in rows if row.is_active and row.agent_id == agent_id]
+        return matched[:bounded]

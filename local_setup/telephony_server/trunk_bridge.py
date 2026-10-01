@@ -93,6 +93,11 @@ NGROK_TIMEOUT_S = 5.0
 TICKET_TIMEOUT_S = 10.0
 APP_CONNECT_TIMEOUT_S = 10.0
 RELAY_SEND_TIMEOUT_S = 5.0
+#: Upper bound for one SDK dial on the threadpool; the PendingDials slot is
+#: reclaimed on timeout so a hung carrier cannot pin it until the 300 s TTL.
+CARRIER_DIAL_TIMEOUT_S = 15.0
+#: Upper bound for one bridged leg; a stuck call cannot hold 2 sockets forever.
+RELAY_MAX_DURATION_S = 14400.0
 RELAY_MAX_FRAME_BYTES = 4 * 1024 * 1024
 #: A dial waits this long for its answer (carrier ring timeouts are far shorter).
 PENDING_DIAL_TTL_S = 300.0
@@ -492,17 +497,22 @@ async def relay_media(
         logger.warning("media socket refused: unknown, expired or used call reference")
         await carrier.close(code=WS_CLOSE_POLICY)
         return
-    await carrier.accept()
     try:
+        await carrier.accept()
         ticket = await mint_ticket(settings)
         upstream = await (connector or _open_app_socket)(chat_url(settings.internal_url, dial.agent_id, ticket))
-    except (TrunkError, OSError, asyncio.TimeoutError, ValueError, websockets.WebSocketException) as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any bridge failure is one closed carrier leg
         logger.warning("bridge to agent %s failed (%s)", dial.agent_id, type(exc).__name__)
         await _close_quietly(lambda: carrier.close(code=WS_CLOSE_UPSTREAM))
         return
     logger.info("carrier leg bridged to agent %s", dial.agent_id)
     try:
-        await _pump(carrier, upstream)
+        try:
+            await asyncio.wait_for(_pump(carrier, upstream), RELAY_MAX_DURATION_S)
+        except asyncio.TimeoutError:
+            logger.warning("media relay exceeded max duration for agent %s", dial.agent_id)
     finally:
         await _close_quietly(upstream.close)
         await _close_quietly(carrier.close)

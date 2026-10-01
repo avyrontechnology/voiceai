@@ -19,6 +19,9 @@ DEFAULT_CURRENCY: Final[str] = "credits"
 # --- Listing bounds --------------------------------------------------------------------
 DEFAULT_LEDGER_LIMIT: Final[int] = 50
 
+#: `LedgerEntry` field the ledger listing filters on at the driver (spec 0050).
+ENTRY_TYPE_FIELD: Final[str] = "type"
+
 # --- Log templates (%-style: the logger formats them only when the record is emitted) ---
 TOPUP_LOG: Final[str] = "Topped up wallet by %s credits (entry %s)"
 IMPORT_LOG: Final[str] = "Template %s imported"

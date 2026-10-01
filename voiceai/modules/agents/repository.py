@@ -18,10 +18,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from voiceai.common.constants import MAX_PAGE_SIZE
-from voiceai.common.pagination import PaginationParams
 from voiceai.database.base import BaseFields
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.agents.models.definition import AgentDefinition
 from voiceai.modules.agents.models.prompts import AgentPrompts
 from voiceai.modules.agents.static_methods import collect_agent_records
@@ -70,14 +68,9 @@ class MongoAgentDefinitions:
 
     async def list_agents(self) -> list[dict[str, Any]]:
         """Return every genuine agent record as ``{"agent_id", "data"}`` dicts."""
-        pairs: list[tuple[str, str | None]] = []
-        page_number = 1
-        while True:
-            page = await self._definitions.list(PaginationParams(page=page_number, page_size=MAX_PAGE_SIZE))
-            pairs.extend((record.agent_id, json.dumps(record.config)) for record in page.items)
-            if not page.has_next:
-                break
-            page_number += 1
+        pairs: list[tuple[str, str | None]] = [
+            (record.agent_id, json.dumps(record.config)) async for record in walk_pages(self._definitions)
+        ]
         return collect_agent_records(pairs)
 
 

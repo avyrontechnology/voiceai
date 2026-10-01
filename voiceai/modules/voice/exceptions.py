@@ -17,7 +17,6 @@ from voiceai.modules.voice.constants import (
     AVAILABLE_LABELS_KEY,
     LABEL_KEY,
     PARTNER_ID_KEY,
-    TO_NUMBER_KEY,
     UNKNOWN_LABEL_MESSAGE_TEMPLATE,
 )
 from voiceai.modules.voice.errors import (
@@ -109,7 +108,7 @@ def ensure_talko_partner_known(partner_id: str, record: TalkoPartnerConfig | Non
 
 
 def ensure_recipient_dialable(to_number: str) -> str:
-    """Return dialable digits, converting the static validator's `ValueError`.
+    """Return dialable digits; failures raise a fixed opaque message (spec 0052).
 
     Args:
         to_number: The destination in any common format.
@@ -118,9 +117,9 @@ def ensure_recipient_dialable(to_number: str) -> str:
         The digits-only destination.
 
     Raises:
-        PlaceCallError: When the destination is not dialable.
+        PlaceCallError: Fixed message, empty details (never the number/text).
     """
     try:
         return static_methods.validate_recipient_number(to_number)
     except ValueError as exc:
-        raise PlaceCallError(str(exc), details={TO_NUMBER_KEY: to_number}) from exc
+        raise PlaceCallError("Recipient number is not dialable.", details={}) from exc

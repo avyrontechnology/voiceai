@@ -23,6 +23,7 @@ Run: ``uvicorn plivo_api_server:app --port 8002 --app-dir local_setup/telephony_
 the ngrok tunnel named ``plivo-app``.
 """
 
+import concurrent.futures
 import html
 import logging
 import os
@@ -35,6 +36,7 @@ from pydantic import BaseModel, Field
 
 from trunk_bridge import (
     CALL_REF_PARAM,
+    CARRIER_DIAL_TIMEOUT_S,
     MEDIA_WS_PATH,
     BridgeSettings,
     CarrierRejectedError,
@@ -101,20 +103,29 @@ def make_call(call_details: CallDetails) -> PlainTextResponse:
     settings.require_configured()
     public_url = resolve_public_url(TUNNEL_NAME)
     call_ref = pending_dials.register(call_details.agent_id, public_url)
+    dial_answer_url = answer_url(public_url, CONNECT_PATH, call_ref)
+    dial_hangup_url = f"{public_url}{HANGUP_PATH}"
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         # adding hangup_url since plivo opens a 2nd websocket once the call is cut.
         # https://github.com/bolna-ai/bolna/issues/148#issuecomment-2127980509
-        plivo_client.calls.create(
-            from_=plivo_phone_number,
-            to_=call_details.recipient_phone_number,
-            answer_url=answer_url(public_url, CONNECT_PATH, call_ref),
-            hangup_url=f"{public_url}{HANGUP_PATH}",
-            answer_method="POST",
+        future = executor.submit(
+            lambda: plivo_client.calls.create(
+                from_=plivo_phone_number,
+                to_=call_details.recipient_phone_number,
+                answer_url=dial_answer_url,
+                hangup_url=dial_hangup_url,
+                answer_method="POST",
+            )
         )
-    except Exception as exc:  # noqa: BLE001 - any SDK failure is one refused dial
-        pending_dials.claim(call_ref)
-        logger.warning("plivo dial failed for agent %s (%s)", call_details.agent_id, type(exc).__name__)
-        raise CarrierRejectedError() from exc
+        try:
+            future.result(timeout=CARRIER_DIAL_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - any SDK failure or dial timeout is one refused dial
+            pending_dials.claim(call_ref)
+            logger.warning("plivo dial failed for agent %s (%s)", call_details.agent_id, type(exc).__name__)
+            raise CarrierRejectedError() from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     logger.info("plivo dial placed for agent %s", call_details.agent_id)
     return PlainTextResponse("done", status_code=200)
 

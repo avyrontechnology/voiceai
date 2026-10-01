@@ -147,10 +147,12 @@ def client_factory() -> Callable[..., AsyncClient]:
     return _factory
 
 
-#: Legacy string keys tests use, mapped to the container provider that serves them.
+#: Test override keys mapped to the container provider that serves them.
+#: `redis` maps to `redis_cache` — the one Redis the app uses (spec 0053); the
+#: legacy `redis_client` alias has no production consumer and is never bound here.
 #: Unknown keys fail loudly instead of silently doing nothing.
 _KEY_TO_PROVIDER = {
-    CONTAINER_KEY_REDIS: "redis_client",
+    CONTAINER_KEY_REDIS: "redis_cache",
     CONTAINER_KEY_DB: "db_client",
 }
 

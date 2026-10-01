@@ -20,6 +20,7 @@ from voiceai.common.responses import success_response
 from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.auth import SESSION_COOKIE, AuthService, ensure_permitted, request_principal
 from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.constants import ToolKind
 from voiceai.modules.tools.helpers import wire_tool, wire_tool_list
 from voiceai.modules.tools.schemas import CreateToolPayload, UpdateToolPayload
 from voiceai.modules.tools.service import ToolsService
@@ -56,7 +57,7 @@ async def list_tools(
     request: Request,
     auth: AuthServiceDep,
     service: ServiceDep,
-    kind: Annotated[str | None, Query(description=C.KIND_QUERY_DESCRIPTION)] = None,
+    kind: Annotated[ToolKind | None, Query(description=C.KIND_QUERY_DESCRIPTION)] = None,
 ) -> JSONResponse:
     """List system + own-tenant tools, optionally narrowed by kind (`platform:read`)."""
     await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)

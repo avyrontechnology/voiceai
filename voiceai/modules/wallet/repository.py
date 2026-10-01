@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+from typing import Protocol
 
 from voiceai.database.repository import BaseRepository, walk_pages
-from voiceai.modules.wallet.constants import DEFAULT_LEDGER_LIMIT, SINGLETON_WALLET_ID
+from voiceai.modules.wallet.constants import DEFAULT_LEDGER_LIMIT, ENTRY_TYPE_FIELD, SINGLETON_WALLET_ID
 from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
-
-#: `LedgerEntry` field the ledger listing filters on at the driver (spec 0050).
-_ENTRY_TYPE_FIELD: Final[str] = "type"
 
 
 class WalletRepository(Protocol):
@@ -90,7 +87,7 @@ class MongoWalletRepository:
         """
         if limit <= 0:
             return []
-        filters = {_ENTRY_TYPE_FIELD: entry_type} if entry_type else None
+        filters = {ENTRY_TYPE_FIELD: entry_type} if entry_type else None
         entries = [entry async for entry in walk_pages(self._ledger, filters)]
         return list(reversed(entries[-limit:]))
 

@@ -21,7 +21,7 @@ from voiceai.common.datetime_utils import utc_now
 from voiceai.common.logger import get_logger
 from voiceai.common.pagination import PaginationParams
 from voiceai.database.base import BaseFields
-from voiceai.database.repository import BaseRepository
+from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.models.apikey import ApiKey
 from voiceai.modules.auth.models.audit import AuthEvent
@@ -104,14 +104,7 @@ class MongoAuthStore:
 
     async def _all(self, repo: BaseRepository[Any]) -> list[Any]:  # why: heterogeneous owned collections
         """Return every active document of a collection, oldest first."""
-        items: list[Any] = []  # why: heterogeneous owned collections
-        page_number = 1
-        while True:
-            page = await repo.list(PaginationParams(page=page_number, page_size=_PAGE_SIZE))
-            items.extend(page.items)
-            if not page.has_next:
-                return items
-            page_number += 1
+        return [row async for row in walk_pages(repo)]
 
     async def save_user(self, user: User) -> None:
         """Persist a user (insert or replace) keyed by `user_id`."""

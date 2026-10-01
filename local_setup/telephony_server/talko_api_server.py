@@ -34,12 +34,15 @@ Env:
     TALKO_PARTNER_ID    Default partner_id (overridable per request)
 """
 
+import logging
 import os
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("trunk.talko")
 
 app = FastAPI()
 load_dotenv()
@@ -124,9 +127,11 @@ async def make_call(call_details: TalkoCallDetails):
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post("{}/call".format(talko_api_base_url), headers=_headers(api_key), json=body)
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail="talko-service unreachable: {}".format(e))
+        logger.warning("talko-service unreachable (%s)", type(e).__name__)
+        raise HTTPException(status_code=502, detail="talko-service unreachable.") from e
     if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail="talko-service rejected dial: {}".format(resp.text[:500]))
+        logger.warning("talko-service rejected dial (HTTP %s)", resp.status_code)
+        raise HTTPException(status_code=502, detail="talko-service rejected the request.")
     return {"status": "initiated", "talko_response": resp.json()}
 
 
@@ -146,9 +151,11 @@ async def hangup_call(details: TalkoHangupDetails):
                 json={"call_id": details.call_id, "enable_ai_bridge": True},
             )
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail="talko-service unreachable: {}".format(e))
+        logger.warning("talko-service unreachable (%s)", type(e).__name__)
+        raise HTTPException(status_code=502, detail="talko-service unreachable.") from e
     if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail="talko-service rejected hangup: {}".format(resp.text[:500]))
+        logger.warning("talko-service rejected hangup (HTTP %s)", resp.status_code)
+        raise HTTPException(status_code=502, detail="talko-service rejected the request.")
     return {"status": "ok", "talko_response": resp.json()}
 
 
@@ -164,4 +171,5 @@ async def talko_health():
             resp = await client.get("{}/health".format(talko_api_base_url))
         return {"talko_reachable": resp.status_code == 200, "talko_status": resp.json()}
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail="talko-service unreachable: {}".format(e))
+        logger.warning("talko-service unreachable (%s)", type(e).__name__)
+        raise HTTPException(status_code=502, detail="talko-service unreachable.") from e

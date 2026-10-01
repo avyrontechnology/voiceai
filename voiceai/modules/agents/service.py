@@ -22,7 +22,9 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from voiceai.common.constants import VALIDATION_KEY_LOC, VALIDATION_KEY_TYPE
 from voiceai.common.errors import DependencyUnavailableError
+from voiceai.common.responses import public_validation_errors
 from voiceai.modules.agents.constants import (
     AGENT_ID_KEY,
     AGENT_NOT_FOUND_MESSAGE,
@@ -98,18 +100,28 @@ _LOG_UPDATING_AGENT: Final[str] = "updating agent %s"
 _LOG_EXTRACTION_SETUP: Final[str] = "Setting up follow up tasks"
 
 
-def _dotted_location(loc: tuple[int | str, ...]) -> str:
+def _dotted_location(loc: tuple[Any, ...] | list[Any]) -> str:
     """Render a pydantic error location in the audit walk's dotted style.
 
+    `bool` segments render as text: `bool` subclasses `int`, so without the
+    guard `True` would format as `[1]` and misaddress a list index (spec 0052
+    hardening, mirroring `common.responses._public_loc_segment`).
+
     Args:
-        loc: The `loc` tuple from one `ValidationError` entry.
+        loc: The `loc` sequence from one reduced validation record.
 
     Returns:
         `tasks[0].task_config.extensions` for the usual nesting, `agent` when empty.
     """
     parts: list[str] = []
     for element in loc:
-        if isinstance(element, int):
+        if isinstance(element, bool):
+            text: str = str(element)
+            if parts:
+                parts.append(f".{text}")
+            else:
+                parts.append(text)
+        elif isinstance(element, int):
             parts.append(f"[{element}]")
         elif parts:
             parts.append(f".{element}")
@@ -119,13 +131,16 @@ def _dotted_location(loc: tuple[int | str, ...]) -> str:
 
 
 def _patch_validation_error(agent_id: str, exc: ValidationError) -> AgentConfigInvalidError:
-    """Map a PATCH revalidation failure to a client-safe 400 (spec 0043 Slice C).
+    """Map a PATCH revalidation failure to a client-safe 400 (spec 0043 Slice C, spec 0052).
 
-    Errors rooted at the reserved `extensions` namespace surface as key-names-only
-    problems (location + the schema rule — the Slice A validator names offending KEY
-    names only, never values), never the raw pydantic text (which echoes inputs).
-    Errors elsewhere keep the existing envelope byte-identical. Failed validation
-    writes nothing: this raises before the service reaches any store call.
+    Both branches are opaque: problems carry dotted locations plus pydantic error
+    types only — never `str(exc)` (which echoes `input_value` and the docs URL)
+    and never validator `msg` text (which can embed input). The `extensions`
+    branch additionally names the offending KEY names (from the input mapping's
+    keys only, never values), preserving Slice C's key-names-only contract that
+    the task's bare `f"{where}: {type}"` would drop (the `loc` for a dict-level
+    validator names the field, not the key). Failed validation writes nothing:
+    this raises before the service reaches any store call.
 
     Args:
         agent_id: The patched agent, carried for log correlation.
@@ -134,15 +149,28 @@ def _patch_validation_error(agent_id: str, exc: ValidationError) -> AgentConfigI
     Returns:
         The `AgentConfigInvalidError` the caller raises.
     """
-    if EXTENSIONS_KEY not in [element for err in exc.errors() for element in err.get("loc", ())]:
-        return AgentConfigInvalidError(str(exc), details={"agent_id": agent_id})
-    problems: list[str] = []
-    for err in exc.errors():
-        where = _dotted_location(err.get("loc", ()))
-        problems.append(f"{where}: {err.get('msg', 'invalid agent configuration')}")
+    raw_errors: list[Any] = exc.errors()  # why: pydantic error dicts are untyped
+    public: list[dict[str, Any]] = public_validation_errors(raw_errors)  # why: allow-listed loc+type
+    if EXTENSIONS_KEY not in [segment for record in public for segment in record.get(VALIDATION_KEY_LOC, [])]:
+        problems: list[str] = [
+            f"{_dotted_location(tuple(record.get(VALIDATION_KEY_LOC, [])))}: {record.get(VALIDATION_KEY_TYPE, '')}"
+            for record in public
+        ]
+        return AgentConfigInvalidError("; ".join(problems), details={AGENT_ID_KEY: agent_id})
+    extension_problems: list[str] = []
+    for raw, record in zip(raw_errors, public, strict=False):
+        where: str = _dotted_location(tuple(record.get(VALIDATION_KEY_LOC, [])))
+        typ: str = str(record.get(VALIDATION_KEY_TYPE, ""))
+        raw_input: Any = raw.get("input")  # why: pydantic record key, keys-only use below
+        if isinstance(raw_input, Mapping):
+            keys: list[str] = sorted(str(key) for key in raw_input.keys())
+            if keys:
+                extension_problems.append(f"{where} [{', '.join(keys)}]: {typ}")
+                continue
+        extension_problems.append(f"{where}: {typ}")
     return AgentConfigInvalidError(
-        "; ".join(problems),
-        details={"problems": problems, "agent_id": agent_id},
+        "; ".join(extension_problems),
+        details={"problems": extension_problems, "agent_id": agent_id},
     )
 
 

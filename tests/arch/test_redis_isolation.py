@@ -93,7 +93,6 @@ async def test_full_password_flow_costs_four_cache_touches(isolated_app: FastAPI
     """
     container = isolated_app.state.container
     cache = CountingCache()
-    container.redis_client.override(providers.Object(cache))
     container.redis_cache.override(providers.Object(cache))
     async with client_factory(isolated_app) as client:
         data = await _signup_and_login(client)
