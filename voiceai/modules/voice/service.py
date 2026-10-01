@@ -403,7 +403,7 @@ class VoiceCallService:
         if payload.talko_api_base_url is not None:
             record.talko_api_base_url = payload.talko_api_base_url
         if payload.talko_api_key:
-            record.talko_api_key = payload.talko_api_key
+            record.talko_api_key = payload.talko_api_key.strip()
         if payload.default_did is not None:
             record.default_did = static_methods.normalize_did_digits(payload.default_did)
         if payload.dids is not None:
@@ -459,7 +459,11 @@ class VoiceCallService:
         base = (self._talko_service_base_url or "").rstrip("/")
         if not base:
             raise PlaceCallError("Talko service base URL is not configured.")
-        preview = await self._outbound.fetch_partner_dids(talko_api_key=talko_api_key, talko_api_base_url=base)
+        # Pasted keys routinely carry a trailing space/newline; talko-service
+        # rejects the untrimmed value with a 401 that looks like a wrong key.
+        preview = await self._outbound.fetch_partner_dids(
+            talko_api_key=talko_api_key.strip(), talko_api_base_url=base
+        )
         return TalkoPartnerPreview(
             partner_id=preview.get("partner_id"),
             dids=list(preview.get("dids") or []),
@@ -488,12 +492,15 @@ class VoiceCallService:
 
             raise PlaceCallError("Talko returned no DIDs to derive a partner from; pass partner_id explicitly.")
         self._require_place_store()
+        # Store the trimmed key (preview already validated it trimmed): a pasted
+        # trailing space must not poison refresh/dial calls later.
+        api_key = payload.talko_api_key.strip()
         existing = await self._place_repository.get_partner(partner_id)  # type: ignore[union-attr]
         if existing is None:
             record = TalkoPartnerConfig(
                 partner_id=partner_id,
                 display_name=payload.display_name or f"Partner {partner_id}",
-                talko_api_key=payload.talko_api_key,
+                talko_api_key=api_key,
                 default_did=preview.dids[0] if preview.dids else None,
                 dids=list(preview.dids),
             )
@@ -501,7 +508,7 @@ class VoiceCallService:
             record = existing
             if payload.display_name:
                 record.display_name = payload.display_name
-            record.talko_api_key = payload.talko_api_key
+            record.talko_api_key = api_key
             merged = list(record.dids) + [d for d in preview.dids if d not in record.dids]
             record.dids = merged
             if not record.default_did and merged:

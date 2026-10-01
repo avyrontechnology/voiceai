@@ -103,4 +103,6 @@ def talko_partner_view(partner: TalkoPartnerConfig) -> TalkoPartnerView:
         vendor_config_id=partner.vendor_config_id,
         key_configured=bool(key),
         key_hint=key[-4:] if key else None,
+        created_at=partner.created_at.isoformat() if partner.created_at is not None else "",
+        updated_at=partner.updated_at.isoformat() if partner.updated_at is not None else "",
     )

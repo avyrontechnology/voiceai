@@ -81,6 +81,9 @@ class VoiceContract:
         vendor_config_id: str | None = None
         key_configured: bool = False
         key_hint: str | None = None
+        #: Row timestamps, ISO-8601 UTC (never omitted; "" predates the field).
+        created_at: str = ""
+        updated_at: str = ""
 
     class TalkoPartnerListResponse(BaseModel):
         """Paginated-list envelope for partner records (spec 0008)."""
