@@ -247,11 +247,13 @@ class OutboundDialBridge:
         *,
         talko_api_key: str,
         talko_api_base_url: str,
+        partner_id_hint: str | None = None,
     ) -> PartnerPreview:
         """Validate a partner key and fetch its DIDs (spec 0009)."""
         return await fetch_partner_dids(
             talko_api_key=talko_api_key,
             talko_api_base_url=talko_api_base_url,
+            partner_id_hint=partner_id_hint,
         )
 
     async def start_simulated_call_background(
@@ -284,11 +286,16 @@ async def fetch_partner_dids(
     *,
     talko_api_key: str,
     talko_api_base_url: str,
+    partner_id_hint: str | None = None,
 ) -> PartnerPreview:
     """Validate a partner key and fetch its DIDs from talko-service (spec 0009).
 
-    Side-effect free: a single bounded GET against the permission-checked
-    `list-dids` endpoint, which returns only the key's own partner scope.
+    Side-effect free: a bounded GET against the permission-checked
+    `list-dids` endpoint, which returns only the key's own partner scope,
+    plus — when a partner hint is known — the public `list-ai-agent-dids`
+    endpoint. AI-agent DIDs (agent_bot_id=0, e.g. 917965263087 for partner 2)
+    live ONLY in the latter; without this fallback preview/connect shows
+    "No DIDs fetched yet" even though Talko has the DID.
     Nothing is persisted here; the service decides what to store.
 
     Args:
@@ -296,10 +303,12 @@ async def fetch_partner_dids(
             never logged — failures carry status codes, never the key).
         talko_api_base_url: Service base URL (from `Environment`, never from
             the request — callers must not steer outbound hosts).
+        partner_id_hint: Explicit partner id (connect payload / refresh path).
+            Authoritative when list-dids yields no partner_id.
 
     Returns:
-        Partner id (derived from the first DID) and digits-normalized DIDs,
-        Mapped status first.
+        Partner id (derived from the first DID, else the hint) and
+        digits-normalized DIDs, Mapped status first.
 
     Raises:
         PlaceCallError: The key is rejected (upstream 401).
@@ -310,7 +319,12 @@ async def fetch_partner_dids(
 
     from voiceai.common.errors import DependencyUnavailableError
     from voiceai.modules.voice import static_methods
-    from voiceai.modules.voice.constants import TALKO_DIDS_PAGE_SIZE, TALKO_DIDS_PATH, TALKO_FETCH_TIMEOUT_S
+    from voiceai.modules.voice.constants import (
+        TALKO_AI_AGENT_DIDS_PATH,
+        TALKO_DIDS_PAGE_SIZE,
+        TALKO_DIDS_PATH,
+        TALKO_FETCH_TIMEOUT_S,
+    )
     from voiceai.modules.voice.errors import PlaceCallError
 
     url = f"{talko_api_base_url.rstrip('/')}{TALKO_DIDS_PATH}"
@@ -321,6 +335,19 @@ async def fetch_partner_dids(
                 params={"limit": TALKO_DIDS_PAGE_SIZE},
                 headers={"API-KEY": talko_api_key},
             )
+            ai_items: list[dict] = []
+            # AI-agent pool fallback: needs explicit partner_id (endpoint is
+            # public + partner-scoped). Skip silently when unknown — the
+            # normal pool result below still stands on its own.
+            if partner_id_hint:
+                try:
+                    ai_url = f"{talko_api_base_url.rstrip('/')}{TALKO_AI_AGENT_DIDS_PATH}"
+                    ai_resp = await client.get(ai_url, params={"partner_id": partner_id_hint})
+                    if ai_resp.status_code < 400:
+                        ai_payload = ai_resp.json()
+                        ai_items = (ai_payload.get("data") or {}).get("dids") or []
+                except Exception:
+                    ai_items = []
     except httpx.HTTPError as exc:
         raise DependencyUnavailableError(
             "Talko service unreachable during partner fetch.",
@@ -343,6 +370,9 @@ async def fetch_partner_dids(
             cause=exc,
         ) from exc
     items = (payload.get("data") or {}).get("dids") or []
+    # Merge AI-agent DIDs (dedupe by digits later via normalized sort).
+    if ai_items:
+        items = [*items, *[i for i in ai_items if isinstance(i, dict)]]
     normalized: list[tuple[str, str]] = []
     for item in items:
         if not isinstance(item, dict):
@@ -358,6 +388,8 @@ async def fetch_partner_dids(
         if candidate is not None:
             partner_id = str(candidate)
             break
+    if partner_id is None and partner_id_hint and dids:
+        partner_id = str(partner_id_hint)
     return PartnerPreview(partner_id=partner_id, dids=dids)
 
 

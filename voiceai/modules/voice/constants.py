@@ -180,6 +180,10 @@ PARTNERS_CONNECT_PATH: Final[str] = "/talko/partners/connect"
 PARTNER_REFRESH_PATH: Final[str] = "/talko/partners/{partner_id}/refresh"
 #: Talko-service DID listing, relative to the service base URL.
 TALKO_DIDS_PATH: Final[str] = "/dids/list-dids"
+#: Talko-service AI-agent DID listing (partner-scoped, public; needs ?partner_id=).
+#: Partner 2 style DIDs (agent_bot_id=0, engine-routed) live here, NOT in
+#: list-dids — without this fallback preview/connect shows "No DIDs fetched".
+TALKO_AI_AGENT_DIDS_PATH: Final[str] = "/dids/list-ai-agent-dids"
 #: Bounded fetch page (partner DID sets are small; one page suffices).
 TALKO_DIDS_PAGE_SIZE: Final[int] = 200
 #: Outbound HTTP bound for the partner-DID fetch (AGENTS.md §4: timeouts mandatory).

@@ -137,6 +137,56 @@ async def test_fetch_partner_dids_maps_and_orders(monkeypatch) -> None:
     assert preview["partner_id"] == "7"
 
 
+async def test_fetch_partner_dids_ai_agent_fallback_with_hint(monkeypatch) -> None:
+    """AI-agent DIDs (list-ai-agent-dids) merge when list-dids is empty (partner 2)."""
+    calls: list[str] = []
+
+    class _ListDidsEmpty:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {"data": {"dids": []}}
+
+    class _AiAgentOne:
+        status_code = 200
+
+        def json(self) -> Any:
+            return {
+                "data": {
+                    "dids": [
+                        {"did_number": "917965263087", "status": "Mapped", "agent_bot_id": 0},
+                    ]
+                }
+            }
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: Any) -> bool:
+            return False
+
+        async def get(self, url: str, **kwargs: Any) -> Any:
+            calls.append(url)
+            if url.endswith("/dids/list-ai-agent-dids"):
+                assert kwargs.get("params") == {"partner_id": "2"}
+                return _AiAgentOne()
+            return _ListDidsEmpty()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    preview = await bridge.fetch_partner_dids(
+        talko_api_key="tkp_live_x", talko_api_base_url="https://talko.test/v1/", partner_id_hint="2"
+    )
+    assert preview["dids"] == ["917965263087"]
+    assert preview["partner_id"] == "2"
+    assert any(u.endswith("/dids/list-ai-agent-dids") for u in calls)
+
+
 async def test_fetch_partner_dids_bad_key_is_client_error(monkeypatch) -> None:
     """Upstream 401 becomes a client-safe invalid-key error (no key echo)."""
     from voiceai.modules.voice.errors import PlaceCallError

@@ -76,6 +76,7 @@ class OutboundDialPort(Protocol):
         *,
         talko_api_key: str,
         talko_api_base_url: str,
+        partner_id_hint: str | None = None,
     ) -> PartnerPreview:
         """Validate a partner key and fetch its DIDs from talko-service (spec 0009)."""
         ...

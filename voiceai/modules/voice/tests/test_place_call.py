@@ -72,7 +72,9 @@ class _FakeOutbound:
         self.calls.append({"kind": "background", **kwargs})
         return DialOutcome(execution_id="exec-bg", status="queued", from_number=kwargs.get("from_number"))
 
-    async def fetch_partner_dids(self, *, talko_api_key: str, talko_api_base_url: str) -> PartnerPreview:
+    async def fetch_partner_dids(
+        self, *, talko_api_key: str, talko_api_base_url: str, partner_id_hint: str | None = None
+    ) -> PartnerPreview:
         self.calls.append({"kind": "preview", "talko_api_key": talko_api_key, "talko_api_base_url": talko_api_base_url})
         return PartnerPreview(partner_id="2", dids=["+917965263087"])
 

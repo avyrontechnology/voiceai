@@ -60,7 +60,9 @@ class _FakeOutbound:
     async def start_simulated_call_background(self, **kwargs: Any) -> DialOutcome:
         raise AssertionError("not used here")
 
-    async def fetch_partner_dids(self, *, talko_api_key: str, talko_api_base_url: str) -> PartnerPreview:
+    async def fetch_partner_dids(
+        self, *, talko_api_key: str, talko_api_base_url: str, partner_id_hint: str | None = None
+    ) -> PartnerPreview:
         self.calls.append({"kind": "fetch", "base": talko_api_base_url, "key_len": len(talko_api_key)})
         if self.fetch_error is not None:
             raise self.fetch_error

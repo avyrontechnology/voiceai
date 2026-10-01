@@ -314,7 +314,9 @@ async def preview_talko_partner(
     """Validate a partner key and preview its DIDs without persisting (spec 0009)."""
     await _require_scope(request, auth, "platform:write")
     try:
-        preview = await service.preview_partner(talko_api_key=payload.talko_api_key)
+        preview = await service.preview_partner(
+            talko_api_key=payload.talko_api_key, partner_id_hint=payload.partner_id
+        )
     except AppError as exc:
         return error_response(exc)
     return success_response(preview.model_dump(mode="json"))

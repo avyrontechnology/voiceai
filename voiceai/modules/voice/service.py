@@ -464,11 +464,14 @@ class VoiceCallService:
             raise PlaceCallError("Outbound calling is not wired for this service.")
         return self._place_repository
 
-    async def preview_partner(self, *, talko_api_key: str) -> TalkoPartnerPreview:
+    async def preview_partner(self, *, talko_api_key: str, partner_id_hint: str | None = None) -> TalkoPartnerPreview:
         """Validate a partner key and preview its DIDs without persisting (spec 0009).
 
         Args:
             talko_api_key: The partner secret (used once, never stored or returned).
+            partner_id_hint: Explicit partner id (connect payload). Needed for
+                AI-agent DIDs which live in Talko's partner-scoped
+                list-ai-agent-dids endpoint, not list-dids.
 
         Returns:
             Partner id (when derivable) and normalized DIDs, Mapped first.
@@ -483,13 +486,18 @@ class VoiceCallService:
         base = (self._talko_service_base_url or "").rstrip("/")
         if not base:
             raise PlaceCallError("Talko service base URL is not configured.")
+<<<<<<< Updated upstream
         # Pasted keys routinely carry a trailing space/newline; talko-service
         # rejects the untrimmed value with a 401 that looks like a wrong key.
         preview = await self._outbound.fetch_partner_dids(
             talko_api_key=talko_api_key.strip(), talko_api_base_url=base
+=======
+        preview = await self._outbound.fetch_partner_dids(
+            talko_api_key=talko_api_key, talko_api_base_url=base, partner_id_hint=partner_id_hint
+>>>>>>> Stashed changes
         )
         return TalkoPartnerPreview(
-            partner_id=preview.get("partner_id"),
+            partner_id=preview.get("partner_id") or partner_id_hint,
             dids=list(preview.get("dids") or []),
         )
 
@@ -509,7 +517,9 @@ class VoiceCallService:
         Returns:
             The secret-free view of the upserted record.
         """
-        preview = await self.preview_partner(talko_api_key=payload.talko_api_key)
+        preview = await self.preview_partner(
+            talko_api_key=payload.talko_api_key, partner_id_hint=payload.partner_id
+        )
         partner_id = payload.partner_id or preview.partner_id
         if not partner_id:
             from voiceai.modules.voice.errors import PlaceCallError
@@ -559,7 +569,7 @@ class VoiceCallService:
         record = await self._place_repository.get_partner(partner_id)  # type: ignore[union-attr]
         if record is None:
             raise NotFoundError(f"Talko partner {partner_id!r} not found.", details={PARTNER_ID_KEY: partner_id})
-        preview = await self.preview_partner(talko_api_key=record.talko_api_key)
+        preview = await self.preview_partner(talko_api_key=record.talko_api_key, partner_id_hint=partner_id)
         if preview.dids:
             record.dids = list(record.dids) + [d for d in preview.dids if d not in record.dids]
             if not record.default_did:
