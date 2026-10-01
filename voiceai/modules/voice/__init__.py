@@ -76,7 +76,9 @@ MODULE: ModuleDef = ModuleDef(
     # constants, regression pins): +50, ratchet back with the next slice.
     # Bumped for the placed-row platform mirror (adapter, service, controller,
     # regression pins): +150, ratchet back with the next slice.
-    max_lines=50000,
+    # Bumped for the partner_id_hint AI-agent-DID fallback (adapter, service,
+    # regression pins): +100, ratchet back with the next slice.
+    max_lines=50100,
 )
 
 __all__ = [

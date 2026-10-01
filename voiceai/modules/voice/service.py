@@ -486,15 +486,14 @@ class VoiceCallService:
         base = (self._talko_service_base_url or "").rstrip("/")
         if not base:
             raise PlaceCallError("Talko service base URL is not configured.")
-<<<<<<< Updated upstream
         # Pasted keys routinely carry a trailing space/newline; talko-service
         # rejects the untrimmed value with a 401 that looks like a wrong key.
+        # The hint also unlocks Talko's partner-scoped list-ai-agent-dids
+        # fallback (AI-agent DIDs live only there).
         preview = await self._outbound.fetch_partner_dids(
-            talko_api_key=talko_api_key.strip(), talko_api_base_url=base
-=======
-        preview = await self._outbound.fetch_partner_dids(
-            talko_api_key=talko_api_key, talko_api_base_url=base, partner_id_hint=partner_id_hint
->>>>>>> Stashed changes
+            talko_api_key=talko_api_key.strip(),
+            talko_api_base_url=base,
+            partner_id_hint=partner_id_hint,
         )
         return TalkoPartnerPreview(
             partner_id=preview.get("partner_id") or partner_id_hint,
