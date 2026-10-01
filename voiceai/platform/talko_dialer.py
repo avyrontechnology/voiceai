@@ -77,7 +77,9 @@ async def dial_via_talko(
         execution.summary = "Dialed via Talko trunk; live on agent {}.".format(agent_id)
         execution.extracted_data = {"trunk": "talko", "trunk_response": resp.json()}
     except Exception as e:
-        logger.error("Talko dial failed to_number={}: {}".format(to_number, e))
+        # Log the trunk host too (never the body/key): a bare Errno -3 hides
+        # whether the trunk name, network, or the service itself is at fault.
+        logger.error("Talko dial failed to_number={} url={}: {}".format(to_number, url, e))
         execution.status = ExecutionStatus.FAILED
         execution.summary = "Talko dial failed: {}".format(e)
         execution.hangup_code = "failed"
