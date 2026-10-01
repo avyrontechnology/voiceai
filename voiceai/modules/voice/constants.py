@@ -141,6 +141,12 @@ WS_CLOSE_UNKNOWN_AGENT: Final[int] = 4404
 WS_CLOSE_DENIED: Final[int] = 4401
 #: Query parameter carrying the single-use WS ticket (spec 0021, M2).
 WS_TICKET_PARAM: Final[str] = "ticket"
+#: Query parameter naming the leg kind; the playground sends ``browser`` so a
+#: telephony-configured agent still binds default IO handlers on this socket.
+#: The value is compared verbatim — any other value is a carrier leg.
+WS_LEG_PARAM: Final[str] = "leg"
+#: The leg value meaning a browser/playground socket (see ``WS_LEG_PARAM``).
+WS_LEG_BROWSER_VALUE: Final[str] = "browser"
 
 # --- Outbound place-call (spec 0008) -------------------------------------------------
 #: HTTP route for single-call outbound dials (dual-served bare + API prefix).

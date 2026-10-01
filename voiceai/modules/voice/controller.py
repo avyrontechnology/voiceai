@@ -49,6 +49,8 @@ from voiceai.modules.voice.constants import (
     WS_CLOSE_DARK,
     WS_CLOSE_DENIED,
     WS_CLOSE_UNKNOWN_AGENT,
+    WS_LEG_BROWSER_VALUE,
+    WS_LEG_PARAM,
     WS_TICKET_PARAM,
 )
 from voiceai.modules.voice.models import PlacedCall
@@ -140,6 +142,7 @@ async def voice_chat(
         service = container.voice_call_service()
         agent_config = await definitions.get_agent(agent_id) if definitions is not None else None
         if not agent_config:
+            logger.warning("voice ws closed for agent %s (unknown or foreign)", agent_id)
             await websocket.close(code=WS_CLOSE_UNKNOWN_AGENT)
             return
         channels = agent_config.get("channels", ["voice"]) if isinstance(agent_config, dict) else ["voice"]
@@ -152,10 +155,15 @@ async def voice_chat(
         try:
             # Spec 0048 (Slice B): the execution record lands in the container's
             # repository-backed platform store (quickstart used to pass its own).
+            # The playground marks its leg with `?leg=browser`: like the legacy
+            # handler, forward it as the engine's browser-leg flag so a
+            # telephony-configured agent still binds default IO handlers here.
+            is_web_based_call = websocket.query_params.get(WS_LEG_PARAM) == WS_LEG_BROWSER_VALUE
             await service.run_call(
                 agent_config=agent_config,
                 ws=websocket,
                 agent_id=agent_id,
+                is_web_based_call=is_web_based_call,
                 platform_store=container.platform_store(),
             )
         finally:

@@ -67,6 +67,7 @@ class _Service:
                 "ws": ws,
                 "tenant_id": current_tenant().tenant_id,
                 "platform_store": kwargs.get("platform_store"),
+                "is_web_based_call": kwargs.get("is_web_based_call", False),
             }
         )
         return []
@@ -97,10 +98,12 @@ class _Auth:
 class _Socket:
     """Fake server-side websocket: records accept payloads and close codes."""
 
-    def __init__(self, container, ticket=None):
+    def __init__(self, container, ticket=None, leg=None):
         self.accepted = False
         self.close_code = None
         self.query_params = {} if ticket is None else {"ticket": ticket}
+        if leg is not None:
+            self.query_params["leg"] = leg
         self.app = SimpleNamespace(state=SimpleNamespace(container=container))
 
     async def accept(self):
@@ -151,10 +154,10 @@ def voice_warnings():
     logger.removeHandler(handler)
 
 
-async def _drive(container, ticket):
+async def _drive(container, ticket, leg=None):
     """Run the handler against a fake socket; return socket + resolved service."""
     service = container.voice_call_service()
-    socket = _Socket(container, ticket)
+    socket = _Socket(container, ticket, leg)
     await voice_chat(
         websocket=socket,  # type: ignore[arg-type]  # why: offline fake, no extra deps per module docstring
         agent_id=AGENT_ID,
@@ -181,11 +184,33 @@ async def test_dark_route_closes_immediately():
     assert service.calls == []
 
 
-async def test_unknown_agent_closes_when_flag_on():
+async def test_unknown_agent_closes_when_flag_on(voice_warnings):
     container = _container(flag=True, store=_Definitions(None))
     socket, service = await _drive(container, TICKET)
     assert socket.close_code == WS_CLOSE_UNKNOWN_AGENT
     assert service.calls == []
+    assert len(voice_warnings) == 1
+    assert AGENT_ID in voice_warnings[0].getMessage()
+
+
+async def test_browser_leg_forwards_the_web_flag():
+    """`?leg=browser` reaches the run as the engine browser-leg flag (default handlers)."""
+    service = _Service()
+    container = _container(flag=True, service=service)
+    socket, _ = await _drive(container, TICKET, "browser")
+    (call,) = service.calls
+    assert call["is_web_based_call"] is True
+    assert socket.close_code == 1000
+
+
+async def test_carrier_leg_defaults_the_web_flag_off():
+    """No (or another) leg value is a carrier leg: the flag stays off verbatim."""
+    service = _Service()
+    container = _container(flag=True, service=service)
+    socket, _ = await _drive(container, TICKET)
+    (call,) = service.calls
+    assert call["is_web_based_call"] is False
+    assert socket.close_code == 1000
 
 
 async def test_missing_ticket_is_denied():

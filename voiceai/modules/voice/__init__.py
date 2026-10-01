@@ -72,7 +72,9 @@ MODULE: ModuleDef = ModuleDef(
     # Bumped for spec-0042 (runtime wiring + recording report + tests).
     # Bumped for spec-0044 (hybrid leg pins).
     # Bumped for spec-0047 (inbound lookup + webhook + screening + tests).
-    max_lines=49800,
+    # Bumped for the ?leg=browser flag restoration + 4404 warning (controller,
+    # constants, regression pins): +50, ratchet back with the next slice.
+    max_lines=49850,
 )
 
 __all__ = [
