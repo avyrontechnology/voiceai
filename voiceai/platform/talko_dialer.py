@@ -44,6 +44,7 @@ async def dial_via_talko(
     variables: Optional[Dict[str, Any]] = None,
     batch_id: Optional[str] = None,
     trunk_url: Optional[str] = None,
+    partner_id: Optional[str] = None,
 ) -> Execution:
     """Dial one real call through the Talko trunk. Never raises for trunk errors."""
     execution = Execution(
@@ -61,6 +62,8 @@ async def dial_via_talko(
         body["caller_did"] = from_number
     if talko_api_key:
         body["talko_api_key"] = talko_api_key
+    if partner_id:
+        body["partner_id"] = partner_id
     url = "{}/talko/call".format((trunk_url or TRUNK_URL).rstrip("/"))
     try:
         async with httpx.AsyncClient(timeout=TRUNK_TIMEOUT_S) as client:

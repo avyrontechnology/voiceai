@@ -58,6 +58,7 @@ async def test_dial_trunk_forwards_resolved_credentials(monkeypatch) -> None:
     assert seen["agent_id"] == "a"
     assert seen["from_number"] == "91804"
     assert seen["talko_api_key"] == "tkp_x"
+    assert seen["partner_id"] == "2"
     assert seen["variables"] == {"a": 1}
     assert outcome.execution_id == "exec-9"
     assert outcome.status == "in_progress"

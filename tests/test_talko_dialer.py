@@ -82,6 +82,20 @@ async def test_dial_omits_api_key_when_absent(monkeypatch):
     assert "talko_api_key" not in FakeAsyncClient.posted[0]["json"]
 
 
+async def test_dial_forwards_partner_id_when_present(monkeypatch):
+    _patch(monkeypatch)
+    store = MemoryStore()
+    await dial_via_talko(store, agent_id="a", to_number="+9191", partner_id="2")
+    assert FakeAsyncClient.posted[0]["json"]["partner_id"] == "2"
+
+
+async def test_dial_omits_partner_id_when_absent(monkeypatch):
+    _patch(monkeypatch)
+    store = MemoryStore()
+    await dial_via_talko(store, agent_id="a", to_number="+9191")
+    assert "partner_id" not in FakeAsyncClient.posted[0]["json"]
+
+
 async def test_dial_trunk_refusal_marks_failed(monkeypatch):
     _patch(monkeypatch)
     FakeAsyncClient.next_post = FakeResponse(500, text="down")

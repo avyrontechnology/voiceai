@@ -79,10 +79,9 @@ async def dial_trunk_call(
     Returns:
         The dial outcome.
     """
-    # NOTE(spec-0008): the legacy runner on this branch takes explicit
-    # key/DID only — partner_id rides the trunk body via a future endgame
-    # step, and per-partner base URLs activate there too. partner_id and
-    # talko_api_base_url are accepted (contract parity) but not forwarded.
+    # NOTE(spec-0008): the legacy runner takes explicit key/DID/partner —
+    # per-partner base URLs still activate in a future endgame step, so
+    # talko_api_base_url is accepted (contract parity) but not forwarded.
     legacy_kwargs: dict[str, Any] = {
         "agent_id": agent_id,
         "to_number": to_number,
@@ -92,6 +91,8 @@ async def dial_trunk_call(
         legacy_kwargs["from_number"] = from_number
     if talko_api_key:
         legacy_kwargs["talko_api_key"] = talko_api_key
+    if partner_id:
+        legacy_kwargs["partner_id"] = partner_id
     execution = await _legacy_dial_via_talko(_LegacyMemoryStore(), **legacy_kwargs)
     return DialOutcome(
         execution_id=execution.execution_id,
