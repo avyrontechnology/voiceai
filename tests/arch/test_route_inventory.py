@@ -72,6 +72,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "GET /api/v1/knowledgebases",
         "GET /api/v1/organization",
         "GET /api/v1/phone-numbers",
+        "GET /api/v1/phone-numbers/resolve",
         "GET /api/v1/sub-accounts",
         "GET /api/v1/sub-accounts/{sub_id}",
         "GET /api/v1/talko/partners",
@@ -212,4 +213,4 @@ def test_shared_paths_belong_to_modules_and_the_rest_to_the_platform_router(sing
     assert owners[("GET", f"{API_PREFIX}/phone-numbers")] == "voiceai.platform.router"
     assert owners[("GET", f"{API_PREFIX}/api-keys")] == "voiceai.platform.router"
     platform_owned = sum(1 for owner in owners.values() if owner == "voiceai.platform.router")
-    assert platform_owned == 73
+    assert platform_owned == 74

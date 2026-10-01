@@ -259,6 +259,33 @@ async def test_phone_number_rejects_bad_provider(client):
     assert resp.status_code == 422
 
 
+async def test_phone_number_resolve_returns_owner(client):
+    """Dynamic inbound: resolve maps DID -> agent + Talko owner (Talko DB-miss path)."""
+    create = await client.post(
+        "/api/v1/phone-numbers",
+        json={
+            "number": "+917965263087",
+            "provider": "simulated",
+            "country": "IN",
+            "talko_partner_id": 2,
+            "talko_vendor_config_id": "6a902efa7157c16288fc8087",
+        },
+    )
+    assert create.status_code == 201
+    number_id = create.json()["number_id"]
+
+    assign = await client.post(f"/api/v1/phone-numbers/{number_id}/assign", json={"agent_id": "agent-9"})
+    assert assign.status_code == 200
+
+    resolve = await client.get("/api/v1/phone-numbers/resolve", params={"number": "917965263087"})
+    assert resolve.status_code == 200
+    assert resolve.json()["agent_id"] == "agent-9"
+    assert resolve.json()["talko_partner_id"] == 2
+
+    missing = await client.get("/api/v1/phone-numbers/resolve", params={"number": "+919999999999"})
+    assert missing.status_code == 404
+
+
 # --- Knowledge bases ------------------------------------------------------------------
 
 

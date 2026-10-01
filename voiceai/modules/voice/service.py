@@ -491,9 +491,7 @@ class VoiceCallService:
         # The hint also unlocks Talko's partner-scoped list-ai-agent-dids
         # fallback (AI-agent DIDs live only there).
         preview = await self._outbound.fetch_partner_dids(
-            talko_api_key=talko_api_key.strip(),
-            talko_api_base_url=base,
-            partner_id_hint=partner_id_hint,
+            talko_api_key=talko_api_key.strip(), talko_api_base_url=base, partner_id_hint=partner_id_hint
         )
         return TalkoPartnerPreview(
             partner_id=preview.get("partner_id") or partner_id_hint,
