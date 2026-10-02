@@ -447,7 +447,15 @@ async def _s2s_audio_ingest_loop(self: S2SSession) -> None:
 
         pcm = ulaw_to_pcm(data) if self._s2s_input.encoding is s2s_events.AudioEncoding.MULAW else data
         if self._s2s_input.sample_rate != s2s.input_sample_rate:
-            pcm = resample(pcm, s2s.input_sample_rate, format="pcm", original_sample_rate=self._s2s_input.sample_rate)
+            # scipy resample_poly is CPU-heavy: never block the event loop per
+            # chunk or every reply jitters while caller audio waits behind it.
+            pcm = await asyncio.to_thread(
+                resample,
+                pcm,
+                s2s.input_sample_rate,
+                format="pcm",
+                original_sample_rate=self._s2s_input.sample_rate,
+            )
 
         try:
             await s2s.send_audio(pcm)
@@ -476,7 +484,9 @@ async def _s2s_event_loop(self: S2SSession) -> None:
                 if callable(reopen):
                     reopen("new s2s turn")
                 self.interruption_manager.on_agent_speech_started(self._s2s_turn_seq)
-            chunk = self._s2s_encode_output(event.data)
+            # 24k->8k scipy resample + ulaw runs per audio chunk: off the event
+            # loop or one slow chunk stalls ingest, marks and the next reply.
+            chunk = await asyncio.to_thread(self._s2s_encode_output, event.data)
             self._s2s_extend_playout(chunk)
             await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
             self.last_transmitted_timestamp = time.time()

@@ -309,7 +309,7 @@ class DefaultInputHandler:
 
             traceback.print_exc()
             self.queues["transcriber"].put_nowait(ws_data_packet)
-            logger.info(f"Error while handling websocket message: {e}")
+            logger.exception(f"Error while handling websocket message: {e}\nRequest: {request}")
             return
 
     async def process_message(self, message: Any) -> Any:
