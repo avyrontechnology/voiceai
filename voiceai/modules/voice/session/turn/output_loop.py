@@ -571,34 +571,9 @@ async def process_output_loop(self: OutputSession) -> None:
                 if message["meta_info"].get("message_category", "") != "is_user_online_message":
                     self.asked_if_user_is_still_there = False
 
-            # # The below code is redundant in the case of telephony
-            # if "is_final_chunk_of_entire_response" in message['meta_info'] and message['meta_info']['is_final_chunk_of_entire_response']:  # noqa: E501
-            #     self.started_transmitting_audio = False
-            #     logger.info("##### End of synthesizer stream")
-            #
-            #     if message['meta_info'].get('message_category', '') == 'agent_hangup':
-            #         await self._TaskManager__process_end_of_conversation()
-            #         break
-            #
-            #     #If we're sending the message to check if user is still here, don't set asked_if_user_is_still_there to True  # noqa: E501
-            #     if message['meta_info'].get('text', '') != self.check_user_online_message:
-            #         self.asked_if_user_is_still_there = False
-            #
-            #     self.turn_id += 1
-            #
-            # # The below code is redundant in the case of telephony
-            # if "is_first_chunk_of_entire_response" in message['meta_info'] and message['meta_info']['is_first_chunk_of_entire_response']:  # noqa: E501
-            #     logger.info(f"First chunk stuff")
-            #     self.started_transmitting_audio = True if "is_final_chunk_of_entire_response" not in message['meta_info'] else False  # noqa: E501
-            #     self.consider_next_transcript_after = time.time() + self.duration_to_prevent_accidental_interruption
-            #     self.__process_latency_data(message)
-            # else:
-            #     # Sleep until this particular audio frame is spoken only if the duration for the frame is atleast 500ms  # noqa: E501
-            #     if duration > 0:
-            #         logger.info(f"##### Sleeping for {duration} to maintain quueue on our side {self.sampling_rate}")
-            #         await asyncio.sleep(duration - 0.030) #30 milliseconds less
-            # if message['meta_info']['sequence_id'] != -1: #Making sure we only track the conversation's last transmitted timesatamp  # noqa: E501
-            #     self.last_transmitted_timestamp = time.time()
+            # Pace the audio output to prevent websocket flooding and jitter on telephony providers.
+            if duration > 0.030:
+                await asyncio.sleep(duration - 0.030)
 
             # try:
             #     logger.info(f"Updating Last transmitted timestamp to {str(self.last_transmitted_timestamp)}")
