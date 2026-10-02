@@ -916,3 +916,95 @@ class TestUsageReporting:
         await asyncio.gather(*tm._s2s_tool_tasks, return_exceptions=True)
 
         tm.on_turn_usage.assert_awaited_once_with(11, 22, 3)
+
+
+class TestCarrierPacing:
+    """Spec 0055: carrier legs buffer irregular provider audio and emit uniform frames."""
+
+    def _paced_tm(self, **kwargs):
+        tm = make_tm(**kwargs)
+        tm._s2s_pacer_buf = bytearray()
+        tm._s2s_pacer_primed = False
+        tm._s2s_pacer_active = True
+        return tm
+
+    async def _run_events(self, tm, events):
+        async def stream():
+            for e in events:
+                yield e
+
+        tm.tools["s2s"].receive_events = stream
+        await tm._s2s_event_loop()
+
+    async def test_carrier_audio_buffers_until_primed(self):
+        tm = self._paced_tm()  # plivo carrier: 24k PCM in, mulaw 8k out
+        chunk_200ms = _silence_pcm(4800)  # 9600B @24k -> 1600B mulaw
+        await self._run_events(tm, [s2s_events.AudioDelta(data=chunk_200ms)])
+        assert tm.buffered_output_queue.empty()
+        assert tm._s2s_pacer_primed is False
+        await self._run_events(tm, [s2s_events.AudioDelta(data=chunk_200ms)])
+        assert tm._s2s_pacer_primed is True
+        # The tick (not running in this harness) emits: queue still holds nothing.
+        assert tm.buffered_output_queue.empty()
+        assert len(tm._s2s_pacer_buf) == 3200
+
+    async def test_tick_emits_uniform_frames_leaving_remainder(self):
+        tm = self._paced_tm()
+        tm._s2s_pacer_buf.extend(b"\x01" * 2000)
+        tm._s2s_pacer_primed = True
+        await tm._s2s_pacer_flush(False)
+
+        assert tm.buffered_output_queue.qsize() == 2
+        first = tm.buffered_output_queue.get_nowait()
+        assert len(first["data"]) == 960
+        assert len(tm._s2s_pacer_buf) == 80
+
+    async def test_unprimed_tick_emits_nothing(self):
+        tm = self._paced_tm()
+        tm._s2s_pacer_buf.extend(b"\x01" * 1000)
+        await tm._s2s_pacer_flush(False)
+
+        assert tm.buffered_output_queue.empty()
+        assert len(tm._s2s_pacer_buf) == 1000
+
+    async def test_turn_end_flushes_remainder_before_sentinel(self):
+        tm = self._paced_tm()
+        tm._s2s_pacer_buf.extend(b"\x02" * 100)
+        tm._s2s_pacer_primed = True
+        with patch("voiceai.modules.voice.session.s2s_runner.convert_to_request_log"):
+            await tm._s2s_finish_turn(s2s_events.ResponseDone(transcript="hi", usage=None))
+
+        remainder = tm.buffered_output_queue.get_nowait()
+        assert remainder["data"] == b"\x02" * 100
+        sentinel = tm.buffered_output_queue.get_nowait()
+        assert sentinel["data"] == b"\x00"
+        assert sentinel["meta_info"]["end_of_synthesizer_stream"] is True
+
+    async def test_barge_in_clears_pacer_buffer(self):
+        tm = self._paced_tm()
+        tm.buffered_output_queue.put_nowait({"data": b"x", "meta_info": {}})
+        tm._s2s_pacer_buf.extend(b"\x03" * 500)
+        await tm._s2s_drop_queued_audio()
+
+        assert tm.buffered_output_queue.empty()
+        assert len(tm._s2s_pacer_buf) == 0
+
+    async def test_browser_leg_queues_directly(self):
+        tm = make_tm(io_provider="default", web=True)  # no pacer state seeded
+        pcm = _silence_pcm(480)
+        await self._run_events(tm, [s2s_events.AudioDelta(data=pcm)])
+
+        message = tm.buffered_output_queue.get_nowait()
+        assert message["data"] == pcm
+
+    async def test_pacer_loop_emits_on_tick_and_stops(self):
+        tm = self._paced_tm()
+        tm._s2s_pacer_buf.extend(b"\x04" * 3000)
+        tm._s2s_pacer_primed = True
+        task = asyncio.create_task(tm._s2s_pacer_loop())
+        await asyncio.sleep(0.5)
+        tm.conversation_ended = True
+        await asyncio.gather(task, return_exceptions=True)
+
+        assert tm.buffered_output_queue.qsize() >= 2
+        assert len(tm._s2s_pacer_buf) < 3000

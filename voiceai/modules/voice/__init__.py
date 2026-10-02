@@ -78,7 +78,9 @@ MODULE: ModuleDef = ModuleDef(
     # regression pins): +150, ratchet back with the next slice.
     # Bumped for the partner_id_hint AI-agent-DID fallback (adapter, service,
     # regression pins): +100, ratchet back with the next slice.
-    max_lines=50100,
+    # Bumped for spec-0055 (S2S carrier pacing: pacer + flush + wiring): +100,
+    # ratchet back with the next slice.
+    max_lines=50200,
 )
 
 __all__ = [

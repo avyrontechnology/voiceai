@@ -1726,6 +1726,12 @@ class TaskManager(BaseManager):
     async def _s2s_output_loop(self):
         return await _voice_s2s_runner._s2s_output_loop(self)
 
+    async def _s2s_pacer_loop(self):
+        return await _voice_s2s_runner._s2s_pacer_loop(self)
+
+    async def _s2s_pacer_flush(self, final):
+        return await _voice_s2s_runner._s2s_pacer_flush(self, final)
+
     async def _s2s_text_loop(self):
         return await _voice_s2s_runner._s2s_text_loop(self)
 

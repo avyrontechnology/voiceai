@@ -191,6 +191,17 @@ TALKO_FETCH_TIMEOUT_S: Final[float] = 15.0
 #: Detail keys for client-safe failures (identifiers only).
 TALKO_API_KEY_TRUNCATED_KEY: Final[str] = "key_hint"
 
+# --- S2S carrier-leg pacing (spec 0055) -------------------------------------------------
+#: Bytes per paced carrier frame: 120ms of 8k mu-law. The S2S pacer accumulates
+#: irregular provider AudioDeltas and emits uniform frames on a steady tick, so
+#: the carrier relay gets a smooth stream instead of burst-gap-burst.
+S2S_PACER_FRAME_B: Final[int] = 960
+#: Pacer tick: matches one frame of audio, so a primed buffer drains in realtime.
+S2S_PACER_TICK_S: Final[float] = 0.12
+#: Bytes buffered before the first paced frame leaves: ~240ms of lookahead that
+#: absorbs provider delivery jitter at the cost of a one-time greeting delay.
+S2S_PACER_PRIME_B: Final[int] = 1920
+
 # --- Inbound Twilio webhook (spec 0047) -----------------------------------------------
 #: Carrier webhook route (Twilio first; Plivo/Talko shims plug in later untouched).
 INBOUND_TWILIO_PATH: Final[str] = "/voice/inbound/twilio"

@@ -23,6 +23,12 @@ banner). Three deliberate seams keep every legacy behavior and test pin intact:
   ``voiceai.modules.voice.session.s2s_runner.<name>`` (R3; the socket-block guard
   turns a stale patch into a loud failure).
 
+Spec 0055 adds one deliberate behavior on top of the verbatim move: carrier
+legs pace irregular provider audio through a per-call buffer
+(``_s2s_pacer_*``) emitting uniform 120ms mu-law frames on a steady tick, so
+the relay gets a smooth stream instead of burst-gap-burst. Browser legs keep
+the direct path; bare-harness callers keep it via ``getattr`` fallbacks.
+
 Two mechanical accommodations inside otherwise-verbatim bodies, both forced by
 Python's compile-time name mangling (the bodies no longer live in a class named
 ``TaskManager``): ``self.__check_for_completion()`` is spelled
@@ -58,7 +64,12 @@ from voiceai.modules.voice.adapters.s2s_runtime import (
     trigger_api,
     ulaw_to_pcm,
 )
-from voiceai.modules.voice.constants import MODULE_NAME
+from voiceai.modules.voice.constants import (
+    MODULE_NAME,
+    S2S_PACER_FRAME_B,
+    S2S_PACER_PRIME_B,
+    S2S_PACER_TICK_S,
+)
 from voiceai.modules.voice.registry import SUPPORTED_INPUT_TELEPHONY_HANDLERS, SUPPORTED_S2S_PROVIDERS
 from voiceai.modules.voice.s2s import events as s2s_events
 
@@ -136,6 +147,12 @@ class S2SSession(Protocol):
     _s2s_turn_seq: int
     _s2s_playout_until: float
 
+    # --- S2S pacer state (spec 0055; seeded per call in _run_s2s_conversation) ---
+    _s2s_pacer_buf: bytearray
+    _s2s_pacer_primed: bool
+    _s2s_pacer_active: bool
+    _s2s_pacer_task: Any  # why: asyncio.Task slot the run teardown nulls
+
     # --- legacy session methods the runner calls back into ---
     async def process_call_hangup(self) -> Any: ...  # noqa: D102
     def _should_ignore_transcriber_input(self) -> bool: ...  # noqa: D102
@@ -167,6 +184,8 @@ class S2SSession(Protocol):
     async def _s2s_drop_queued_audio(self) -> None: ...  # noqa: D102
     async def _s2s_finish_turn(self, event: Any) -> None: ...  # noqa: D102
     async def _s2s_output_loop(self) -> None: ...  # noqa: D102
+    async def _s2s_pacer_loop(self) -> None: ...  # noqa: D102
+    async def _s2s_pacer_flush(self, final: bool) -> None: ...  # noqa: D102
     async def _s2s_text_loop(self) -> None: ...  # noqa: D102
     async def _s2s_dtmf_loop(self) -> None: ...  # noqa: D102
     async def _s2s_execute_tool(self, event: Any) -> None: ...  # noqa: D102
@@ -259,6 +278,12 @@ async def _run_s2s_conversation(self: S2SSession) -> None:
     self._s2s_agent_speaking = False
     self._s2s_turn_seq = 0
     self._s2s_playout_until = 0.0
+    # Spec 0055: carrier legs pace irregular provider audio through a buffer;
+    # browser legs keep the direct path (the browser buffers itself).
+    self._s2s_pacer_buf = bytearray()
+    self._s2s_pacer_primed = False
+    self._s2s_pacer_active = self._s2s_is_carrier_leg()
+    self._s2s_pacer_task = None
 
     logger.info(f"S2S connecting | provider={self.s2s_provider_name} model={self.s2s_model}")
     try:
@@ -310,6 +335,8 @@ async def _run_s2s_conversation(self: S2SSession) -> None:
 
     self.output_task = asyncio.create_task(self._s2s_output_loop())
     self.hangup_task = asyncio.create_task(self._TaskManager__check_for_completion())
+    if self._s2s_pacer_active:
+        self._s2s_pacer_task = asyncio.create_task(self._s2s_pacer_loop())
     # Typed chat over the same socket: {"type": "text"} frames land in
     # llm_queue via the input handler; nothing else consumes it on s2s.
     self._s2s_track_task(asyncio.create_task(self._s2s_text_loop()))
@@ -335,9 +362,14 @@ async def _run_s2s_conversation(self: S2SSession) -> None:
             task.cancel()
         for task in list(self._s2s_tool_tasks):
             task.cancel()
+        pacer = getattr(self, "_s2s_pacer_task", None)
+        if pacer is not None:
+            pacer.cancel()
         if self._s2s_tool_tasks:
             await asyncio.gather(*self._s2s_tool_tasks, return_exceptions=True)
         await asyncio.gather(*loops, return_exceptions=True)
+        if pacer is not None:
+            await asyncio.gather(pacer, return_exceptions=True)
         await s2s.disconnect()
     logger.info("S2S conversation completed")
 
@@ -488,7 +520,15 @@ async def _s2s_event_loop(self: S2SSession) -> None:
             # loop or one slow chunk stalls ingest, marks and the next reply.
             chunk = await asyncio.to_thread(self._s2s_encode_output, event.data)
             self._s2s_extend_playout(chunk)
-            await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
+            if getattr(self, "_s2s_pacer_active", False):
+                # Spec 0055: carrier legs emit uniform paced frames (the tick
+                # drains the buffer); queueing the raw irregular chunk here
+                # would hand the relay burst-gap-burst audio again.
+                self._s2s_pacer_buf.extend(chunk)
+                if not self._s2s_pacer_primed and len(self._s2s_pacer_buf) >= S2S_PACER_PRIME_B:
+                    self._s2s_pacer_primed = True
+            else:
+                await self.buffered_output_queue.put({"data": chunk, "meta_info": self._s2s_meta()})
             self.last_transmitted_timestamp = time.time()
 
         elif isinstance(event, s2s_events.TranscriptDelta):
@@ -591,6 +631,47 @@ async def _s2s_event_loop(self: S2SSession) -> None:
                 raise LLMError(event.message, provider=self.s2s_provider_name, model=self.s2s_model)
 
 
+async def _s2s_pacer_loop(self: S2SSession) -> None:
+    """Drain the paced carrier buffer on a steady tick (spec 0055).
+
+    Runs only on carrier legs (started by `_run_s2s_conversation` when the
+    pacer is active; never on browser legs). Each tick moves full uniform
+    frames onto the output queue, so the relay receives a smooth stream even
+    when the provider delivers AudioDeltas irregularly. Never ends the call:
+    cancelled by the run teardown like every other background loop.
+    """
+    try:
+        while not self.conversation_ended:
+            await asyncio.sleep(S2S_PACER_TICK_S)
+            if self.conversation_ended:
+                break
+            await self._s2s_pacer_flush(False)
+    except asyncio.CancelledError:
+        pass
+
+
+async def _s2s_pacer_flush(self: S2SSession, final: bool) -> None:
+    """Move buffered carrier audio onto the output queue as uniform frames.
+
+    A tick flush (`final=False`) emits full frames only once the buffer is
+    primed, leaving the remainder for the next tick. A turn-end flush
+    (`final=True`, from `_s2s_finish_turn`) emits the remainder too, so the
+    end-of-stream sentinel queued right after it never jumps ahead of audio.
+    A no-op wherever the pacer is inactive (browser legs, bare harnesses).
+    """
+    if not getattr(self, "_s2s_pacer_active", False):
+        return
+    buf = self._s2s_pacer_buf
+    if not final and not self._s2s_pacer_primed:
+        return
+    while len(buf) >= S2S_PACER_FRAME_B:
+        await self.buffered_output_queue.put({"data": bytes(buf[:S2S_PACER_FRAME_B]), "meta_info": self._s2s_meta()})
+        del buf[:S2S_PACER_FRAME_B]
+    if final and buf:
+        await self.buffered_output_queue.put({"data": bytes(buf), "meta_info": self._s2s_meta()})
+        buf.clear()
+
+
 def _s2s_encode_output(self: S2SSession, pcm: bytes) -> bytes:
     s2s = self.tools["s2s"]
     if self._s2s_output.sample_rate != s2s.output_sample_rate:
@@ -628,6 +709,13 @@ async def _s2s_drop_queued_audio(self: S2SSession) -> None:
             self.buffered_output_queue.get_nowait()
         except asyncio.QueueEmpty:
             break
+    # Spec 0055: paced audio not yet emitted lives in the pacer buffer, not the
+    # queue — clear it too or the barge-in keeps playing after the `clear`.
+    # Primed stays set: re-priming after every interruption would add 240ms of
+    # silence to each barge-in recovery.
+    pacer_buf = getattr(self, "_s2s_pacer_buf", None)
+    if pacer_buf is not None:
+        pacer_buf.clear()
 
 
 async def _s2s_finish_turn(self: S2SSession, event: s2s_events.ResponseDone) -> None:
@@ -637,6 +725,10 @@ async def _s2s_finish_turn(self: S2SSession, event: s2s_events.ResponseDone) -> 
         # from whatever interrupted the previous one.
         self.interruption_manager.on_successful_response_delivered(self._s2s_turn_seq)
         self._s2s_agent_speaking = False
+    # Spec 0055: flush paced remainder BEFORE the sequence advances, so the
+    # tail frames keep this turn's mark category (welcome/hangup tagging), and
+    # before the sentinel below, which must never jump ahead of audio.
+    await self._s2s_pacer_flush(True)
     self._s2s_turn_seq += 1
 
     usage = event.usage
