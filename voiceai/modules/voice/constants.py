@@ -198,9 +198,11 @@ TALKO_API_KEY_TRUNCATED_KEY: Final[str] = "key_hint"
 S2S_PACER_FRAME_B: Final[int] = 960
 #: Pacer tick: matches one frame of audio, so a primed buffer drains in realtime.
 S2S_PACER_TICK_S: Final[float] = 0.12
-#: Bytes buffered before the first paced frame leaves: ~240ms of lookahead that
+#: Bytes buffered before the first paced frame leaves: ~480ms of lookahead that
 #: absorbs provider delivery jitter at the cost of a one-time greeting delay.
-S2S_PACER_PRIME_B: Final[int] = 1920
+#: (Bumped 240→480 by the 12:07 prod call: tick bursts every ~110ms left no
+#: margin over Gemini's mid-turn stalls, and Tata heard every stall as a gap.)
+S2S_PACER_PRIME_B: Final[int] = 3840
 
 # --- Inbound Twilio webhook (spec 0047) -----------------------------------------------
 #: Carrier webhook route (Twilio first; Plivo/Talko shims plug in later untouched).

@@ -28,8 +28,10 @@ reaches the carrier. Browser legs are untouched (the browser buffers itself).
 Owning module: `voiceai.modules.voice` (session region). Files touched:
 
 - `voiceai/modules/voice/constants.py` — add `S2S_PACER_FRAME_B = 960`
-  (120ms @ 8k mu-law), `S2S_PACER_TICK_S = 0.12`, `S2S_PACER_PRIME_B = 1920`
-  (~240ms lookahead before the first paced frame).
+  (120ms @ 8k mu-law), `S2S_PACER_TICK_S = 0.12`, `S2S_PACER_PRIME_B = 3840`
+  (~480ms lookahead before the first paced frame; raised from 240 after the
+  12:07 prod call showed tick bursts every ~110ms leave no margin over
+  Gemini mid-turn stalls).
 - `voiceai/modules/voice/session/s2s_runner.py` — per-call pacer buffer
   (`_s2s_pacer_buf`, `_s2s_pacer_primed`, `_s2s_pacer_active`), `_s2s_pacer_loop`
   (tick emitter, carrier legs only), `_s2s_pacer_flush(final)` (full frames on
@@ -43,7 +45,7 @@ Owning module: `voiceai.modules.voice` (session region). Files touched:
   (`_s2s_pacer_loop`, `_s2s_pacer_flush`), the file's own B5 pattern.
 - `tests/test_s2s_task_manager.py` — new `TestCarrierPacing` class (offline).
 
-Tradeoff (loud): priming adds ~240ms one-time delay to the greeting start and
+Tradeoff (loud): priming adds ~480ms one-time delay to the greeting start and
 each tick quantizes output to 120ms. Reply-gap tuning (VAD/prompt) is out of
 scope.
 

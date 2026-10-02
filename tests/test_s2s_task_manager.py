@@ -940,13 +940,14 @@ class TestCarrierPacing:
         tm = self._paced_tm()  # plivo carrier: 24k PCM in, mulaw 8k out
         chunk_200ms = _silence_pcm(4800)  # 9600B @24k -> 1600B mulaw
         await self._run_events(tm, [s2s_events.AudioDelta(data=chunk_200ms)])
+        await self._run_events(tm, [s2s_events.AudioDelta(data=chunk_200ms)])
         assert tm.buffered_output_queue.empty()
-        assert tm._s2s_pacer_primed is False
+        assert tm._s2s_pacer_primed is False  # 3200B < 3840B prime
         await self._run_events(tm, [s2s_events.AudioDelta(data=chunk_200ms)])
         assert tm._s2s_pacer_primed is True
         # The tick (not running in this harness) emits: queue still holds nothing.
         assert tm.buffered_output_queue.empty()
-        assert len(tm._s2s_pacer_buf) == 3200
+        assert len(tm._s2s_pacer_buf) == 4800
 
     async def test_tick_emits_uniform_frames_leaving_remainder(self):
         tm = self._paced_tm()
