@@ -1053,7 +1053,13 @@ async def process_task_cancellation(asyncio_task, task_name):
 def get_date_time_from_timezone(timezone):
     now = datetime.now(timezone)
     dt = now.strftime("%A, %B %d, %Y")
-    ts = now.strftime("%I:%M:%S %p")
+    # Hour granularity on purpose (not %I:%M:%S): this timestamp is embedded
+    # in EVERY session's system prompt, and per-second precision makes each
+    # prompt byte-unique, defeating the provider's prefix cache (slower
+    # first response + full prefill cost on every call). Nothing downstream
+    # needs finer precision — office hours, due dates and day-part greetings
+    # all resolve at hour granularity.
+    ts = now.strftime("%I %p")
     return dt, ts
 
 
