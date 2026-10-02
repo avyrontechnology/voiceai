@@ -34,12 +34,15 @@ def test_audio_gate_sends_for_a_fresh_sequence():
     assert manager.get_audio_send_status(seq) == "SEND"
 
 
-def test_interruption_gate_needs_audio_and_welcome():
+def test_interruption_gate_needs_audio_even_during_greeting():
     manager = NewManager(number_of_words_for_interruption=3)
     assert manager.should_trigger_interruption(10, "hello world this is long", False, True) is False
-    assert manager.should_trigger_interruption(10, "hello world this is long", True, False) is False
+    # Greeting barge-in: audio playing + long enough utterance interrupts
+    # even though the welcome has not finished playing.
+    assert manager.should_trigger_interruption(10, "hello world this is long", True, False) is True
     assert manager.should_trigger_interruption(10, "hello world this is a long sentence", True, True) is True
     assert manager.should_trigger_interruption(1, "hi", True, True) is False
+    assert manager.should_trigger_interruption(1, "hi", True, False) is False
 
 
 def test_sequence_lifecycle_retires_and_invalidates():

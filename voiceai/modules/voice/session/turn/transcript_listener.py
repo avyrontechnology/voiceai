@@ -856,7 +856,12 @@ async def listen_transcriber(self: ListenerSession) -> None:
                         if self.discard_pre_welcome_utterance:
                             self._speech_started_before_welcome = True
                         self._trigger_voicemail_check(message["data"].get("content", ""), meta_info, is_final=False)
-                        continue
+                        if not self.tools["input"].is_audio_being_played_to_user():
+                            # Greeting not playing yet (still synthesizing) —
+                            # nothing to barge in on.
+                            continue
+                        # Greeting is playing: fall through to the interruption
+                        # check below so the caller can cut it short.
 
                     # Post-welcome interim → clear stale flag set by pre-welcome SpeechStarted (welcome-audio bleed).
                     self._speech_started_before_welcome = False

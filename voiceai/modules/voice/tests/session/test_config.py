@@ -443,3 +443,16 @@ def test_pipeline_selector_overrides_inference():
 
     assert _parse(_s2s_task()).is_s2s is True
     assert _parse(_task(SIMPLE_AGENT)).is_s2s is False
+
+
+def test_welcome_audio_falls_back_to_task_config_blob():
+    # Ops-planted greeting: no kwarg, blob lives on the agent's task_config.
+    task_config = {"welcome_message_audio": _WELCOME_B64}
+    cfg = _parse(_task(SIMPLE_AGENT, dict(task_config)))
+    assert cfg.welcome_message_audio == _WELCOME_B64
+    assert cfg.preloaded_welcome_audio == _WELCOME_PCM
+
+    # kwargs still win when both are present.
+    other = base64.b64encode(b"\x02\x03" * 1600).decode()
+    cfg2 = _parse(_task(SIMPLE_AGENT, dict(task_config)), welcome_message_audio=other)
+    assert cfg2.welcome_message_audio == other

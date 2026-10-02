@@ -170,8 +170,13 @@ class InterruptionManager:
         is_audio_playing: bool,
         welcome_played: bool,
     ) -> bool:
-        """Returns True if user speech should trigger an interruption."""
-        if not is_audio_playing or not welcome_played:
+        """Returns True if user speech should trigger an interruption.
+
+        Greeting barge-in is allowed: only live agent audio matters, not
+        whether the welcome has finished playing. ``welcome_played`` is
+        accepted for call-site compatibility and ignored.
+        """
+        if not is_audio_playing:
             return False
 
         if self.number_of_words_for_interruption == 0:
@@ -190,8 +195,12 @@ class InterruptionManager:
         is_audio_playing: bool,
         welcome_played: bool,
     ) -> bool:
-        """Returns True if final transcript should be ignored (too short, not a phrase match)."""
-        if not is_audio_playing or not welcome_played:
+        """Returns True if final transcript should be ignored (too short, not a phrase match).
+
+        Mirrors ``should_trigger_interruption``: greeting barge-in is allowed,
+        so ``welcome_played`` is accepted for call-site compatibility and ignored.
+        """
+        if not is_audio_playing:
             return False
 
         transcript_stripped = transcript.strip()

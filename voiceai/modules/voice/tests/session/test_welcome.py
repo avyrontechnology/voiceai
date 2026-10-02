@@ -22,6 +22,16 @@ from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers import utils as legacy_utils
 from voiceai.modules.voice.session import welcome
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_welcome_synth_cache():
+    # The welcome-synth memo is process-global; isolate tests from each other.
+    welcome._welcome_synth_cache.clear()
+    yield
+    welcome._welcome_synth_cache.clear()
+
 #: Every welcome method the B8 contract moved; each keeps a TaskManager delegator.
 MOVED_NAMES = (
     "_TaskManager__forced_first_message",
@@ -434,3 +444,33 @@ async def test_handle_init_event_only_rewrites_a_two_message_history():
     stub.conversation_history.__len__.return_value = 4
     await welcome.handle_init_event(stub, {"context_data": {"name": "Sam"}})
     stub.conversation_history.update_welcome_message.assert_not_called()
+
+
+def _synth_session(text_calls, pcm=b"\x01\x02" * 800, rate=8000):
+    synth = SimpleNamespace(
+        synthesize=AsyncMock(side_effect=lambda t: text_calls.append(t) or pcm),
+        sampling_rate=rate,
+        voice_id="v1",
+        model="m1",
+    )
+    return SimpleNamespace(tools={"synthesizer": synth}, sampling_rate=rate)
+
+
+async def test_synthesize_welcome_audio_memoizes_per_text_and_voice():
+    welcome._welcome_synth_cache.clear()
+    calls: list = []
+    stub = _synth_session(calls)
+    first = await welcome.synthesize_welcome_audio(stub, "Namaste")
+    second = await welcome.synthesize_welcome_audio(stub, "Namaste")
+    assert first == second == b"\x01\x02" * 800
+    assert calls == ["Namaste"], "second identical greeting must not re-synthesize"
+
+    third = await welcome.synthesize_welcome_audio(stub, "Namaste ji")
+    assert third == b"\x01\x02" * 800
+    assert calls == ["Namaste", "Namaste ji"], "new text must synthesize once"
+
+    other_voice = _synth_session(calls)
+    other_voice.tools["synthesizer"].voice_id = "v2"
+    await welcome.synthesize_welcome_audio(other_voice, "Namaste")
+    assert calls == ["Namaste", "Namaste ji", "Namaste"], "new voice must synthesize once"
+    welcome._welcome_synth_cache.clear()

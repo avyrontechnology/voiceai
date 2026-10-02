@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import time
 import uuid
 from typing import Any, Protocol
@@ -62,6 +63,36 @@ from voiceai.modules.voice.adapters.welcome_runtime import (
 from voiceai.modules.voice.constants import MODULE_NAME
 
 logger = get_logger(MODULE_NAME)
+
+# Process-wide memo of synthesized greetings: the welcome text is static per
+# agent, so paying a full (non-streaming) TTS round trip on EVERY call is pure
+# greeting latency (~1.5-2 s observed). Keyed by synth identity + text + rate,
+# bounded so a fleet of agents can't grow it without limit. First call after a
+# deploy still synthesizes live; every later call plays from memory.
+_WELCOME_SYNTH_CACHE_MAX = 32
+_welcome_synth_cache: dict[str, bytes] = {}
+
+
+def _welcome_synth_cache_key(synth: Any, text: str, rate: int) -> str:
+    parts = [type(synth).__name__, str(rate), text]
+    for attr in ("voice_id", "voice", "model", "model_id", "engine"):
+        try:
+            parts.append(str(getattr(synth, attr, "") or ""))
+        except Exception:
+            parts.append("")
+    return hashlib.sha256("\x00".join(parts).encode("utf-8", "ignore")).hexdigest()
+
+
+def _welcome_synth_cache_get(key: str) -> bytes | None:
+    return _welcome_synth_cache.get(key)
+
+
+def _welcome_synth_cache_put(key: str, pcm: bytes) -> None:
+    if not pcm:
+        return
+    while len(_welcome_synth_cache) >= _WELCOME_SYNTH_CACHE_MAX:
+        _welcome_synth_cache.pop(next(iter(_welcome_synth_cache)))
+    _welcome_synth_cache[key] = pcm
 
 # The adapter-bound globals are re-exported on purpose: THIS module is the moved
 # bodies' lookup site (R3), so tests and monkeypatches address them here.
@@ -246,6 +277,22 @@ async def synthesize_welcome_audio(self: WelcomeSession, text: Any) -> Any:
     if synth is None or not hasattr(synth, "synthesize") or not (text or "").strip():
         return None
     try:
+        synth_rate = int(getattr(synth, "sampling_rate", self.sampling_rate) or self.sampling_rate)
+    except (TypeError, ValueError):
+        synth_rate = self.sampling_rate
+    cache_key = _welcome_synth_cache_key(synth, text, synth_rate)
+    cached = _welcome_synth_cache_get(cache_key)
+    if cached:
+        logger.info("Welcome TTS cache hit, skipping synthesis")
+        pcm = cached
+        if synth_rate != self.sampling_rate:
+            try:
+                pcm = resample(pcm, self.sampling_rate, format="pcm", original_sample_rate=synth_rate)
+            except Exception as e:
+                logger.error(f"Welcome TTS resample failed: {e}")
+                return None
+        return pcm
+    try:
         raw = await asyncio.wait_for(synth.synthesize(text), timeout=20)
     except Exception as e:
         logger.error(f"Welcome TTS failed, skipping greeting audio: {e}")
@@ -272,6 +319,9 @@ async def synthesize_welcome_audio(self: WelcomeSession, text: Any) -> Any:
             return None
     if not pcm:
         return None
+    # Cache at the synth's native rate (cache_key is keyed by synth_rate);
+    # the resample below adapts to the session rate on every play.
+    _welcome_synth_cache_put(cache_key, bytes(pcm))
     try:
         synth_rate = int(getattr(synth, "sampling_rate", self.sampling_rate) or self.sampling_rate)
     except (TypeError, ValueError):

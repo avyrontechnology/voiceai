@@ -171,9 +171,18 @@ def _welcome_audio(
         preloaded_welcome_audio)``.
     """
     welcome_message_audio = kwargs.get("welcome_message_audio", None)
+    if welcome_message_audio is None:
+        # Ops-planted greeting: a pre-synthesized base64 greeting stored on the
+        # agent's task_config plays with zero TTS at call start (no per-call
+        # synthesis). kwargs still win when both are present.
+        welcome_message_audio = (task.get("task_config", {}) or {}).get("welcome_message_audio", None)
     # Rate the backend synthesized the welcome at: 8000 for telephony (unchanged legacy
     # payloads too), 24000 for web calls so the first turn matches the full-band TTS.
-    welcome_message_audio_sample_rate = int(kwargs.get("welcome_message_audio_sample_rate", None) or 8000)
+    welcome_message_audio_sample_rate = int(
+        kwargs.get("welcome_message_audio_sample_rate", None)
+        or (task.get("task_config", {}) or {}).get("welcome_message_audio_sample_rate", None)
+        or 8000
+    )
 
     # Pre-decode welcome audio for faster playback
     preloaded_welcome_audio = base64.b64decode(welcome_message_audio) if welcome_message_audio else None
