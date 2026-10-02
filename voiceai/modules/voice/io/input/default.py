@@ -319,18 +319,23 @@ class DefaultInputHandler:
         #     logger.info(f"straight away returning")
         #     return {"message": "invalid input type"}
 
-        if message["type"] == "audio":
+        msg_type = message.get("type")
+        if msg_type is None:
+            logger.debug(f"Received message without 'type' key, ignoring: {list(message.keys())}")
+            return None
+
+        if msg_type == "audio":
             self.__process_audio(message["data"])
 
-        elif message["type"] == "text":
+        elif msg_type == "text":
             logger.info(f"Received text: {message['data']}")
             self.__process_text(message["data"])
 
-        elif message["type"] == "mark":
+        elif msg_type == "mark":
             logger.info("Received mark event")
             self.__process_mark_event(message)
 
-        elif message["type"] == "init":
+        elif msg_type == "init":
             logger.info("Received init event")
             if self.observable_variables.get("init_event_observable") is not None:
                 self.observable_variables.get("init_event_observable").value = message.get("meta_data", None)
