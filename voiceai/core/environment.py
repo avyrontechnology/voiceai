@@ -160,6 +160,10 @@ class Environment(BaseModel):
     #: mandatory on every outbound call, bounded to 1–120 (fail closed).
     #: ``TOOLS_HTTP_TIMEOUT_S`` in the environment.
     tools_http_timeout_s: int = 10
+    #: Flag-gate for the MCP server pilot (spec 0057): `False` (default)
+    #: keeps ``POST /api/v1/mcp`` dark (404); operators enable it for the
+    #: one pilot partner key only. ``MCP_SERVER_ENABLED`` in the environment.
+    mcp_server_enabled: bool = False
 
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod

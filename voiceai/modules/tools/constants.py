@@ -20,6 +20,15 @@ TOOL_KIND_INTERNAL: Final[Literal["internal"]] = "internal"
 TOOLS_PATH: Final[str] = "/tools"
 TOOL_ITEM_PATH: Final[str] = "/tools/{tool_id}"
 
+#: MCP server pilot (spec 0057): single Streamable-HTTP endpoint (JSON-only).
+#: Auth reuses `platform:read` (existing scope — `mcp:invoke` lands with OAuth in S2).
+MCP_PATH: Final[str] = "/mcp"
+MCP_SESSION_ID_HEADER: Final[str] = "Mcp-Session-Id"
+MCP_PROTOCOL_VERSION: Final[str] = "2026-07-28"
+MCP_SERVER_NAME: Final[str] = "otobaai-tools"
+MCP_LIST_PAGE_SIZE: Final[int] = 50
+MCP_LIST_PAGE_MAX: Final[int] = 50
+
 #: Scope gates (spec 0049): reads need `platform:read`, writes `platform:write`
 #: — the scopes the retired platform tools routes used.
 SCOPE_PLATFORM_READ: Final[str] = "platform:read"

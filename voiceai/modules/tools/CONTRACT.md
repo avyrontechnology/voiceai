@@ -79,5 +79,17 @@ failures are `success=False` values with `error_id`, never transport text.
 Secrets live in `partner_credentials` (vault envelopes); rows carry
 `auth_ref` pointers; `redact_secrets` before every log. MCP: `McpHttpClient`
 (handshake, paginated `tools/list`, `tools/call`, JSON + SSE with
-`Mcp-Session-Id` resume); DCR: RFC8414/7591 discover → register, MANUAL
-short-circuit when no `registration_endpoint`.
+  `Mcp-Session-Id` resume); DCR: RFC8414/7591 discover → register, MANUAL
+  short-circuit when no `registration_endpoint`.
+
+## MCP server pilot (spec 0057, flag-gated, internal distribution only)
+
+`POST /api/v1/mcp` (Streamable HTTP, JSON-only): `initialize` →
+capabilities + `Mcp-Session-Id` header; `notifications/initialized` → 202;
+`tools/list` → cursor pages of tenant-visible non-deprecated non-`internal`
+descriptors (canonical `{kind}:{name}` ids); `tools/call` → guarded
+`ToolExecutor` execution. Raw JSON-RPC answers (documented protocol
+exception to the envelope rule — only 401/403/404 gates use the envelope).
+Auth: API-key bearer with `platform:read` (`mcp:invoke` lands with OAuth in
+S2). Pilot allowlist = registry visibility, NOT per-agent refs (per-agent
+binding lands with `actions:` in S2). Disabled flag answers 404.

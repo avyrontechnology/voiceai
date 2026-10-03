@@ -444,6 +444,49 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) ->
     return ToolExecutor(ToolsRepository(tools_view), LogsRepository(logs_view), auth)
 
 
+def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:
+    """Build the MCP server envelope router over tenant-wired services (spec 0057).
+
+    Called per request (Factory): both services already carry this request's
+    tenant views, so the router inherits tenancy without reading it (the one
+    `tenant_id` read below serves the executor's audit stamp only). Pilot
+    allowlist = tenant-visible non-deprecated non-`internal` rows (registry
+    visibility, NOT per-agent refs — pinned in the tools `CONTRACT.md`).
+
+    Args:
+        tools_service: The request's `ToolsService` (system+tenant reads).
+        tool_executor: The request's `ToolExecutor` (guarded execution+audit).
+
+    Returns:
+        A `McpServerRouter` serving this tenant's visible tools.
+    """
+    from voiceai.common.tenancy import current_tenant
+    from voiceai.modules.tools.adapters.mcp.server import KeySnapshot, McpServerRouter
+    from voiceai.modules.tools.constants import TOOL_KIND_INTERNAL
+
+    async def _visible() -> list[dict[str, Any]]:
+        rows = await tools_service.list_tools()
+        return [
+            {"name": row.tool_id, "description": row.description, "inputSchema": row.parameters}
+            for row in rows
+            if not row.deprecated and row.kind != TOOL_KIND_INTERNAL
+        ]
+
+    async def _call(name: str, arguments: dict[str, Any]) -> Any:
+        visible = await _visible()
+        refs = [str(item["name"]) for item in visible]
+        tenant_id = current_tenant().tenant_id
+        outcome = await tool_executor.execute_tool(
+            tool_id=name,
+            arguments=arguments,
+            agent_snapshot=KeySnapshot(agent_id=f"mcp:{tenant_id}", tool_refs=refs),
+            tenant=tenant_id,
+        )
+        return {"success": outcome.success, "summary": outcome.result_summary, "result": outcome.data}
+
+    return McpServerRouter(list_tools=_visible, call_tool=_call)
+
+
 class _AgentToolLinks:
     """AgentToolLink over the scoped definitions port (spec 0046 integrator).
 
@@ -669,6 +712,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # executor is per-request (Factory — same pinning hazard as tools_service).
     credential_vault = providers.Singleton(_build_credential_vault, environment)
     tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment)
+    mcp_server_router = providers.Factory(_build_mcp_server_router, tools_service, tool_executor)
 
     agent_service = providers.Factory(
         _build_agent_service,

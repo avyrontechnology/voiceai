@@ -122,6 +122,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "POST /api/v1/knowledgebases",
         "POST /api/v1/knowledgebases/{kb_id}/attach",
         "POST /api/v1/knowledgebases/{kb_id}/detach",
+        "POST /api/v1/mcp",
         "POST /api/v1/organization/reset",
         "POST /api/v1/phone-numbers",
         "POST /api/v1/phone-numbers/{number_id}/assign",

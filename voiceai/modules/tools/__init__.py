@@ -9,7 +9,6 @@ from voiceai.modules.tools.dcr_service import ClientRecord, DcrService
 from voiceai.modules.tools.executor import ToolExecutionResult, ToolExecutor
 from voiceai.modules.tools.service import ToolsService
 from voiceai.modules.tools.vault import CredentialVault
-
 MODULE: ModuleDef = ModuleDef(
     name=MODULE_NAME,
     router=router,
@@ -18,7 +17,8 @@ MODULE: ModuleDef = ModuleDef(
     runbook_path="voiceai/modules/tools/RUNBOOK.md",
     # spec 0049: route-gate + 422 tests pushed the total past 1500; ratcheted minimally.
     # spec 0056: executor + vault + MCP execution lane (5000 ceiling; ratchet down next slice).
-    max_lines=5000,
+    # spec 0057: MCP server pilot (server router + controller route + tests).
+    max_lines=5400,
 )
 
 __all__ = [

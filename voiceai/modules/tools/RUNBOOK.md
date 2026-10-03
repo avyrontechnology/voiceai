@@ -32,6 +32,15 @@ Owner: `squad-platform` (#squad-platform).
   server stops there and logs. DCR discovery is 3 metadata GETs max per
   issuer; cache the issuer decision in the template row, not in code.
 
+## MCP server pilot ops (spec 0057)
+
+- Dark by default (`MCP_SERVER_ENABLED=false` → 404 before any service
+  call). Enable for the one pilot key only; rollback is flag-off.
+- Partner offboard = revoke the API key (existing auth revoke path) + flip
+  the flag off. Audit via `tool_execution_logs` (`agent_id=mcp:<tenant>`).
+- 401/403 spikes on `/api/v1/mcp` are the gate posture (same as `/tools`):
+  correlate by envelope `error_id` in `otobaai.*` logs.
+
 ## Rollback
 
 Revert the owning spec's merge; no migrations in scaffold.
