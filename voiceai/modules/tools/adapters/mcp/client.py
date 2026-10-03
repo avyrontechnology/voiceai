@@ -73,9 +73,11 @@ class McpHttpClient:
 
     Args:
         base_url: Server base URL (already SSRF-checked by the caller/DCR).
-        access_token: Bearer token, or `None` for public servers.
+        access_token: Bearer token, or `None` for public/header-authed servers.
         timeout_s: Per-request timeout budget.
         client_factory: `httpx.AsyncClient` seam (tests inject `MockTransport`).
+        extra_headers: Static headers merged under bearer + session (spec
+            0060: custom-header credentials; values stay out of logs).
     """
 
     def __init__(
@@ -85,15 +87,19 @@ class McpHttpClient:
         *,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._access_token = access_token
         self._timeout_s = timeout_s
         self._client_factory = client_factory
+        self._extra_headers = dict(extra_headers or {})
         self._session_id: str | None = None
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        """Build request headers (bearer + session resume, never secrets in logs).
+        """Build request headers (static + bearer + session resume).
+
+        Secrets never reach logs — callers log identifiers only.
 
         Args:
             extra: Additional headers (content-type set by the caller).
@@ -101,7 +107,8 @@ class McpHttpClient:
         Returns:
             The header mapping for one request.
         """
-        headers: dict[str, str] = dict(extra or {})
+        headers: dict[str, str] = dict(self._extra_headers)
+        headers.update(extra or {})
         if self._access_token:
             headers[C.AUTH_AUTHORIZATION_HEADER] = f"{C.AUTH_BEARER_SCHEME} {self._access_token}"
         if self._session_id:

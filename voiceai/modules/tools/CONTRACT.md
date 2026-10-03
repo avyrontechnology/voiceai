@@ -67,7 +67,6 @@ the hot path never gains a lookup.
   carries a real endpoint (unseeded otherwise); no attachable-but-broken rows.
 
 ## Execution (spec 0056, internal-only)
-
 No public execute route: chat (`complete_chat_turn` tool_calls) and voice
 (`execute_function_call` custom path) call `ToolExecutor.execute_tool`
 through the container-injected port. Pipeline: MCP-namespace strip →
@@ -93,3 +92,38 @@ exception to the envelope rule — only 401/403/404 gates use the envelope).
 Auth: API-key bearer with `platform:read` (`mcp:invoke` lands with OAuth in
 S2). Pilot allowlist = registry visibility, NOT per-agent refs (per-agent
 binding lands with `actions:` in S2). Disabled flag answers 404.
+
+## Integrations (spec 0058)
+
+Vault-state HTTP surface for the Integrations UI section. Secrets cross the
+wire exactly once (plaintext in the creating `POST` response as
+`secret_once` / `client_secret_once`); every read projects metadata only
+(`provider`, `credential_type`, `key_version`, `expires_at` — the
+`encrypted_data` field has no serializer, pinned by test).
+
+| Route | Scope | Answers |
+| --- | --- | --- |
+| `GET /api/v1/integration-templates` | `platform:read` | 200 `{"templates": [...]}` (system + tenant, tenant wins) |
+| `POST /api/v1/integration-templates` | `platform:write` | 201 row + `replaced` (tenant override; system rows stay curated) |
+| `DELETE /api/v1/integration-templates/{provider}` | `platform:write` | 200 deleted; 403 system row; 404 foreign/missing |
+| `POST /api/v1/integration-templates/{provider}/sync-tools` | `platform:write` | 201 `{created, updated, skipped, tool_ids, problems}`; 400 no-credential/unsafe-base; 404 unknown |
+
+## Transports (spec 0060: `http` generic-REST + `mcp` auto-discovery)
+
+Templates carry `transport` (`http` default — old rows stay on the manual
+path, no migration). `http` sync uses the manual entries; `mcp` sync runs
+`initialize` → bounded `tools/list` against `client_config.base_url` and
+materializes `function:{remote}` rows (`parameters=inputSchema`,
+`meta{transport:"mcp", mcp_tool}`), ignoring manual entries (reported).
+MCP discovery/execution ride bearer/oauth2-token/custom-header credentials
+(`api_key`/`basic` fail with guidance); query-placed keys cannot ride MCP.
+The executor routes `meta.transport == "mcp"` rows through the MCP client
+(handshake + `tools/call`, one refresh + retry, failures as `success=False`
+values with `error_id` — same shape as HTTP).
+| `GET /api/v1/partner-credentials` | `platform:read` | 200 `{"credentials": [...]}` metadata only |
+| `POST /api/v1/partner-credentials` | `platform:write` | 201 metadata + `secret_once` + `replaced` (idempotent by provider) |
+| `DELETE /api/v1/partner-credentials/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
+| `GET /api/v1/partner-integrations[?agent_id=]` | `platform:read` | 200 `{"integrations": [...]}` |
+| `POST /api/v1/partner-integrations` | `platform:write` | 201 row; 400 without a live credential |
+| `DELETE /api/v1/partner-integrations/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
+| `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata + `client_secret_once`; 400 undiscoverable/MANUAL |

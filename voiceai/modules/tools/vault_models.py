@@ -24,6 +24,10 @@ from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.database.base import BaseFields
 from voiceai.modules.tools.constants import (
     CREDENTIAL_TYPE_API_KEY,
+    CREDENTIAL_TYPE_BASIC,
+    CREDENTIAL_TYPE_BEARER,
+    CREDENTIAL_TYPE_CUSTOM,
+    CREDENTIAL_TYPE_NONE,
     CREDENTIAL_TYPE_OAUTH2,
     INTEGRATION_STATUS_ACTIVE,
     CredentialType,
@@ -31,6 +35,10 @@ from voiceai.modules.tools.constants import (
 
 __all__ = [
     "CREDENTIAL_TYPE_API_KEY",
+    "CREDENTIAL_TYPE_BASIC",
+    "CREDENTIAL_TYPE_BEARER",
+    "CREDENTIAL_TYPE_CUSTOM",
+    "CREDENTIAL_TYPE_NONE",
     "CREDENTIAL_TYPE_OAUTH2",
     "CredentialType",
     "INTEGRATION_STATUS_ACTIVE",
@@ -39,7 +47,8 @@ __all__ = [
     "PartnerIntegration",
 ]
 
-#: Credential shapes the vault stores (spec 0056 data model).
+#: Credential shapes the vault stores (spec 0059 auth model — one
+#: vocabulary shared by rows, service validation, and the UI builder).
 
 
 class PartnerCredential(BaseFields):
@@ -54,7 +63,10 @@ class PartnerCredential(BaseFields):
     Attributes:
         provider: Partner name (`github`, `slack`, … — a code/DB constant at
             call sites, never free user input into a query).
-        credential_type: `oauth2` or `api_key`.
+        credential_type: `none`|`api_key`|`bearer`|`basic`|`oauth2`|`custom`.
+        auth_config: NON-secret placement (api_key `{location, name}`, basic
+            `{username}` — a `password`/`token`/`secret` key here is refused
+            at the service boundary, never stored).
         encrypted_data: Vault envelope (opaque ciphertext — never logged).
         key_version: Key generation that sealed the envelope (`>= 1`).
         expires_at: Token expiry, or `None` for non-expiring keys.
@@ -63,6 +75,7 @@ class PartnerCredential(BaseFields):
 
     provider: str = Field(..., min_length=1)
     credential_type: CredentialType = CREDENTIAL_TYPE_API_KEY
+    auth_config: dict[str, Any] = Field(default_factory=dict)
     encrypted_data: str = Field(..., min_length=1)
     key_version: int = Field(..., ge=1)
     expires_at: datetime | None = None
@@ -106,6 +119,8 @@ class IntegrationTemplate(BaseFields):
     Attributes:
         provider: Partner name, unique per tenant scope (the natural key).
         credential_type: Which credential shape this provider needs.
+        transport: `http` (manual tool entries, spec 0059) or `mcp`
+            (remote-server auto-discovery, spec 0060).
         tools_template: Curated tool shapes the provider offers.
         oauth_config: Discovery/registration options for the Phase-3 DCR flow.
         client_config: Default MCP client options (timeouts, versions).
@@ -114,6 +129,7 @@ class IntegrationTemplate(BaseFields):
 
     provider: str = Field(..., min_length=1)
     credential_type: CredentialType = CREDENTIAL_TYPE_API_KEY
+    transport: str = Field(default="http")
     tools_template: list[dict[str, Any]] = Field(default_factory=list)  # why: curated tool shapes are free-form JSON
     oauth_config: dict = Field(default_factory=dict)  # why: DCR discovery options are free-form JSON
     client_config: dict = Field(default_factory=dict)  # why: client defaults are free-form JSON

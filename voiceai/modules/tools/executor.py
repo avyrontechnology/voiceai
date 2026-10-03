@@ -32,7 +32,9 @@ from voiceai.common.errors import AppError
 from voiceai.common.logger import get_logger
 from voiceai.common.security import is_safe_outbound_url, redact_secrets
 from voiceai.modules.tools import constants as C
-from voiceai.modules.tools.auth_resolver import ToolAuthResolver
+from voiceai.modules.tools.adapters.mcp.client import McpHttpClient
+from voiceai.modules.tools.auth_resolver import AuthParams, ToolAuthResolver
+from voiceai.modules.tools.errors import ToolExecutionError
 from voiceai.modules.tools.exceptions import (
     ensure_allowlisted,
     ensure_arguments_valid,
@@ -238,6 +240,8 @@ class ToolExecutor:
         fingerprint = fingerprint_tool_call(canonical, arguments)
         if tool.url is None or tool.kind == C.TOOL_KIND_INTERNAL:
             return self._execute_internal(tool, agent_snapshot.agent_id, arguments, fingerprint, started)
+        if isinstance(tool.meta, dict) and tool.meta.get("transport") == C.TRANSPORT_MCP:
+            return await self._execute_mcp(tool, agent_snapshot.agent_id, arguments, fingerprint, started)
         return await self._execute_http(tool, agent_snapshot.agent_id, arguments, fingerprint, started)
 
     def _execute_internal(
@@ -305,23 +309,101 @@ class ToolExecutor:
         safe = await asyncio.to_thread(self._url_guard, url)
         ensure_endpoint_safe(safe, tool.tool_id)
         timeout_s = _clamp_timeout(tool.timeout_s)
-        headers = await self._auth.resolve_headers(tool)
+        auth = await self._auth.resolve_auth(tool)
         factory = self._http_client_factory or _default_client_factory
         try:
             async with factory(timeout_s) as client:
-                response = await self._call_with_auth_retry(client, tool, url, headers, arguments)
+                response = await self._call_with_auth_retry(client, tool, url, auth, arguments)
         except httpx.TimeoutException:
             return self._timeout_result(tool, agent_id, fingerprint, started, timeout_s)
         except httpx.HTTPError as exc:
             return self._unreachable_result(tool, agent_id, fingerprint, started, exc)
         return self._result_from_response(tool, agent_id, fingerprint, started, response)
 
+    async def _execute_mcp(
+        self,
+        tool: ToolDefinition,
+        agent_id: str,
+        arguments: Mapping[str, Any],  # why: call arguments are free-form JSON
+        fingerprint: str,
+        started: float,
+    ) -> ToolExecutionResult:
+        """Run one MCP-protocol call: handshake then `tools/call` (spec 0060).
+
+        Query-placed keys cannot ride MCP (the spec has no query auth), so
+        they refuse here with guidance instead of silently dropping the key.
+        Refresh semantics mirror HTTP: one invalidate + force-refresh + retry
+        on failure, then the failure value (never transport text).
+
+        Args:
+            tool: The synced row (`meta.transport == "mcp"`, `meta.mcp_tool`
+                names the remote tool, `url` is the server endpoint).
+            agent_id: Owning agent.
+            arguments: Raw call arguments (validated upstream).
+            fingerprint: The call fingerprint.
+            started: The `perf_counter` value taken by `execute_tool`.
+
+        Returns:
+            The outcome (failures arrive as `success=False` values).
+
+        Raises:
+            ToolExecutionError: When query-placed auth or an unresolvable
+                credential meets this path (fail-closed refusals).
+        """
+        url = tool.url or ""
+        safe = await asyncio.to_thread(self._url_guard, url)
+        ensure_endpoint_safe(safe, tool.tool_id)
+        timeout_s = _clamp_timeout(tool.timeout_s)
+        auth = await self._auth.resolve_auth(tool)
+        if auth.query:
+            raise ToolExecutionError(
+                "Query-placed keys cannot ride MCP calls — use header mode.",
+                details={"tool_id": tool.tool_id},
+            )
+        remote = tool.meta.get("mcp_tool", tool.name) if isinstance(tool.meta, dict) else tool.name
+        if not isinstance(remote, str) or not remote:
+            remote = tool.name
+        last_exc: ToolExecutionError | None = None
+        for _ in range(C.RETRY_ONCE + 1):
+            try:
+                client = McpHttpClient(url, timeout_s=timeout_s, extra_headers=dict(auth.headers))
+                await client.initialize(C.MCP_PROTOCOL_VERSION)
+                outcome = await client.call_tool(remote, dict(arguments))
+                return ToolExecutionResult(
+                    tool_id=tool.tool_id,
+                    agent_id=agent_id,
+                    success=True,
+                    result_summary=C.EXECUTOR_MCP_SUMMARY_TEMPLATE.format(tool=tool.name, ms=_elapsed_ms(started)),
+                    data=outcome
+                    if isinstance(outcome, dict)
+                    else {C.EXECUTOR_TEXT_KEY: str(outcome)[: C.EXECUTOR_RESPONSE_MAX_CHARS]},
+                    call_fingerprint=fingerprint,
+                    execution_ms=_elapsed_ms(started),
+                    error_id=None,
+                )
+            except ToolExecutionError as exc:
+                last_exc = exc
+                if tool.auth_ref is None:
+                    break
+                await self._auth.invalidate_credential_cache(tool.auth_ref)
+                try:
+                    auth = await self._auth.resolve_auth(tool, force_refresh=True)
+                except ToolExecutionError:
+                    break
+                if auth.query:
+                    raise ToolExecutionError(
+                        "Query-placed keys cannot ride MCP calls — use header mode.",
+                        details={"tool_id": tool.tool_id},
+                    ) from last_exc
+        assert last_exc is not None  # the loop always runs at least once
+        return self._unreachable_result(tool, agent_id, fingerprint, started, last_exc)
+
     async def _call_with_auth_retry(
         self,
         client: httpx.AsyncClient,
         tool: ToolDefinition,
         url: str,
-        headers: dict[str, str],
+        auth: AuthParams,
         arguments: Mapping[str, Any],  # why: call arguments are free-form JSON
     ) -> httpx.Response:
         """Call once, retrying exactly once after refresh on a credentialed 401.
@@ -330,19 +412,19 @@ class ToolExecutor:
             client: The bounded execution client.
             tool: The resolved row.
             url: The pre-flighted endpoint.
-            headers: The resolved outbound headers.
+            auth: The resolved headers + query halves.
             arguments: Raw call arguments.
 
         Returns:
             The final response (a repeated 401 answers as-is — single retry).
         """
-        response = await self._call_once(client, tool, url, headers, arguments)
+        response = await self._call_once(client, tool, url, auth, arguments)
         for _ in range(C.RETRY_ONCE):
             if response.status_code != HTTP_UNAUTHORIZED or tool.auth_ref is None:
                 break
             await self._auth.invalidate_credential_cache(tool.auth_ref)
-            headers = await self._auth.resolve_headers(tool, force_refresh=True)
-            response = await self._call_once(client, tool, url, headers, arguments)
+            auth = await self._auth.resolve_auth(tool, force_refresh=True)
+            response = await self._call_once(client, tool, url, auth, arguments)
         return response
 
     async def _call_once(
@@ -350,25 +432,29 @@ class ToolExecutor:
         client: httpx.AsyncClient,
         tool: ToolDefinition,
         url: str,
-        headers: dict[str, str],
+        auth: AuthParams,
         arguments: Mapping[str, Any],  # why: call arguments are free-form JSON
     ) -> httpx.Response:
         """Fire one bounded attempt (GET carries params, the rest carry JSON).
+
+        Query-param credentials merge into the URL params on every method
+        (arguments still ride params on GET, JSON body otherwise).
 
         Args:
             client: The bounded execution client.
             tool: The resolved row (only `method` is read).
             url: The pre-flighted endpoint.
-            headers: The outbound headers.
+            auth: The resolved headers + query halves.
             arguments: Raw call arguments.
 
         Returns:
             The upstream response.
         """
         method = (tool.method or C.DEFAULT_TOOL_METHOD).upper()
+        headers = auth.headers
         if method == C.EXECUTOR_GET_METHOD:
-            return await client.get(url, headers=headers, params=dict(arguments))
-        return await client.request(method, url, headers=headers, json=dict(arguments))
+            return await client.get(url, headers=headers, params={**auth.query, **dict(arguments)})
+        return await client.request(method, url, headers=headers, params=dict(auth.query), json=dict(arguments))
 
     def _result_from_response(
         self,
@@ -441,7 +527,7 @@ class ToolExecutor:
         agent_id: str,
         fingerprint: str,
         started: float,
-        exc: httpx.HTTPError,
+        exc: Exception,
     ) -> ToolExecutionResult:
         """Render a transport failure as a failure value (type logged, text dropped).
 
@@ -451,7 +537,7 @@ class ToolExecutor:
             fingerprint: The call fingerprint.
             started: The `perf_counter` value taken by `execute_tool`.
             exc: The transport failure (its type is logged; its text — which
-                can echo addresses — never reaches the caller).
+                can echo addresses or protocol errors — never reaches the caller).
 
         Returns:
             A `success=False` result stitched to the warning log by `error_id`.

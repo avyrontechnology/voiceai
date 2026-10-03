@@ -53,6 +53,9 @@ SIZE_DEBT: dict[str, str] = {
     # spec-0042 integrator: recording capture outcome grew lifecycle/report.py past
     # 800; the voice-session split that shrinks it is still to be specced.
     "voiceai/modules/voice/session/lifecycle/report.py": "spec-0042",
+    # spec-0058 integrator: tool/vault/MCP/DCR wiring builders grew the
+    # container past 800; the core-wiring split shrinks it (specced next).
+    "voiceai/core/container.py": "spec-0058",
 }
 
 #: Kernel ceilings (blueprint target-tree budgets; measured well below today).

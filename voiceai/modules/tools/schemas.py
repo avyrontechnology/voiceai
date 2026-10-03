@@ -9,16 +9,25 @@ module's `InvalidToolError` carrying field paths only, never pydantic text.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, ValidationError
 
 from voiceai.modules.tools import constants as C
-from voiceai.modules.tools.constants import ToolKind
+from voiceai.modules.tools.constants import CredentialType, ToolKind, TransportType
 from voiceai.modules.tools.errors import InvalidToolError
 from voiceai.modules.tools.helpers import validation_field_paths
 from voiceai.modules.tools.models import ToolDefinition
 from voiceai.modules.tools.static_methods import build_tool_id
 
-__all__ = ["CreateToolPayload", "UpdateToolPayload"]
+__all__ = [
+    "ConnectCredentialPayload",
+    "CreateToolPayload",
+    "DcrRegisterPayload",
+    "LinkIntegrationPayload",
+    "TemplatePayload",
+    "UpdateToolPayload",
+]
 
 
 class CreateToolPayload(BaseModel):
@@ -70,3 +79,47 @@ class CreateToolPayload(BaseModel):
 
 class UpdateToolPayload(CreateToolPayload):
     """Body for `PUT /tools/{id}` — same shape, id comes from the path."""
+
+
+class ConnectCredentialPayload(BaseModel):
+    """Body for `POST /partner-credentials` — secret sealed on arrival."""
+
+    model_config = {"extra": "forbid"}
+
+    provider: str = Field(..., min_length=1)
+    credential_type: CredentialType = Field(default=C.CREDENTIAL_TYPE_API_KEY)
+    secret: str = Field(default="")
+    auth_config: dict = Field(default_factory=dict)  # why: placement is free-form non-secret JSON
+    expires_at: datetime | None = Field(default=None)
+
+
+class LinkIntegrationPayload(BaseModel):
+    """Body for `POST /partner-integrations` — non-secret config only."""
+
+    model_config = {"extra": "forbid"}
+
+    provider: str = Field(..., min_length=1)
+    agent_id: str = Field(..., min_length=1)
+    config: dict = Field(default_factory=dict)  # why: provider runtime options are free-form JSON
+
+
+class DcrRegisterPayload(BaseModel):
+    """Body for `POST /integrations/dcr-register` — issuer + partner name."""
+
+    model_config = {"extra": "forbid"}
+
+    issuer_url: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+
+
+class TemplatePayload(BaseModel):
+    """Body for `POST /integration-templates` — tenant override, id = provider."""
+
+    model_config = {"extra": "forbid"}
+
+    provider: str = Field(..., min_length=1)
+    credential_type: CredentialType = Field(default=C.CREDENTIAL_TYPE_API_KEY)
+    transport: TransportType = Field(default=C.TRANSPORT_HTTP)
+    tools_template: list[dict] = Field(default_factory=list)  # why: curated tool shapes are free-form JSON
+    oauth_config: dict = Field(default_factory=dict)  # why: DCR discovery options are free-form JSON
+    client_config: dict = Field(default_factory=dict)  # why: client defaults are free-form JSON

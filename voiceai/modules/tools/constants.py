@@ -20,6 +20,26 @@ TOOL_KIND_INTERNAL: Final[Literal["internal"]] = "internal"
 TOOLS_PATH: Final[str] = "/tools"
 TOOL_ITEM_PATH: Final[str] = "/tools/{tool_id}"
 
+#: Integration routes (spec 0058): templates read curated provider rows,
+#: credentials carry vault envelopes (metadata-only on reads), links bind
+#: providers to agents, DCR registers outbound OAuth clients.
+TEMPLATES_PATH: Final[str] = "/integration-templates"
+TEMPLATE_ITEM_PATH: Final[str] = "/integration-templates/{provider}"
+TEMPLATE_SYNC_PATH: Final[str] = "/integration-templates/{provider}/sync-tools"
+CREDENTIALS_PATH: Final[str] = "/partner-credentials"
+CREDENTIAL_ITEM_PATH: Final[str] = "/partner-credentials/{credential_id}"
+INTEGRATIONS_PATH: Final[str] = "/partner-integrations"
+INTEGRATION_ITEM_PATH: Final[str] = "/partner-integrations/{integration_id}"
+DCR_REGISTER_PATH: Final[str] = "/integrations/dcr-register"
+
+#: Wire keys for credential/integration payloads (identifiers only on reads).
+CREDENTIALS_KEY: Final[str] = "credentials"
+SECRET_ONCE_KEY: Final[str] = "secret_once"
+REPLACED_KEY: Final[str] = "replaced"
+CLIENT_SECRET_ONCE_KEY: Final[str] = "client_secret_once"
+CLIENT_ID_KEY: Final[str] = "client_id"
+ISSUER_URL_KEY: Final[str] = "issuer_url"
+
 #: MCP server pilot (spec 0057): single Streamable-HTTP endpoint (JSON-only).
 #: Auth reuses `platform:read` (existing scope — `mcp:invoke` lands with OAuth in S2).
 MCP_PATH: Final[str] = "/mcp"
@@ -47,6 +67,7 @@ STATE_DELETED: Final[str] = "deleted"
 #: OpenAPI descriptions for the request surface.
 KIND_FIELD_DESCRIPTION: Final[str] = "`function` or `webhook` (`internal` rejected)."
 KIND_QUERY_DESCRIPTION: Final[str] = "Narrow to one kind."
+AGENT_QUERY_DESCRIPTION: Final[str] = "Narrow to one agent's links."
 
 #: Default HTTP method for the endpoint binding.
 DEFAULT_TOOL_METHOD: Final[str] = "POST"
@@ -93,6 +114,7 @@ EXECUTOR_TEXT_KEY: Final[str] = "text"
 
 #: Human summaries (status codes and timings only — never bodies or secrets).
 EXECUTOR_HTTP_SUMMARY_TEMPLATE: Final[str] = "HTTP {status} in {ms}ms"
+EXECUTOR_MCP_SUMMARY_TEMPLATE: Final[str] = "mcp {tool} in {ms}ms"
 EXECUTOR_INTERNAL_SUMMARY_TEMPLATE: Final[str] = "internal:{name} in {ms}ms"
 EXECUTOR_TIMEOUT_SUMMARY_TEMPLATE: Final[str] = "tool timed out after {timeout}s"
 EXECUTOR_UNREACHABLE_SUMMARY: Final[str] = "tool endpoint unreachable"
@@ -121,11 +143,37 @@ LOG_TOOL_UNREACHABLE: Final[str] = "tool unreachable: %s (%s)"
 LOG_AUTH_CACHE_DEGRADED: Final[str] = "tools auth cache degraded (%s)"
 LOG_WRITE_FAILED: Final[str] = "tool log write failed (%s)"
 
-#: Credential shapes the vault stores (spec 0056 data model; canonical home —
+#: Credential shapes the vault stores (spec 0059 auth model; canonical home —
 #: `vault_models` re-exports these names, integrator-merged Phase-2).
-CredentialType = Literal["oauth2", "api_key"]
+CredentialType = Literal["none", "api_key", "bearer", "basic", "oauth2", "custom"]
+CREDENTIAL_TYPE_NONE: Final[Literal["none"]] = "none"
 CREDENTIAL_TYPE_OAUTH2: Final[Literal["oauth2"]] = "oauth2"
 CREDENTIAL_TYPE_API_KEY: Final[Literal["api_key"]] = "api_key"
+CREDENTIAL_TYPE_BEARER: Final[Literal["bearer"]] = "bearer"
+CREDENTIAL_TYPE_BASIC: Final[Literal["basic"]] = "basic"
+CREDENTIAL_TYPE_CUSTOM: Final[Literal["custom"]] = "custom"
+
+#: Integration transports (spec 0060): generic-HTTP manual schemas vs
+#: remote-MCP auto-discovery. One vocabulary for rows, sync, executor, UI.
+TransportType = Literal["http", "mcp"]
+TRANSPORT_HTTP: Final[Literal["http"]] = "http"
+TRANSPORT_MCP: Final[Literal["mcp"]] = "mcp"
+
+#: `auth_ref` pointer format pin (spec 0059): `cred:<credential_id>`.
+#: Anything else fails closed in the store (never a bare call).
+AUTH_REF_PREFIX: Final[str] = "cred:"
+
+#: api_key placement + defaults (spec 0059): header or query under `name`.
+AUTH_LOCATION_HEADER: Final[str] = "header"
+AUTH_LOCATION_QUERY: Final[str] = "query"
+AUTH_LOCATION_FIELD: Final[str] = "location"
+AUTH_NAME_FIELD: Final[str] = "name"
+AUTH_USERNAME_FIELD: Final[str] = "username"
+AUTH_PASSWORD_FIELD: Final[str] = "password"
+DEFAULT_API_KEY_HEADER: Final[str] = "X-API-Key"
+
+#: Sealed-material JSON keys (values only — names live in `auth_config`).
+AUTH_SECRET_FIELD: Final[str] = "secret"
 
 #: Default lifecycle state for a freshly linked integration.
 INTEGRATION_STATUS_ACTIVE: Final[str] = "active"

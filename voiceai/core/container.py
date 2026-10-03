@@ -401,11 +401,11 @@ def _build_credential_vault(environment: Any) -> Any:
     return CredentialVault(environment.vault_master_key)
 
 
-def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) -> Any:
-    """Build the tenant-scoped tool executor (spec 0056, Phase-1).
+def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any, vault: Any) -> Any:
+    """Build the tenant-scoped tool executor (spec 0056, Phase-1; spec 0059 store).
 
     Called per request (Factory): the tenant binds at construction through
-    the scoped tools/logs views, so a Singleton must never serve this
+    the scoped tools/logs/vault views, so a Singleton must never serve this
     (first-request pinning). The `tools_execute_enabled` flag gates at the
     chat/voice seam (callers check before invoking), not here, so tests can
     exercise the executor with the flag off.
@@ -414,6 +414,7 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) ->
         db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
         cache_client: Redis cache client or `None` (auth cache degrades).
         environment: Process configuration (execute flag + timeout bounds).
+        vault: The process `CredentialVault` backing header resolution.
 
     Returns:
         A `ToolExecutor` over this request's tenant views.
@@ -424,9 +425,12 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) ->
     from voiceai.database.repository import InMemoryRepository, MotorRepository
     from voiceai.database.scoped import TenantScopedRepository
     from voiceai.modules.tools.auth_resolver import ToolAuthResolver
+    from voiceai.modules.tools.credential_store import VaultCredentialStore
     from voiceai.modules.tools.executor import ToolExecutor
     from voiceai.modules.tools.models import ToolDefinition, ToolExecutionLog
     from voiceai.modules.tools.repository import LogsRepository, ToolsRepository
+    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+    from voiceai.modules.tools.vault_repository import VaultRepository
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
     tenant_id = current_tenant().tenant_id
@@ -440,8 +444,88 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) ->
         tenant_id,
         Collections.TOOL_EXECUTION_LOGS,
     )
-    auth = ToolAuthResolver(redis_cache=cache_client, credential_store=None)
+    vault_views = VaultRepository(
+        credentials=TenantScopedRepository(
+            factory(db_client, Collections.PARTNER_CREDENTIALS, PartnerCredential),
+            tenant_id,
+            Collections.PARTNER_CREDENTIALS,
+        ),
+        integrations=TenantScopedRepository(
+            factory(db_client, Collections.PARTNER_INTEGRATIONS, PartnerIntegration),
+            tenant_id,
+            Collections.PARTNER_INTEGRATIONS,
+        ),
+        templates=TenantScopedRepository(
+            factory(db_client, Collections.INTEGRATION_TEMPLATES, IntegrationTemplate),
+            tenant_id,
+            Collections.INTEGRATION_TEMPLATES,
+        ),
+    )
+    auth = ToolAuthResolver(redis_cache=cache_client, credential_store=VaultCredentialStore(vault_views, vault))
     return ToolExecutor(ToolsRepository(tools_view), LogsRepository(logs_view), auth)
+
+
+def _build_integration_service(db_client: Any, vault: Any) -> Any:
+    """Build the vault-state service over system + tenant views (spec 0058).
+
+    Called per request (Factory): the tenant binds at construction through
+    the scoped vault views, so a Singleton must never serve this
+    (first-request pinning). The vault itself is tenant-free (Singleton).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        vault: The process `CredentialVault` (envelope encryption).
+
+    Returns:
+        An `IntegrationService` with a stateless `DcrService` attached.
+    """
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID, current_tenant
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.dcr_service import DcrService
+    from voiceai.modules.tools.integration_service import IntegrationService
+    from voiceai.modules.tools.models import ToolDefinition
+    from voiceai.modules.tools.repository import ToolsRepository
+    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+    from voiceai.modules.tools.vault_repository import VaultRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+
+    def _views(tenant_id: str) -> VaultRepository:
+        """Compose the three vault collections under one tenant view."""
+        return VaultRepository(
+            credentials=TenantScopedRepository(
+                factory(db_client, Collections.PARTNER_CREDENTIALS, PartnerCredential),
+                tenant_id,
+                Collections.PARTNER_CREDENTIALS,
+            ),
+            integrations=TenantScopedRepository(
+                factory(db_client, Collections.PARTNER_INTEGRATIONS, PartnerIntegration),
+                tenant_id,
+                Collections.PARTNER_INTEGRATIONS,
+            ),
+            templates=TenantScopedRepository(
+                factory(db_client, Collections.INTEGRATION_TEMPLATES, IntegrationTemplate),
+                tenant_id,
+                Collections.INTEGRATION_TEMPLATES,
+            ),
+        )
+
+    return IntegrationService(
+        system=_views(SYSTEM_TENANT_ID),
+        tenant=_views(current_tenant().tenant_id),
+        vault=vault,
+        dcr=DcrService(),
+        tools=ToolsRepository(
+            TenantScopedRepository(
+                factory(db_client, Collections.TOOLS, ToolDefinition),
+                current_tenant().tenant_id,
+                Collections.TOOLS,
+            )
+        ),
+    )
 
 
 def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:
@@ -711,7 +795,8 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Spec 0056 execution lane: vault is tenant-free (Singleton safe), the
     # executor is per-request (Factory — same pinning hazard as tools_service).
     credential_vault = providers.Singleton(_build_credential_vault, environment)
-    tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment)
+    tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment, credential_vault)
+    integration_service = providers.Factory(_build_integration_service, db_client, credential_vault)
     mcp_server_router = providers.Factory(_build_mcp_server_router, tools_service, tool_executor)
 
     agent_service = providers.Factory(
