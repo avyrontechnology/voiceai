@@ -32,6 +32,8 @@ _SENSITIVE_ENV_FIELDS: Final[set[str]] = {
     "mongo_url",
     "jwt_private_key",
     "jwt_public_key",
+    "vault_master_key",
+    "twilio_auth_token",
 }
 
 
@@ -381,6 +383,67 @@ def _build_tools_service(db_client: Any, definitions: Any) -> Any:
     return tools
 
 
+def _build_credential_vault(environment: Any) -> Any:
+    """Build the AES-GCM credential vault (spec 0056, Phase-2).
+
+    Singleton-safe: the vault holds only the derived key digest, never a
+    tenant, so one process-wide instance serves every request. Empty master
+    key fails closed at construction (vault stays dark until configured).
+
+    Args:
+        environment: Process configuration carrying `vault_master_key`.
+
+    Returns:
+        A `CredentialVault` (or raises `ConfigurationError` when unconfigured).
+    """
+    from voiceai.modules.tools.vault import CredentialVault
+
+    return CredentialVault(environment.vault_master_key)
+
+
+def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any) -> Any:
+    """Build the tenant-scoped tool executor (spec 0056, Phase-1).
+
+    Called per request (Factory): the tenant binds at construction through
+    the scoped tools/logs views, so a Singleton must never serve this
+    (first-request pinning). The `tools_execute_enabled` flag gates at the
+    chat/voice seam (callers check before invoking), not here, so tests can
+    exercise the executor with the flag off.
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        cache_client: Redis cache client or `None` (auth cache degrades).
+        environment: Process configuration (execute flag + timeout bounds).
+
+    Returns:
+        A `ToolExecutor` over this request's tenant views.
+    """
+    from voiceai.common.tenancy import current_tenant
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.auth_resolver import ToolAuthResolver
+    from voiceai.modules.tools.executor import ToolExecutor
+    from voiceai.modules.tools.models import ToolDefinition, ToolExecutionLog
+    from voiceai.modules.tools.repository import LogsRepository, ToolsRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    tenant_id = current_tenant().tenant_id
+    tools_view: Any = TenantScopedRepository(
+        factory(db_client, Collections.TOOLS, ToolDefinition),
+        tenant_id,
+        Collections.TOOLS,
+    )
+    logs_view: Any = TenantScopedRepository(
+        factory(db_client, Collections.TOOL_EXECUTION_LOGS, ToolExecutionLog),
+        tenant_id,
+        Collections.TOOL_EXECUTION_LOGS,
+    )
+    auth = ToolAuthResolver(redis_cache=cache_client, credential_store=None)
+    return ToolExecutor(ToolsRepository(tools_view), LogsRepository(logs_view), auth)
+
+
 class _AgentToolLinks:
     """AgentToolLink over the scoped definitions port (spec 0046 integrator).
 
@@ -456,6 +519,7 @@ class _AgentToolLinks:
     async def count_referencing_agents(self, tool_id: str) -> int:
         """Count this tenant's agents attaching `tool_id` (exact)."""
         return len(await self._referencing_dumps(tool_id))
+
     async def rematerialize_tool(self, tool_id: str, *, limit: int) -> int:
         """Re-materialize at most `limit` attached agents, persisting clean ones.
 
@@ -600,6 +664,11 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # service cascades edits back through the agent link (spec 0046) — the
     # link closes over the scoped definitions above, same ambient tenant.
     tools_service = providers.Factory(_build_tools_service, db_client, agent_definitions)
+
+    # Spec 0056 execution lane: vault is tenant-free (Singleton safe), the
+    # executor is per-request (Factory — same pinning hazard as tools_service).
+    credential_vault = providers.Singleton(_build_credential_vault, environment)
+    tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment)
 
     agent_service = providers.Factory(
         _build_agent_service,

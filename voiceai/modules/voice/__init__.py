@@ -80,7 +80,9 @@ MODULE: ModuleDef = ModuleDef(
     # regression pins): +100, ratchet back with the next slice.
     # Bumped for spec-0055 (S2S carrier pacing: pacer + flush + wiring): +100,
     # ratchet back with the next slice.
-    max_lines=50200,
+    # Bumped for spec-0056 (tools executor port seam: +1 adapter file): +200,
+    # ratchet back with the next slice.
+    max_lines=50400,
 )
 
 __all__ = [

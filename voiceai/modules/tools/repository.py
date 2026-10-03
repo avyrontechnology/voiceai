@@ -7,12 +7,17 @@ container. The repository pins `id` to `tool_id` and stamps system rows.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
+from voiceai.common.logger import get_logger
 from voiceai.database.repository import BaseRepository, walk_pages
-from voiceai.modules.tools.models import ToolDefinition
+from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.models import ToolDefinition, ToolExecutionLog
 
-__all__ = ["ToolsRepository"]
+__all__ = ["LogsRepository", "ToolsRepository"]
+
+logger: logging.Logger = get_logger(C.MODULE_NAME)
 
 
 class ToolsRepository:
@@ -58,3 +63,53 @@ class ToolsRepository:
     async def delete_tool(self, tool_id: str) -> bool:
         """Soft-delete one row; foreign rows read as missing."""
         return await self._store.soft_delete(tool_id)
+
+
+class LogsRepository:
+    """`ToolExecutionLog` storage with a fail-open contract (spec 0056, Phase-1).
+
+    Audit writes must never fail a call the operator already paid for: both
+    methods swallow persistence outages after one warning line (identifiers
+    only) and answer the degraded value instead. Callers therefore treat a
+    returned row as "best effort persisted" and never branch on it.
+
+    Args:
+        store: The execution-log collection behind a `BaseRepository`
+            (tenant-scoped view — the container stamps the ambient tenant,
+            and `save_log` also stamps explicitly so direct views agree).
+    """
+
+    def __init__(self, store: BaseRepository[ToolExecutionLog]) -> None:
+        self._store = store
+
+    async def save_log(self, log: ToolExecutionLog) -> ToolExecutionLog:
+        """Persist one audit row, or return it unpersisted when the store is down.
+
+        Args:
+            log: The row (tenant stamped here when the caller set it).
+
+        Returns:
+            The persisted row — or the input unchanged when the insert
+            raised (fail-open: the execution result stands regardless).
+        """
+        try:
+            return await self._store.insert(log)
+        except Exception as exc:  # fail-open by contract: audit loss never fails execution
+            logger.warning(C.LOG_WRITE_FAILED, type(exc).__name__)
+            return log
+
+    async def get_log(self, log_id: str) -> ToolExecutionLog | None:
+        """Return one audit row, or `None` when unknown — or unreadable.
+
+        Args:
+            log_id: The row id.
+
+        Returns:
+            The row, or `None` on missing rows and on store outages alike
+            (fail-open: readers degrade to "no audit", never to a 500).
+        """
+        try:
+            return await self._store.get(log_id)
+        except Exception as exc:  # fail-open by contract: see `save_log`
+            logger.warning(C.LOG_WRITE_FAILED, type(exc).__name__)
+            return None

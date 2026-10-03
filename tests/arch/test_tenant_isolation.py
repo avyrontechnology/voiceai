@@ -73,6 +73,10 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/tools/tests/test_service.py",  # spec 0029: isolation pins
         "voiceai/modules/tools/tests/test_livelink.py",  # spec 0046: cross-tenant exclusion pins
         "voiceai/modules/tools/tests/test_controller.py",  # spec 0049: gate pins
+        "voiceai/modules/tools/executor.py",  # spec 0056: tenant-stamped audit rows
+        "voiceai/modules/tools/vault_models.py",  # spec 0056: tenant-scoped credential rows
+        "voiceai/modules/tools/tests/test_executor.py",  # spec 0056: isolation pins
+        "voiceai/modules/tools/tests/test_vault.py",  # spec 0056: vault tenancy pins
         "voiceai/modules/voice/tests/test_outbound_bridge.py",  # spec 0026: tenant pass-through pin
         "voiceai/modules/voice/tests/test_place_call.py",  # spec 0021, M2: dial ownership pins
         "voiceai/modules/voices/models.py",  # spec 0025: tenant-scoped voice rows
@@ -104,9 +108,7 @@ def _source_files() -> list[Path]:
     """Every ``.py`` file under the new-architecture source roots."""
     files: list[Path] = []
     for root in SOURCE_ROOTS:
-        files.extend(
-            path for path in root.rglob("*.py") if "__pycache__" not in path.parts
-        )
+        files.extend(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
     return sorted(files)
 
 
@@ -134,19 +136,15 @@ def test_tenant_id_appears_only_in_flagged_files() -> None:
     assert found == TENANT_ID_FLAGGED, (
         "tenancy footprint drift (update TENANT_ID_FLAGGED in the same spec):\n"
         + "\n".join(f"+ {path}" for path in sorted(found - TENANT_ID_FLAGGED))
-        + "\n".join(
-            f"- {path} (migrated — remove from the flagged set)"
-            for path in sorted(TENANT_ID_FLAGGED - found)
-        )
+        + "\n".join(f"- {path} (migrated — remove from the flagged set)" for path in sorted(TENANT_ID_FLAGGED - found))
     )
 
 
 def test_tenant_keys_are_built_only_by_the_one_builder() -> None:
     """Hand-rolled ``t:`` key prefixes fail; ``tenant_key()`` is the only way."""
     found = _files_matching(TENANT_KEY_PATTERN) - {"voiceai/common/keys.py"}
-    assert found == TENANT_KEY_FLAGGED, (
-        "hand-built tenant keys (use common.keys.tenant_key instead):\n"
-        + "\n".join(sorted(found - TENANT_KEY_FLAGGED))
+    assert found == TENANT_KEY_FLAGGED, "hand-built tenant keys (use common.keys.tenant_key instead):\n" + "\n".join(
+        sorted(found - TENANT_KEY_FLAGGED)
     )
 
 
@@ -157,7 +155,6 @@ def test_unscoped_access_goes_only_through_system_scope() -> None:
         "unscoped access outside system_scope (update SYSTEM_SCOPE_FLAGGED in the same spec):\n"
         + "\n".join(f"+ {path}" for path in sorted(found - SYSTEM_SCOPE_FLAGGED))
         + "\n".join(
-            f"- {path} (migrated — remove from the flagged set)"
-            for path in sorted(SYSTEM_SCOPE_FLAGGED - found)
+            f"- {path} (migrated — remove from the flagged set)" for path in sorted(SYSTEM_SCOPE_FLAGGED - found)
         )
     )

@@ -22,7 +22,15 @@ Owner: `squad-platform` (#squad-platform).
 
 ## Scaling
 
-TBD.
+- Executor is stateless per request (container Factory): scale API workers
+  horizontally; the shared `httpx` pool is per-execution (no cross-request
+  socket sharing). Redis auth cache (300s TTL) absorbs credential reads;
+  `None` cache degrades to DB/vault reads (slower, still correct).
+- `tool_execution_logs` grows per call: paged reads only (`MAX_PAGE_SIZE`),
+  archive/retention is a follow-up spec (no TTL yet — do not add one here).
+- MCP `list_all_tools` pagination is page-bounded (default 50); a runaway
+  server stops there and logs. DCR discovery is 3 metadata GETs max per
+  issuer; cache the issuer decision in the template row, not in code.
 
 ## Rollback
 

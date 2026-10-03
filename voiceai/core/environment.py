@@ -47,6 +47,9 @@ _FIELD_JWT_PRIVATE_KEY: Final[str] = "jwt_private_key"
 _FIELD_JWT_PUBLIC_KEY: Final[str] = "jwt_public_key"
 _FIELD_JWT_ACCESS_TTL_S: Final[str] = "jwt_access_ttl_s"
 _FIELD_JWT_REFRESH_TTL_S: Final[str] = "jwt_refresh_ttl_s"
+_FIELD_VAULT_MASTER_KEY: Final[str] = "vault_master_key"
+_FIELD_TOOLS_EXECUTE_ENABLED: Final[str] = "tools_execute_enabled"
+_FIELD_TOOLS_HTTP_TIMEOUT_S: Final[str] = "tools_http_timeout_s"
 _LIST_SEPARATOR: Final[str] = ","
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
@@ -65,8 +68,15 @@ _INVALID_SAMESITE_MESSAGE: Final[str] = (
     "{path} 'none' mandates the Secure cookie flag — set COOKIE_SECURE=1 (cross-site cookies are "
     "dropped by browsers without it)"
 )
+_INVALID_TOOLS_TIMEOUT_MESSAGE: Final[str] = "{path} must be between 1 and 120 seconds"
 _ORIGIN_WILDCARD: Final[str] = "*"
 _UNKNOWN_PATH: Final[str] = "UNKNOWN"
+#: Bounds for `tools_http_timeout_s` (spec 0056): every outbound tool call carries
+#: a mandatory timeout, and the tools module's `TOOL_TIMEOUT_MIN/MAX_S` pins the
+#: same 1–120 window — core cannot import module constants (AGENTS.md §3), so the
+#: values are duplicated here and the sample/test pins keep them in agreement.
+_TOOLS_HTTP_TIMEOUT_MIN_S: Final[int] = 1
+_TOOLS_HTTP_TIMEOUT_MAX_S: Final[int] = 120
 
 _dotenv_loaded: bool = False
 
@@ -138,6 +148,18 @@ class Environment(BaseModel):
     #: (spec 0047). Empty fails closed: the webhook rejects every call.
     #: ``TWILIO_AUTH_TOKEN`` in the environment; never logged.
     twilio_auth_token: str = ""
+    #: Master key for the AES-GCM `CredentialVault` (spec 0056, Phase-2).
+    #: Empty fails closed: the vault refuses to construct until this is set.
+    #: ``VAULT_MASTER_KEY`` in the environment; never logged, never echoed.
+    vault_master_key: str = ""
+    #: Flag-gate for internal tool execution (spec 0056, rollout): `False`
+    #: (default) keeps the executor dark; operators flip it on after review.
+    #: ``TOOLS_EXECUTE_ENABLED`` in the environment.
+    tools_execute_enabled: bool = False
+    #: Per-call timeout budget for tool HTTP calls, in seconds (spec 0056):
+    #: mandatory on every outbound call, bounded to 1–120 (fail closed).
+    #: ``TOOLS_HTTP_TIMEOUT_S`` in the environment.
+    tools_http_timeout_s: int = 10
 
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod
@@ -156,6 +178,29 @@ class Environment(BaseModel):
                 construction fails exactly like the env-loader path.
         """
         ensure_exact_origins(value)
+        return value
+
+    @field_validator(_FIELD_TOOLS_HTTP_TIMEOUT_S)
+    @classmethod
+    def _validated_tools_timeout(cls, value: int) -> int:
+        """Reject tool timeout budgets outside the mandatory 1–120s window.
+
+        Args:
+            value: The coerced timeout in seconds.
+
+        Returns:
+            The value unchanged when it lies inside the window.
+
+        Raises:
+            ConfigurationError: When the budget is zero, negative, or unbounded —
+                an outbound call without a timeout wedges a worker (AGENTS.md §4),
+                so the process refuses to start rather than run open-ended.
+        """
+        if not _TOOLS_HTTP_TIMEOUT_MIN_S <= value <= _TOOLS_HTTP_TIMEOUT_MAX_S:
+            raise ConfigurationError(
+                _INVALID_TOOLS_TIMEOUT_MESSAGE.format(path=_FIELD_TOOLS_HTTP_TIMEOUT_S.upper()),
+                path=_FIELD_TOOLS_HTTP_TIMEOUT_S.upper(),
+            )
         return value
 
     @model_validator(mode="after")

@@ -63,6 +63,12 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "voices",
     "tools",
     "chat_sessions",
+    # Spec 0056 execution lane: stamped at write (tenant-scoped views), no
+    # legacy rows — default rule never matches, harmless (spec-0038 precedent).
+    "tool_execution_logs",
+    "partner_credentials",
+    "partner_integrations",
+    "integration_templates",
     "tenants",
     "organizations",
     "teams",

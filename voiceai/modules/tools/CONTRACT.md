@@ -65,3 +65,19 @@ the hot path never gains a lookup.
   URL. Grandfathered rows keep running until re-saved.
 - Seed shape: every seeded row is attachable — `webhook:pre_call_notify`
   carries a real endpoint (unseeded otherwise); no attachable-but-broken rows.
+
+## Execution (spec 0056, internal-only)
+
+No public execute route: chat (`complete_chat_turn` tool_calls) and voice
+(`execute_function_call` custom path) call `ToolExecutor.execute_tool`
+through the container-injected port. Pipeline: MCP-namespace strip →
+allowlist (agent `tool_refs`; deny = 403 identifiers-only) → row resolve →
+JSON-Schema validate → SSRF pre-flight off-loop → internal/HTTP route →
+401 invalidate + `force_refresh` + exactly-once retry → fail-open
+`tool_execution_logs` row (`Collections.TOOL_EXECUTION_LOGS`). Upstream
+failures are `success=False` values with `error_id`, never transport text.
+Secrets live in `partner_credentials` (vault envelopes); rows carry
+`auth_ref` pointers; `redact_secrets` before every log. MCP: `McpHttpClient`
+(handshake, paginated `tools/list`, `tools/call`, JSON + SSE with
+`Mcp-Session-Id` resume); DCR: RFC8414/7591 discover → register, MANUAL
+short-circuit when no `registration_endpoint`.

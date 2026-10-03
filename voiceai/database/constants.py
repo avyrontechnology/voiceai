@@ -73,6 +73,12 @@ class Collections(str, Enum):
     PLATFORM_WORKFLOW_CAMPAIGNS = "platform_workflow_campaigns"
     PLATFORM_LEDGER = "platform_ledger"
     PLATFORM_SINGLETONS = "platform_singletons"
+    #: Tool execution + vault state (spec 0056, Phase-2): execution logs plus the
+    #: AES-GCM credential/integration rows. New collections, no migration.
+    TOOL_EXECUTION_LOGS = "tool_execution_logs"
+    PARTNER_CREDENTIALS = "partner_credentials"
+    PARTNER_INTEGRATIONS = "partner_integrations"
+    INTEGRATION_TEMPLATES = "integration_templates"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

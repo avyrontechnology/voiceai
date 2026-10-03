@@ -13,7 +13,7 @@ from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.database.base import BaseFields
 from voiceai.modules.tools.constants import TOOL_KIND_FUNCTION, ToolKind
 
-__all__ = ["ToolDefinition"]
+__all__ = ["ToolDefinition", "ToolExecutionLog"]
 
 
 class ToolDefinition(BaseFields):
@@ -51,3 +51,31 @@ class ToolDefinition(BaseFields):
     requires_tenant_key: bool = False
     tools_version: int = 1
     tenant_id: str | None = SYSTEM_TENANT_ID
+
+
+class ToolExecutionLog(BaseFields):
+    """One tenant-scoped execution audit row (spec 0056, Phase-1).
+
+    Written by `ToolExecutor` for every terminal outcome — success, upstream
+    failure, and refusal (allowlist/schema/SSRF) alike — so operators can
+    answer "what ran for whom" without ever seeing secrets: `arguments` is
+    the `redact_secrets` copy taken before the call, and `result_summary`
+    carries status codes and timings only, never bodies.
+
+    Attributes:
+        tool_id: Canonical executed id (MCP namespace already stripped).
+        agent_id: Owning agent (the allowlist principal).
+        arguments: Redacted call arguments (secret values replaced).
+        result_summary: Short safe outcome line (never raw secrets or bodies).
+        success: Whether the call answered successfully.
+        execution_ms: Wall time of the guarded execution.
+        error_id: Log-stitching id for failures (matches the returned result).
+    """
+
+    tool_id: str = Field(..., min_length=1)
+    agent_id: str = Field(..., min_length=1)
+    arguments: dict = Field(default_factory=dict)  # why: redacted JSON args are free-form
+    result_summary: str = ""
+    success: bool = False
+    execution_ms: int = Field(default=0, ge=0)
+    error_id: str | None = None
