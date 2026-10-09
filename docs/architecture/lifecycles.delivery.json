@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "bf292bcc-8f3c-4fe6-b8c1-6c645537c7e6",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.candidate.json",
+  "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
+  "specification": {
+    "sha256": "56069d613e76450074c9599563733cc8543e17befa027ffe024cfeb5a32cc37b",
+    "bytes": 5740
+  },
+  "artifact": {
+    "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+    "bytes": 765212
+  }
+}

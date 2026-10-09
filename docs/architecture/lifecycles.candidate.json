@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "HTTP Request Lifecycle",
+    "subtitle": "Controller → Service → Repository → Database, wrapped in envelopes",
+    "output": "docs/architecture/lifecycles.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/avyrontechnology/voiceai.git",
+      "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "browser / telephony",
+      "sources": [
+        { "path": "voiceai/core/app_factory.py", "line": 17, "label": "Starlette request" }
+      ]
+    },
+    {
+      "id": "middleware",
+      "type": "backend",
+      "label": "Middleware",
+      "sublabel": "request-id · CORS",
+      "sources": [
+        { "path": "voiceai/core/app_factory.py", "line": 109, "label": "RequestResponseMiddleware" }
+      ]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "AuthService",
+      "sublabel": "session / JWT",
+      "sources": [
+        { "path": "voiceai/modules/auth/service.py", "line": 263, "label": "authenticate()" }
+      ]
+    },
+    {
+      "id": "container",
+      "type": "backend",
+      "label": "DI Container",
+      "sublabel": "dependency resolution",
+      "sources": [
+        { "path": "voiceai/core/container.py", "line": 796, "label": "VoiceAIContainer" }
+      ]
+    },
+    {
+      "id": "controller",
+      "type": "backend",
+      "label": "Controller",
+      "sublabel": "parse · scope",
+      "sources": [
+        { "path": "voiceai/modules/tools/controller.py", "line": 89, "label": "_require_scope()" }
+      ]
+    },
+    {
+      "id": "service",
+      "type": "backend",
+      "label": "Service",
+      "sublabel": "business logic",
+      "sources": [
+        { "path": "voiceai/modules/tools/service.py", "label": "ToolsService" }
+      ]
+    },
+    {
+      "id": "repository",
+      "type": "backend",
+      "label": "Repository",
+      "sublabel": "data access",
+      "sources": [
+        { "path": "voiceai/modules/tools/repository.py", "line": 23, "label": "ToolsRepository" }
+      ]
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "persistence",
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections" }
+      ]
+    }
+  ],
+  "segments": [
+    { "from": 150, "to": 260, "label": "Request" },
+    { "from": 270, "to": 380, "label": "Resolve" },
+    { "from": 390, "to": 510, "label": "Data" },
+    { "from": 520, "to": 630, "label": "Respond" }
+  ],
+  "messages": [
+    { "id": "http-request", "from": "client", "to": "middleware", "y": 160, "label": "HTTP request", "variant": "emphasis" },
+    { "id": "resolve-principal", "from": "middleware", "to": "auth", "y": 190, "label": "resolve principal", "variant": "security" },
+    { "id": "principal-ok", "from": "auth", "to": "middleware", "y": 220, "label": "principal", "variant": "return" },
+    { "id": "dispatch", "from": "middleware", "to": "controller", "y": 250, "label": "request + principal", "variant": "default" },
+    { "id": "resolve-service", "from": "controller", "to": "container", "y": 280, "label": "resolve service", "variant": "default" },
+    { "id": "service-instance", "from": "container", "to": "controller", "y": 310, "label": "service", "variant": "return" },
+    { "id": "call-service", "from": "controller", "to": "service", "y": 340, "label": "call method", "variant": "emphasis" },
+    { "id": "query-data", "from": "service", "to": "repository", "y": 370, "label": "query", "variant": "default" },
+    { "id": "find-docs", "from": "repository", "to": "database", "y": 400, "label": "find()", "variant": "default" },
+    { "id": "documents", "from": "database", "to": "repository", "y": 430, "label": "documents", "variant": "return" },
+    { "id": "models", "from": "repository", "to": "service", "y": 460, "label": "models", "variant": "return" },
+    { "id": "result", "from": "service", "to": "controller", "y": 490, "label": "result", "variant": "return" },
+    { "id": "envelope", "from": "controller", "to": "middleware", "y": 530, "label": "success_response()", "variant": "emphasis" },
+    { "id": "http-response", "from": "middleware", "to": "client", "y": 550, "label": "200 JSON", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "middleware", "from": 155, "to": 555, "type": "backend" },
+    { "participant": "auth", "from": 185, "to": 225, "type": "security" },
+    { "participant": "controller", "from": 245, "to": 525, "type": "backend" },
+    { "participant": "container", "from": 275, "to": 315, "type": "backend" },
+    { "participant": "service", "from": 335, "to": 495, "type": "backend" },
+    { "participant": "repository", "from": 365, "to": 465, "type": "backend" },
+    { "participant": "database", "from": 395, "to": 435, "type": "database" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Happy Path",
+      "items": [
+        "Client → Middleware → Controller → Service → Repository → Database → Response",
+        "Every response is wrapped in success_response() envelope with error_id on failure",
+        "Auth runs before any service call — denied writes never reach the store"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Error Handling",
+      "items": [
+        "Unexpected exceptions become 500 envelopes in middleware — never leak str(exc)",
+        "Clients get error_id + code; logs get the stack trace",
+        "CORS headers are applied even on error responses"
+      ]
+    }
+  ]
+}

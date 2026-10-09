@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Repo Topology — Legacy vs New Architecture",
+    "subtitle": "Strangler pattern: adapters are the only sanctioned legacy bridge",
+    "output": "docs/architecture/repo-topology.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/avyrontechnology/voiceai.git",
+      "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "legacy-engine",
+      "type": "backend",
+      "label": "Legacy Realtime Engine",
+      "sublabel": "agent_manager · s2s · llms · helpers · platform",
+      "pos": [300, 60],
+      "size": [220, 80],
+      "sources": [
+        { "path": "voiceai/agent_manager/task_manager.py", "label": "task_manager + agent runtime" },
+        { "path": "voiceai/s2s/base_s2s.py", "label": "server-to-server calls" },
+        { "path": "voiceai/llms/azure_llm.py", "label": "LLM provider clients" }
+      ]
+    },
+    {
+      "id": "legacy-io",
+      "type": "backend",
+      "label": "Legacy I/O Handlers",
+      "sublabel": "input/output handlers · transcriber · synthesizer",
+      "pos": [40, 480],
+      "size": [220, 80],
+      "sources": [
+        { "path": "voiceai/input_handlers/telephony.py", "label": "inbound audio/telephony" },
+        { "path": "voiceai/output_handlers/telephony.py", "label": "outbound playback" },
+        { "path": "voiceai/transcriber/transcriber_pool.py", "label": "ASR + TTS pipelines" }
+      ]
+    },
+    {
+      "id": "new-arch",
+      "type": "backend",
+      "label": "New Architecture",
+      "sublabel": "voiceai/modules/* — 9 feature modules",
+      "pos": [700, 60],
+      "size": [220, 80],
+      "sources": [
+        { "path": "voiceai/modules/__init__.py", "line": 44, "label": "ALL_MODULES registry" },
+        { "path": "voiceai/core/container.py", "line": 796, "label": "DI container" }
+      ]
+    },
+    {
+      "id": "adapters",
+      "type": "backend",
+      "label": "Strangler Adapters",
+      "sublabel": "modules/{agents,voice}/adapters/ — 27 files",
+      "pos": [300, 280],
+      "size": [220, 80],
+      "tag": "only sanctioned legacy imports",
+      "sources": [
+        { "path": "voiceai/modules/voice/adapters/s2s_runtime.py", "label": "voice runtime adapters" },
+        { "path": "voiceai/modules/agents/adapters/llm.py", "label": "agent LLM adapter" }
+      ]
+    },
+    {
+      "id": "shims",
+      "type": "backend",
+      "label": "Legacy Shims",
+      "sublabel": "identity.py — re-export of auth (spec-0020)",
+      "pos": [960, 200],
+      "size": [220, 60],
+      "sources": [
+        { "path": "voiceai/modules/identity.py", "line": 1, "label": "legacy-shim(spec-0020)" }
+      ]
+    },
+    {
+      "id": "mongodb",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "primary datastore",
+      "pos": [740, 480],
+      "size": [140, 60],
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections registry" }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "cache + session state",
+      "pos": [900, 480],
+      "size": [140, 60],
+      "sources": [
+        { "path": "voiceai/core/redis.py", "label": "cache client" }
+      ]
+    },
+    {
+      "id": "container",
+      "type": "backend",
+      "label": "DI Container",
+      "sublabel": "dependency_injector DeclarativeContainer",
+      "pos": [1020, 60],
+      "size": [180, 60],
+      "sources": [
+        { "path": "voiceai/core/container.py", "line": 796, "label": "VoiceAIContainer" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Legacy World (being strangled)",
+      "wraps": ["legacy-engine", "legacy-io"]
+    },
+    {
+      "kind": "region",
+      "label": "New Architecture (strangler)",
+      "wraps": ["new-arch", "adapters", "shims"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Strangler Bridge — only adapters may import legacy",
+      "wraps": ["adapters"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "migrate",
+      "from": "legacy-engine",
+      "to": "new-arch",
+      "label": "migrates module-by-module",
+      "variant": "emphasis"
+    },
+    {
+      "id": "bridge",
+      "from": "adapters",
+      "to": "legacy-engine",
+      "label": "legacy imports",
+      "variant": "security"
+    },
+    {
+      "id": "shim-reexport",
+      "from": "shims",
+      "to": "new-arch",
+      "label": "re-export (dies at cutover)",
+      "variant": "dashed"
+    },
+    {
+      "id": "mongo",
+      "from": "new-arch",
+      "to": "mongodb",
+      "label": "Mongo driver"
+    },
+    {
+      "id": "cache",
+      "from": "new-arch",
+      "to": "redis",
+      "label": "cache + sessions"
+    },
+    {
+      "id": "wire",
+      "from": "container",
+      "to": "new-arch",
+      "label": "wires all modules"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Strangler Pattern",
+      "items": [
+        "Legacy realtime engine (agent_manager, s2s, llms) is being replaced by voiceai/modules/*",
+        "Only */adapters/ directories may import legacy — enforced by test_layer_contract.py",
+        "Legacy shims (identity.py) are pure re-exports tagged with spec references, deleted at cutover"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Shared Infrastructure",
+      "items": [
+        "MongoDB: primary datastore, Collections registry in database/constants.py",
+        "Redis: cache, session state, OAuth handshake state (spec 0061)",
+        "DI Container: single composition point in core/container.py"
+      ]
+    }
+  ]
+}

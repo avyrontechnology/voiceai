@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "8459ffee-44be-4118-8ffd-78f3070f6e64",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/trust-boundaries.candidate.json",
+  "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/trust-boundaries.html",
+  "specification": {
+    "sha256": "08afc9845a33e935b4fc5afa00906b61e5455c2877055b0ed4cc747a61ab2de6",
+    "bytes": 5067
+  },
+  "artifact": {
+    "sha256": "4da141cc87c3eba94dbbe2031d11ce447883376f49e083492614b2bd4940a3fb",
+    "bytes": 762089
+  }
+}

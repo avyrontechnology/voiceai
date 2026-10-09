@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Trust Boundaries — Security Perimeter",
+    "subtitle": "Auth, tenancy, vault, and SSRF guard the trust boundary",
+    "output": "docs/architecture/trust-boundaries.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/avyrontechnology/voiceai.git",
+      "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "browser / telephony",
+      "pos": [40, 200],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/core/app_factory.py", "line": 17, "label": "Starlette request" }
+      ]
+    },
+    {
+      "id": "middleware",
+      "type": "security",
+      "label": "Middleware",
+      "sublabel": "CORS · request-id",
+      "pos": [280, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/core/app_factory.py", "line": 109, "label": "RequestResponseMiddleware" }
+      ]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "AuthService",
+      "sublabel": "session / JWT",
+      "pos": [280, 180],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/auth/service.py", "line": 263, "label": "authenticate()" }
+      ]
+    },
+    {
+      "id": "tenancy",
+      "type": "security",
+      "label": "TenantContext",
+      "sublabel": "isolation boundary",
+      "pos": [280, 300],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/common/tenancy.py", "line": 64, "label": "current_tenant()" }
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "security",
+      "label": "CredentialVault",
+      "sublabel": "AES-GCM sealing",
+      "pos": [520, 300],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/tools/vault.py", "line": 79, "label": "CredentialVault" }
+      ]
+    },
+    {
+      "id": "ssrf",
+      "type": "security",
+      "label": "SSRF Guard",
+      "sublabel": "URL safety",
+      "pos": [560, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/common/security.py", "line": 143, "label": "is_safe_outbound_url()" }
+      ]
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "persistence",
+      "pos": [280, 560],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections" }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "sessions + cache",
+      "pos": [520, 480],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/core/redis.py", "label": "cache client" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Trust Boundary",
+      "wraps": ["middleware", "auth", "tenancy", "vault", "ssrf"]
+    },
+    {
+      "kind": "region",
+      "label": "Persistence",
+      "wraps": ["database", "redis"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "https",
+      "from": "client",
+      "to": "middleware",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "principal",
+      "from": "middleware",
+      "to": "auth",
+      "label": "resolve principal",
+      "variant": "security"
+    },
+    {
+      "id": "bind-tenant",
+      "from": "auth",
+      "to": "tenancy",
+      "label": "bind tenant",
+      "variant": "security"
+    },
+    {
+      "id": "seal",
+      "from": "auth",
+      "to": "vault",
+      "label": "seal tokens",
+      "variant": "security"
+    },
+    {
+      "id": "check-url",
+      "from": "middleware",
+      "to": "ssrf",
+      "label": "check URL",
+      "variant": "security"
+    },
+    {
+      "id": "persist",
+      "from": "tenancy",
+      "to": "database",
+      "label": "persist"
+    },
+    {
+      "id": "store-sealed",
+      "from": "vault",
+      "to": "database",
+      "label": "store sealed",
+      "variant": "dashed"
+    },
+    {
+      "id": "sessions",
+      "from": "auth",
+      "to": "redis",
+      "label": "sessions",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Trust Boundary",
+      "items": [
+        "Everything inside the security-group is server-side and trusted",
+        "Client → Middleware is the only entry point (HTTPS + CORS)",
+        "Persistence (MongoDB, Redis) is outside the trust boundary — accessed only through the vault"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Security Controls",
+      "items": [
+        "AuthService: session tokens, JWT, API keys — never trust client-supplied identity",
+        "TenantContext: tenant_id always from server-side context, never query/body",
+        "CredentialVault: AES-GCM sealing — secrets never stored in plaintext",
+        "SSRF Guard: is_safe_outbound_url blocks private/link-local/metadata ranges"
+      ]
+    }
+  ]
+}

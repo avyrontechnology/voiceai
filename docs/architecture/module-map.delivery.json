@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "03fdf8fe-dfc6-43b8-afe6-181eec1d3ed4",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/module-map.candidate.json",
+  "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/module-map.html",
+  "specification": {
+    "sha256": "ec1fbc174b9e877531472926f6ce1f9e387a2f974104436cac4123b43280a114",
+    "bytes": 6933
+  },
+  "artifact": {
+    "sha256": "8569187234f15ceee47d2bb23648baa491520e4d6ff0e2691c3fb4cb50e5f7f3",
+    "bytes": 767546
+  }
+}

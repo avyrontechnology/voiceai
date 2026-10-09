@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Data Model — BaseFields + Collections Registry",
+    "subtitle": "Every persisted model inherits BaseFields; collection names live in one registry",
+    "output": "docs/architecture/data-model.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/avyrontechnology/voiceai.git",
+      "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "basefields",
+      "type": "database",
+      "label": "BaseFields",
+      "sublabel": "id · tenant_id · timestamps · is_active · meta",
+      "pos": [280, 200],
+      "size": [220, 70],
+      "sources": [
+        { "path": "voiceai/database/base.py", "line": 13, "label": "BaseFields model" }
+      ]
+    },
+    {
+      "id": "collections",
+      "type": "database",
+      "label": "Collections Registry",
+      "sublabel": "30+ collection names",
+      "pos": [40, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections enum" }
+      ]
+    },
+    {
+      "id": "tools-models",
+      "type": "database",
+      "label": "Tools Models",
+      "sublabel": "ToolDefinition · ToolExecutionLog",
+      "pos": [520, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/tools/models.py", "line": 19, "label": "ToolDefinition" },
+        { "path": "voiceai/modules/tools/models.py", "line": 56, "label": "ToolExecutionLog" }
+      ]
+    },
+    {
+      "id": "vault-models",
+      "type": "database",
+      "label": "Vault Models",
+      "sublabel": "PartnerCredential · PartnerIntegration",
+      "pos": [565, 200],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/tools/vault_models.py", "line": 54, "label": "PartnerCredential" },
+        { "path": "voiceai/modules/tools/vault_models.py", "line": 85, "label": "PartnerIntegration" }
+      ]
+    },
+    {
+      "id": "auth-models",
+      "type": "database",
+      "label": "Auth Models",
+      "sublabel": "User · Session · APIKey",
+      "pos": [520, 340],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/auth/schemas.py", "label": "User, Session, APIKey schemas" }
+      ]
+    },
+    {
+      "id": "voice-models",
+      "type": "database",
+      "label": "Voice Models",
+      "sublabel": "Agent · Execution",
+      "pos": [280, 340],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/voice/models.py", "label": "Agent, Execution" }
+      ]
+    },
+    {
+      "id": "mongodb",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "persistence",
+      "pos": [40, 340],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "BaseFields (all models inherit)",
+      "wraps": ["basefields"]
+    },
+    {
+      "kind": "region",
+      "label": "Module Models",
+      "wraps": ["tools-models", "vault-models", "auth-models", "voice-models"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "tools-inherit",
+      "from": "tools-models",
+      "to": "basefields",
+      "label": "inherits"
+    },
+    {
+      "id": "vault-inherit",
+      "from": "vault-models",
+      "to": "basefields",
+      "label": "inherits",
+      "labelDy": 20
+    },
+    {
+      "id": "auth-inherit",
+      "from": "auth-models",
+      "to": "basefields",
+      "label": "inherits"
+    },
+    {
+      "id": "voice-inherit",
+      "from": "voice-models",
+      "to": "basefields",
+      "label": "inherits"
+    },
+    {
+      "id": "persist",
+      "from": "collections",
+      "to": "mongodb",
+      "label": "persisted in"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "BaseFields",
+      "items": [
+        "id: storage identifier (None until insert)",
+        "tenant_id: isolation boundary (None = pre-tenancy row)",
+        "created_at / updated_at: timezone-aware UTC timestamps",
+        "is_active: soft delete — no row is ever destroyed",
+        "meta: free-form, non-indexed extras"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Collections Registry",
+      "items": [
+        "Single source of truth: database/constants.py Collections enum",
+        "30+ collections: users, agents, sessions, tools, platform_*, etc.",
+        "Module models import both BaseFields and Collections",
+        "No literal collection names in repositories — enforced by lint"
+      ]
+    }
+  ]
+}

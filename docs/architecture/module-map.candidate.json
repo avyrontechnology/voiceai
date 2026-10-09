@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Module Map — 9 Feature Modules over Shared Kernel",
+    "subtitle": "Layered architecture: feature modules → kernel → persistence",
+    "output": "docs/architecture/module-map.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/avyrontechnology/voiceai.git",
+      "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "voice",
+      "type": "backend",
+      "label": "voice",
+      "sublabel": "realtime pipeline · 50k LOC",
+      "pos": [40, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/voice/__init__.py", "label": "voice module" },
+        { "path": "voiceai/modules/voice/session/s2s_runner.py", "label": "session + turn pipeline" }
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "backend",
+      "label": "agents",
+      "sublabel": "agent builder · 16.5k LOC",
+      "pos": [40, 140],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/agents/__init__.py", "label": "agents module" },
+        { "path": "voiceai/modules/agents/brains/base.py", "label": "agent brains" }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "tools",
+      "sublabel": "execution + vault + MCP · 8.5k LOC",
+      "pos": [40, 220],
+      "size": [200, 60],
+      "tag": "most complex",
+      "sources": [
+        { "path": "voiceai/modules/tools/__init__.py", "label": "tools module" },
+        { "path": "voiceai/modules/tools/executor.py", "label": "ToolExecutor" },
+        { "path": "voiceai/modules/tools/vault.py", "label": "CredentialVault" }
+      ]
+    },
+    {
+      "id": "auth",
+      "type": "backend",
+      "label": "auth",
+      "sublabel": "identity + sessions · 7.3k LOC",
+      "pos": [40, 300],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/auth/__init__.py", "label": "auth module" }
+      ]
+    },
+    {
+      "id": "chat",
+      "type": "backend",
+      "label": "chat",
+      "sublabel": "chat forwarding · 1.8k LOC",
+      "pos": [40, 380],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/chat/__init__.py", "label": "chat module" }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "catalog",
+      "sublabel": "provider catalog · 1.3k LOC",
+      "pos": [40, 460],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/catalog/__init__.py", "label": "catalog module" }
+      ]
+    },
+    {
+      "id": "wallet",
+      "type": "backend",
+      "label": "wallet",
+      "sublabel": "billing · 1.3k LOC",
+      "pos": [40, 540],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/wallet/__init__.py", "label": "wallet module" }
+      ]
+    },
+    {
+      "id": "voices",
+      "type": "backend",
+      "label": "voices",
+      "sublabel": "voice management · 0.8k LOC",
+      "pos": [40, 620],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/voices/__init__.py", "label": "voices module" }
+      ]
+    },
+    {
+      "id": "health",
+      "type": "backend",
+      "label": "health",
+      "sublabel": "liveness + readiness · 1.3k LOC",
+      "pos": [40, 700],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/modules/health/__init__.py", "label": "health module" }
+      ]
+    },
+    {
+      "id": "common",
+      "type": "backend",
+      "label": "common",
+      "sublabel": "envelopes · errors · SSRF",
+      "pos": [400, 200],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/common/responses.py", "label": "response envelopes" },
+        { "path": "voiceai/common/errors.py", "label": "AppError hierarchy" },
+        { "path": "voiceai/common/security.py", "label": "SSRF + URL safety" }
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "core",
+      "sublabel": "env · container · app factory",
+      "pos": [400, 340],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/core/container.py", "line": 796, "label": "DI container" },
+        { "path": "voiceai/core/environment.py", "label": "typed env vars" },
+        { "path": "voiceai/core/app_factory.py", "label": "FastAPI factory" }
+      ]
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "database",
+      "sublabel": "BaseFields · Collections · repos",
+      "pos": [400, 480],
+      "size": [200, 60],
+      "sources": [
+        { "path": "voiceai/database/base.py", "label": "BaseFields model" },
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections registry" }
+      ]
+    },
+    {
+      "id": "mongodb",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "primary datastore",
+      "pos": [700, 480],
+      "size": [140, 60],
+      "sources": [
+        { "path": "voiceai/database/constants.py", "line": 9, "label": "Collections" }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "cache + sessions + OAuth state",
+      "pos": [700, 340],
+      "size": [140, 60],
+      "sources": [
+        { "path": "voiceai/core/redis.py", "label": "cache client" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Feature Modules (voiceai/modules/*)",
+      "wraps": ["voice", "agents", "tools", "auth", "chat", "catalog", "wallet", "voices", "health"]
+    },
+    {
+      "kind": "region",
+      "label": "Shared Kernel",
+      "wraps": ["common", "core", "database"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "voice-common",
+      "from": "voice",
+      "to": "common",
+      "label": "imports"
+    },
+    {
+      "id": "tools-core",
+      "from": "tools",
+      "to": "core",
+      "label": "imports"
+    },
+    {
+      "id": "db-mongo",
+      "from": "database",
+      "to": "mongodb",
+      "label": "driver"
+    },
+    {
+      "id": "core-redis",
+      "from": "core",
+      "to": "redis",
+      "label": "cache"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Module Sizes",
+      "items": [
+        "voice: 50k LOC (largest — realtime pipeline, ASR/TTS providers, session management)",
+        "agents: 16.5k LOC (agent builder, brains, graph routing)",
+        "tools: 8.5k LOC (most complex — 21 files: executor, vault, MCP, OAuth, DCR, integrations)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Dependency Direction",
+      "items": [
+        "All 9 feature modules import from common/core/database — never the reverse",
+        "Cross-module calls go through the DI container (core/container.py)",
+        "Only */adapters/ directories may import legacy code (strangler pattern)"
+      ]
+    }
+  ]
+}
