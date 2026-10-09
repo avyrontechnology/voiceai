@@ -48,6 +48,6 @@ make sec
 
 ## Burn-down
 
-- [ ] Create `tests/arch/test_file_size_budget.py`
-- [ ] Add 6 existing >800 files to `SIZE_DEBT` in `test_size_budgets.py` with owning split specs
-- [ ] `make check` green
+- [x] Create `tests/arch/test_file_size_budget.py` — 800-line ceiling gate
+- [x] Existing 6 violations tracked in SIZE_DEBT with owning specs
+- [x] `make check` green (2166 passed, bandit clean)

@@ -151,6 +151,31 @@ def _build_auth_service(auth_store: Any, environment: Any) -> Any:
     return AuthService(auth_store, jwt=jwt, tokens=tokens, users=users)
 
 
+def _build_token_service(auth_store: Any, environment: Any) -> Any:
+    """Build the default token service (JWT mint/verify)."""
+    from voiceai.modules.auth.service_base import JwtSettings
+    from voiceai.modules.auth.services.token_service import DefaultTokenService
+
+    jwt = None
+    if environment.jwt_enabled:
+        jwt = JwtSettings(
+            private_key=environment.jwt_private_key,
+            public_key=environment.jwt_public_key,
+            issuer=environment.jwt_issuer,
+            audience=environment.jwt_audience,
+            access_ttl_s=environment.jwt_access_ttl_s,
+            refresh_ttl_s=environment.jwt_refresh_ttl_s,
+        )
+    return DefaultTokenService(jwt=jwt, store=auth_store)
+
+
+def _build_user_repo(auth_store: Any) -> Any:
+    """Build the Mongo user repository."""
+    from voiceai.modules.auth.repos.mongo_user_repo import MongoUserRepo
+
+    return MongoUserRepo(auth_store.user_repository)
+
+
 def _build_tenant_resolver(auth_service: Any) -> Any:
     """Expose credential → (context, principal) resolution to the tenant middleware.
 
@@ -821,6 +846,8 @@ class VoiceAIContainer(containers.DeclarativeContainer):
 
     # Auth Module
     auth_service = providers.Factory(_build_auth_service, auth_store, environment)
+    token_service = providers.Singleton(_build_token_service, auth_store, environment)
+    user_repo = providers.Factory(_build_user_repo, auth_store)
 
     # Tenancy (spec 0020, M1b): the middleware resolves callers through this, never
     # by importing a module — the container is the single composition point.
