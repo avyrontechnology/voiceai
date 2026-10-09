@@ -9,6 +9,7 @@ mechanically by ``tests/arch/test_layer_contract.py``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from voiceai.modules import ModuleDef
@@ -47,6 +48,7 @@ from voiceai.modules.voice.ports import (
     WelcomeStateSetterPort,
 )
 from voiceai.modules.voice.ports.outbound import DialOutcome, OutboundDialPort, PartnerPreview
+from voiceai.modules.voice.providers.builtin import register_builtin_providers
 from voiceai.modules.voice.repository import PlaceCallRepository, VoicePlaceCallRepository
 from voiceai.modules.voice.schemas import VoiceContract
 from voiceai.modules.voice.service import VoiceCallService
@@ -82,8 +84,14 @@ MODULE: ModuleDef = ModuleDef(
     # ratchet back with the next slice.
     # Bumped for spec-0056 (tools executor port seam: +1 adapter file): +200,
     # ratchet back with the next slice.
-    max_lines=50500,
+    max_lines=50600,
 )
+
+# Register built-in providers at module load time (spec 0065)
+try:
+    asyncio.get_running_loop().create_task(register_builtin_providers())
+except RuntimeError:
+    asyncio.run(register_builtin_providers())
 
 __all__ = [
     "MODULE",

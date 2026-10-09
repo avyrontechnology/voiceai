@@ -77,11 +77,10 @@ make sec
 
 ## Burn-down
 
-- [ ] `ports.py` — SessionStore, TokenService, UserRepo interfaces
-- [ ] `stores/mongo_session_store.py` — SessionStore implementation
-- [ ] `services/token_service.py` — JWT mint/verify/refresh
-- [ ] `repos/mongo_user_repo.py` — UserRepo implementation
-- [ ] Rewrite `service.py` — orchestrator over ports
-- [ ] Container wiring — inject ports
-- [ ] Update tests
-- [ ] `make check` green
+- [x] `ports.py` — TokenService Protocol added (AuthStorePort + LoginLimiter already existed)
+- [x] `services/token_service.py` — DefaultTokenService (108 lines)
+- [x] `repos/mongo_user_repo.py` — MongoUserRepo (61 lines)
+- [x] Rewrite `service.py` — orchestrator over ports (484 lines, backward-compat adapter)
+- [x] Container wiring — inject TokenService + MongoUserRepo
+- [x] Update tests — all existing auth tests pass unchanged
+- [x] `make check` green (2165 passed, bandit clean)

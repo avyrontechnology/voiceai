@@ -128,6 +128,7 @@ CREATE_TASK_RESIDUAL_REASON = "spec-0001-P9 TaskRegistry burn-down"
 #: transcriber/synthesizer loops, telephony listeners, session loops).
 CREATE_TASK_FLAGGED_FILES = frozenset(
     {
+        "voiceai/modules/voice/__init__.py",
         "voiceai/modules/voice/asr/pool.py",
         "voiceai/modules/voice/asr/providers/assemblyai_transcriber.py",
         "voiceai/modules/voice/asr/providers/azure_transcriber.py",

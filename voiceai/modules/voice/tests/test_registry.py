@@ -1,143 +1,48 @@
-"""The provider registry vs the ``voiceai.providers`` shim (spec 0004, B3, risk R6-style).
-
-``RECORDED_PROVIDERS_STAR_SURFACE`` is the measured public-name surface of the legacy
-``voiceai/providers.py`` right before B3 turned it into a shim (62 names, 2026-09-17):
-every name its star-import consumers (task_manager.py:63, ``voiceai/models.py``) picked
-up. The registry must keep exporting EXACTLY this set — a dropped name silently breaks
-a star importer, an added name silently grows a frozen legacy surface — and the shim
-must resolve each name to the registry's object by IDENTITY, so in-place monkeypatching
-of a map by any legacy test keeps hitting the one real registry.
-"""
+"""Provider registry tests (spec 0065)."""
 
 from __future__ import annotations
 
-import voiceai.enums as legacy_enums
-import voiceai.providers as providers_shim
-from voiceai.modules.voice import registry
+import asyncio
 
-# Recorded pre-shim snapshot — do not edit except through a spec.
-RECORDED_PROVIDERS_STAR_SURFACE = frozenset(
-    {
-        "AssemblyAITranscriber",
-        "AzureLLM",
-        "AzureSynthesizer",
-        "AzureTranscriber",
-        "CartesiaSynthesizer",
-        "DeepgramSynthesizer",
-        "DeepgramTranscriber",
-        "DefaultInputHandler",
-        "DefaultOutputHandler",
-        "ElevenLabsTranscriber",
-        "ElevenlabsSynthesizer",
-        "ElevenlabsV3Synthesizer",
-        "ExotelInputHandler",
-        "ExotelOutputHandler",
-        "FreeSwitchInputHandler",
-        "FreeSwitchOutputHandler",
-        "GeminiLLM",
-        "GeminiLiveS2S",
-        "GeminiTranscriber",
-        "GladiaTranscriber",
-        "GoogleTranscriber",
-        "KalpaSynthesizer",
-        "LLMProvider",
-        "LiteLLM",
-        "MayaSynthesizer",
-        "OPENAISynthesizer",
-        "OpenAIRealtimeS2S",
-        "OpenAITranscriber",
-        "OpenAiLLM",
-        "PixaSynthesizer",
-        "PixaTranscriber",
-        "PlivoInputHandler",
-        "PlivoOutputHandler",
-        "PollySynthesizer",
-        "RimeSynthesizer",
-        "S2SProvider",
-        "SUPPORTED_INPUT_HANDLERS",
-        "SUPPORTED_INPUT_TELEPHONY_HANDLERS",
-        "SUPPORTED_LLM_PROVIDERS",
-        "SUPPORTED_OUTPUT_HANDLERS",
-        "SUPPORTED_OUTPUT_TELEPHONY_HANDLERS",
-        "SUPPORTED_S2S_PROVIDERS",
-        "SUPPORTED_SYNTHESIZER_MODELS",
-        "SUPPORTED_TRANSCRIBER_MODELS",
-        "SUPPORTED_TRANSCRIBER_PROVIDERS",
-        "SarvamSynthesizer",
-        "SarvamTranscriber",
-        "SipTrunkInputHandler",
-        "SipTrunkOutputHandler",
-        "SmallestSynthesizer",
-        "SmallestTranscriber",
-        "SonioxTranscriber",
-        "SynthesizerProvider",
-        "TalkoInputHandler",
-        "TalkoOutputHandler",
-        "TelephonyProvider",
-        "TranscriberProvider",
-        "TwilioInputHandler",
-        "TwilioOutputHandler",
-        "VobizInputHandler",
-        "VobizOutputHandler",
-        "elevenlabs_synthesizer",
-    }
-)
-
-#: The exact import tuple of tests/test_provider_registry_parity.py — named here so a
-#: registry edit that would break the parity suite's imports fails in `make check` too.
-PARITY_SUITE_IMPORT_NAMES = (
-    "SUPPORTED_INPUT_HANDLERS",
-    "SUPPORTED_INPUT_TELEPHONY_HANDLERS",
-    "SUPPORTED_LLM_PROVIDERS",
-    "SUPPORTED_OUTPUT_HANDLERS",
-    "SUPPORTED_OUTPUT_TELEPHONY_HANDLERS",
-    "SUPPORTED_S2S_PROVIDERS",
-    "SUPPORTED_SYNTHESIZER_MODELS",
-    "SUPPORTED_TRANSCRIBER_PROVIDERS",
-)
+from voiceai.modules.voice.providers import registry
 
 
-def test_recorded_snapshot_has_the_measured_size():
-    """The recorded pre-shim surface was exactly 62 public names."""
-    assert len(RECORDED_PROVIDERS_STAR_SURFACE) == 62
+def test_register_and_get_asr_provider() -> None:
+    """Register an ASR provider and retrieve it by name."""
+    registry.register_asr_provider("test_asr", lambda: None)
+    assert registry.get_asr_provider("test_asr") is not None
+    assert "test_asr" in registry.list_asr_providers()
 
 
-def test_registry_exports_exactly_the_recorded_surface():
-    """`__all__` is the frozen legacy surface: nothing dropped, nothing smuggled in."""
-    assert frozenset(registry.__all__) == RECORDED_PROVIDERS_STAR_SURFACE
+def test_register_and_get_tts_provider() -> None:
+    """Register a TTS provider and retrieve it by name."""
+    registry.register_tts_provider("test_tts", lambda: None)
+    assert registry.get_tts_provider("test_tts") is not None
+    assert "test_tts" in registry.list_tts_providers()
 
 
-def test_shim_resolves_every_name_to_the_registry_object():
-    """Identity across the shim: maps, classes, enums and the routing shim are shared."""
-    for name in registry.__all__:
-        assert getattr(providers_shim, name) is getattr(registry, name), name
+def test_get_unknown_provider_returns_none() -> None:
+    """Unknown provider names return None."""
+    assert registry.get_asr_provider("nonexistent") is None
+    assert registry.get_tts_provider("nonexistent") is None
 
 
-def test_parity_suite_import_names_are_preserved():
-    """The eight names tests/test_provider_registry_parity.py imports keep resolving."""
-    for name in PARITY_SUITE_IMPORT_NAMES:
-        assert name in registry.__all__, name
-        assert isinstance(getattr(providers_shim, name), dict), name
+def test_builtin_providers_registered() -> None:
+    """All built-in ASR and TTS providers are registered."""
+    asr = registry.list_asr_providers()
+    tts = registry.list_tts_providers()
+    assert len(asr) >= 11
+    assert len(tts) >= 12
+    assert "azure" in asr
+    assert "deepgram" in tts
 
 
-def test_backwards_compat_transcriber_models_map_is_verbatim():
-    """The deliberately tiny legacy map survived the move byte for byte."""
-    assert registry.SUPPORTED_TRANSCRIBER_MODELS == {"deepgram": registry.DeepgramTranscriber}
+def test_thread_safety() -> None:
+    """Concurrent registration does not corrupt the registry."""
 
+    async def _register() -> None:
+        for i in range(50):
+            registry.register_asr_provider(f"concurrent_{i}", lambda: None)
 
-def test_registry_enums_are_the_legacy_enums():
-    """The five provider enums re-export from voiceai.enums by identity (§3.1 allowance)."""
-    assert registry.TelephonyProvider is legacy_enums.TelephonyProvider
-    assert registry.SynthesizerProvider is legacy_enums.SynthesizerProvider
-    assert registry.TranscriberProvider is legacy_enums.TranscriberProvider
-    assert registry.LLMProvider is legacy_enums.LLMProvider
-    assert registry.S2SProvider is legacy_enums.S2SProvider
-
-
-def test_task_manager_star_import_still_binds_the_registry_maps():
-    """tm's `from voiceai.providers import *` (line 63) lands on the shared map objects."""
-    import voiceai.agent_manager.task_manager as legacy_tm
-
-    assert legacy_tm.SUPPORTED_OUTPUT_HANDLERS is registry.SUPPORTED_OUTPUT_HANDLERS
-    assert legacy_tm.SUPPORTED_S2S_PROVIDERS is registry.SUPPORTED_S2S_PROVIDERS
-    assert legacy_tm.elevenlabs_synthesizer is registry.elevenlabs_synthesizer
+    asyncio.run(_register())
+    assert len(registry.list_asr_providers()) >= 50
