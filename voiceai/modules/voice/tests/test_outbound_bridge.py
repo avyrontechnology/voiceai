@@ -209,7 +209,6 @@ async def test_fetch_partner_dids_bad_key_is_client_error(monkeypatch) -> None:
             return _FakeResponse()
 
     import httpx
-
     import pytest
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
@@ -220,11 +219,10 @@ async def test_fetch_partner_dids_bad_key_is_client_error(monkeypatch) -> None:
 
 async def test_fetch_partner_dids_transport_is_dependency_error(monkeypatch) -> None:
     """Transport failures surface retryable dependency errors."""
-    from voiceai.common.errors import DependencyUnavailableError
-
     import httpx
-
     import pytest
+
+    from voiceai.common.errors import DependencyUnavailableError
 
     class _FakeClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:

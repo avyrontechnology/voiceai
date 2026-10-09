@@ -6,8 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from voiceai.modules.tools.models import ToolDefinition
-from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
 
 __all__ = [
     "validation_field_paths",

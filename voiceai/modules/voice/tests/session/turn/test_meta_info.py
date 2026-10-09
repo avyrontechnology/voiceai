@@ -8,7 +8,6 @@ delegators.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import MagicMock
 
 from voiceai.modules.voice.session.turn import meta_info

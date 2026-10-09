@@ -25,7 +25,6 @@ from voiceai.modules.voice.session.config import CallConfig
 from voiceai.modules.voice.session.interruption import InterruptionManager
 from voiceai.modules.voice.session.lifecycle import hangup
 
-
 # ---------------------------------------------------------------------------
 # Builders (the test_composition offline-constructible shape, task_config/Kwarg
 # knobs added for the settings under test)

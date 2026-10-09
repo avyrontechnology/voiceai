@@ -22,9 +22,8 @@ from voiceai.constants import (
     LANGUAGE_SWITCH_SPEAKING_STALE_CAP_S,
 )
 from voiceai.modules.voice.session.language import lid_gate
-from voiceai.transcriber.transcriber_pool import TranscriberPool
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
-
+from voiceai.transcriber.transcriber_pool import TranscriberPool
 
 # --- Delegators: TaskManager keeps every moved name and injects itself ---
 

@@ -23,12 +23,10 @@ from voiceai.common.logger import get_logger
 from voiceai.modules.tools import constants as C
 from voiceai.modules.tools.dcr_service import DcrService
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
-from voiceai.modules.tools.models import ToolDefinition
-from voiceai.modules.tools.repository import ToolsRepository
+from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
+from voiceai.modules.tools.repository import ToolsRepository, VaultRepository
 from voiceai.modules.tools.static_methods import build_tool_id
 from voiceai.modules.tools.vault import CredentialVault
-from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 __all__ = ["IntegrationService"]
 

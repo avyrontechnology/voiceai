@@ -74,7 +74,6 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/tools/tests/test_livelink.py",  # spec 0046: cross-tenant exclusion pins
         "voiceai/modules/tools/tests/test_controller.py",  # spec 0049: gate pins
         "voiceai/modules/tools/executor.py",  # spec 0056: tenant-stamped audit rows
-        "voiceai/modules/tools/vault_models.py",  # spec 0056: tenant-scoped credential rows
         "voiceai/modules/tools/tests/test_executor.py",  # spec 0056: isolation pins
         "voiceai/modules/tools/tests/test_vault.py",  # spec 0056: vault tenancy pins
         "voiceai/modules/tools/tests/test_mcp_server.py",  # spec 0057: pilot tenancy pins

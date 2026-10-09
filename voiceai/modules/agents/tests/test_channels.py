@@ -5,11 +5,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from voiceai.modules.agents.errors import AgentConfigInvalidError
 from voiceai.modules.agents.models import AgentModel
 from voiceai.modules.agents.static_methods import audit_provider_config, resolve_pipeline_for_task
 from voiceai.modules.agents.tests.test_catalog_validation import _Catalog, _rows
 from voiceai.modules.agents.tests.test_service import FakeDefinitionStore, agent_model, build_service
-from voiceai.modules.agents.errors import AgentConfigInvalidError
 from voiceai.modules.catalog.static_methods import is_valid_language
 
 

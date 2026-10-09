@@ -19,17 +19,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.constants import (
+    LANGUAGE_NAMES,
     LANGUAGE_SWITCH_AUDIO_GAP_S,
     LANGUAGE_SWITCH_DECIDE_TIMEOUT_S,
     LANGUAGE_SWITCH_SETTLE_MS,
-    LANGUAGE_NAMES,
 )
 from voiceai.helpers.utils import create_ws_data_packet
 from voiceai.modules.voice import static_methods
 from voiceai.modules.voice.session.language import LanguageSwitchCoordinator, lid_gate, switcher
 from voiceai.synthesizer.synthesizer_pool import SynthesizerPool
 from voiceai.transcriber.transcriber_pool import TranscriberPool
-
 
 # --- Delegators: TaskManager keeps every moved name and injects itself ---
 

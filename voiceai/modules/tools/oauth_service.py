@@ -30,9 +30,9 @@ import httpx
 from voiceai.common.logger import get_logger
 from voiceai.modules.tools import constants as C
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
+from voiceai.modules.tools.models import PartnerCredential
+from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
-from voiceai.modules.tools.vault_models import PartnerCredential
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 __all__ = ["OAuthService", "RedisStatePort"]
 

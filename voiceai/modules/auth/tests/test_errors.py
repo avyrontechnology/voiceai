@@ -10,8 +10,8 @@ from voiceai.modules.auth.errors import (
     AuthError,
     AuthNotFoundError,
     ForbiddenError,
-    InviteInvalidError,
     InvalidCredentialsError,
+    InviteInvalidError,
     TooManyAttemptsError,
 )
 

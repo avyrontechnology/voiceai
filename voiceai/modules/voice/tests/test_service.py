@@ -12,7 +12,6 @@ import logging
 
 import pytest
 
-from voiceai.core.container import VoiceAIContainer
 from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.service import DIRECTION_INBOUND
 

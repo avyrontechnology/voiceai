@@ -150,7 +150,7 @@ LOG_AUTH_CACHE_DEGRADED: Final[str] = "tools auth cache degraded (%s)"
 LOG_WRITE_FAILED: Final[str] = "tool log write failed (%s)"
 
 #: Credential shapes the vault stores (spec 0059 auth model; canonical home —
-#: `vault_models` re-exports these names, integrator-merged Phase-2).
+#: `models.py` re-exports these names, integrator-merged Phase-2).
 CredentialType = Literal["none", "api_key", "bearer", "basic", "oauth2", "custom"]
 CREDENTIAL_TYPE_NONE: Final[Literal["none"]] = "none"
 CREDENTIAL_TYPE_OAUTH2: Final[Literal["oauth2"]] = "oauth2"

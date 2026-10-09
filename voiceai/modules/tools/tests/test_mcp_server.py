@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from dependency_injector import providers
 from httpx import ASGITransport, AsyncClient
 

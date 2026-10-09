@@ -9,12 +9,11 @@ the repository, the service, and the ports (rule 9).
 from __future__ import annotations
 
 import dataclasses
-from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
-from voiceai.modules import ALL_MODULES, ModuleDef, agents
+from voiceai.modules import ModuleDef, agents
 from voiceai.modules.agents.constants import (
     AGENT_BY_ID_PATH,
     AGENT_PATH,
@@ -25,11 +24,9 @@ from voiceai.modules.agents.constants import (
     MODULE_NAME,
     PREPROCESS_DIR,
 )
-from voiceai.modules.agents.ports import AgentDefinitionPort, AgentSessionStorePort
-from voiceai.modules.agents.service import AgentService
 
 if TYPE_CHECKING:  # annotation only: the spy stands in for a container at runtime
-    from voiceai.core.container import VoiceAIContainer
+    pass
 
 
 def test_module_is_a_frozen_module_def_named_agents():

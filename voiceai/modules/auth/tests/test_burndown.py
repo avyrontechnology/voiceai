@@ -9,21 +9,11 @@ legacy name, drops a retained one, or re-adds a route early, this fails loudly.
 
 from __future__ import annotations
 
-import importlib
-import os
-from collections.abc import Callable, Iterator
-from types import ModuleType
-from typing import Any, cast
-
 import pytest
-from dependency_injector import providers
-from fastapi import FastAPI
-from httpx import AsyncClient
 
 import voiceai.platform.auth as legacy_auth
 import voiceai.platform.auth_router as legacy_router
 import voiceai.platform.store as legacy_store
-from voiceai.core.environment import Environment
 from voiceai.modules import auth as auth_module
 
 #: Delegators E4 deleted from `platform.auth` (retired to service/utils/helpers/constants).

@@ -11,14 +11,12 @@ from __future__ import annotations
 
 from typing import cast
 
-import pytest
 from dependency_injector import providers
 from httpx import ASGITransport, AsyncClient
 
 from voiceai.core.app_factory import create_app
 from voiceai.core.container import build_container
 from voiceai.core.environment import Environment
-from voiceai.modules import auth as auth_module
 from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
@@ -72,18 +70,18 @@ def test_routes_are_mounted_under_api_v1() -> None:
     paths = {getattr(route, "path", "") for route in app.routes}
 
     assert {
-        f"/api/v1/auth/signup",
-        f"/api/v1/auth/login",
-        f"/api/v1/auth/refresh",
-        f"/api/v1/auth/logout",
-        f"/api/v1/auth/me",
-        f"/api/v1/auth/invite",
-        f"/api/v1/auth/invites",
-        f"/api/v1/auth/accept",
-        f"/api/v1/auth/users",
-        f"/api/v1/auth/password",
-        f"/api/v1/auth/ws-ticket",
-        f"/api/v1/auth/events",
+        "/api/v1/auth/signup",
+        "/api/v1/auth/login",
+        "/api/v1/auth/refresh",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/me",
+        "/api/v1/auth/invite",
+        "/api/v1/auth/invites",
+        "/api/v1/auth/accept",
+        "/api/v1/auth/users",
+        "/api/v1/auth/password",
+        "/api/v1/auth/ws-ticket",
+        "/api/v1/auth/events",
     } <= paths
 
 

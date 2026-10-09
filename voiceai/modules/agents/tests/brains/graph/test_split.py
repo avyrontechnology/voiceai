@@ -16,7 +16,7 @@ import voiceai.agent_types.graph_agent as legacy_graph_agent
 import voiceai.agent_types.graph_based_conversational_agent as legacy_graph_based
 from voiceai.modules.agents.brains import graph, legacy_graph
 from voiceai.modules.agents.brains.base import BaseAgent
-from voiceai.modules.agents.brains.graph import GraphAgent, _DETERMINISTIC_REASONING_PREFIX, generation
+from voiceai.modules.agents.brains.graph import _DETERMINISTIC_REASONING_PREFIX, GraphAgent, generation
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 MODULES_ROOT = REPO_ROOT / "voiceai" / "modules"

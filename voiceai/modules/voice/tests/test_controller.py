@@ -14,7 +14,6 @@ close 4404. Every close carries a code, never an error body.
 
 import logging
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from dependency_injector import providers
@@ -24,8 +23,6 @@ from voiceai.core.app_factory import create_app
 from voiceai.core.container import build_container
 from voiceai.core.environment import Environment
 from voiceai.modules.auth.models.principal import Principal
-from voiceai.modules.voice import MODULE as VOICE_MODULE
-from voiceai.modules.voice import VoiceCallService
 from voiceai.modules.voice.constants import (
     WS_CLOSE_DARK,
     WS_CLOSE_DENIED,

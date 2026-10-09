@@ -12,19 +12,19 @@ suites validate the split. Third, the new tree owns the moved bodies' lookup sit
 ``isinstance`` gates.
 """
 
-import voiceai.transcriber as legacy_pkg
-import voiceai.modules.voice.asr.providers as new_pkg
-import voiceai.transcriber.base_transcriber as legacy_base
 import voiceai.modules.voice.asr.base as new_base
-import voiceai.transcriber.transcriber_pool as legacy_pool
 import voiceai.modules.voice.asr.pool as new_pool
-import voiceai.transcriber.deepgram_transcriber as legacy_dg
-import voiceai.modules.voice.asr.providers.deepgram.transcriber as new_dg
+import voiceai.modules.voice.asr.providers as new_pkg
 import voiceai.modules.voice.asr.providers.deepgram.connection as new_dg_conn
-import voiceai.modules.voice.asr.providers.deepgram.nova_session as new_dg_nova
 import voiceai.modules.voice.asr.providers.deepgram.flux_session as new_dg_flux
-import voiceai.transcriber.sarvam_transcriber as legacy_sarvam
+import voiceai.modules.voice.asr.providers.deepgram.nova_session as new_dg_nova
+import voiceai.modules.voice.asr.providers.deepgram.transcriber as new_dg
 import voiceai.modules.voice.asr.providers.sarvam_transcriber as new_sarvam
+import voiceai.transcriber as legacy_pkg
+import voiceai.transcriber.base_transcriber as legacy_base
+import voiceai.transcriber.deepgram_transcriber as legacy_dg
+import voiceai.transcriber.sarvam_transcriber as legacy_sarvam
+import voiceai.transcriber.transcriber_pool as legacy_pool
 
 
 def test_provider_shims_are_identity_reexports():

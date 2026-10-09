@@ -28,10 +28,9 @@ from voiceai.modules.tools.dcr_service import ClientRecord
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
 from voiceai.modules.tools.helpers import wire_credential_meta
 from voiceai.modules.tools.integration_service import IntegrationService
-from voiceai.modules.tools.models import ToolExecutionLog
+from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolExecutionLog
+from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
-from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 BASE = "http://integrations.test"
 PREFIX = "/api/v1"
@@ -323,7 +322,7 @@ async def test_auth_matrix_resolves_every_type_end_to_end() -> None:
     import base64
 
     from voiceai.modules.tools.auth_resolver import ToolAuthResolver
-    from voiceai.modules.tools.credential_store import VaultCredentialStore
+    from voiceai.modules.tools.credential_repository import VaultCredentialStore
     from voiceai.modules.tools.models import ToolDefinition as _ToolDefinition
 
     db = InMemoryDatabase()

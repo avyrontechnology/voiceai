@@ -18,11 +18,11 @@ import audioop
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.helpers import utils as legacy_utils
 from voiceai.modules.voice.session import welcome
-
-import pytest
 
 
 @pytest.fixture(autouse=True)

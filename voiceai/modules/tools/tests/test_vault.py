@@ -25,9 +25,9 @@ from voiceai.database.constants import Collections
 from voiceai.database.repository import InMemoryRepository
 from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules.tools.dcr_service import ClientRecord, DcrService
+from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault, VaultError
-from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 _MASTER_KEY = "phase-two-test-master-key"
 _OTHER_KEY = "a-different-test-master-key"
@@ -119,7 +119,7 @@ class TestVaultRoundTrip:
     def test_encrypt_decrypt_round_trip(self) -> None:
         """Sealed bytes come back identical (incl. empty and unicode payloads)."""
         vault = _vault()
-        for payload in (_SECRET, b"", "tökén-ünïcode".encode("utf-8")):
+        for payload in (_SECRET, b"", "tökén-ünïcode".encode()):
             assert vault.decrypt(vault.encrypt(payload, key_version=1), key_version=1) == payload
 
     def test_same_plaintext_seals_to_different_envelopes(self) -> None:

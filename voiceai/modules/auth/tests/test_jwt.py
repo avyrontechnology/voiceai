@@ -13,6 +13,7 @@ from datetime import timedelta
 
 import pytest
 
+from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import InvalidRequestError
 from voiceai.modules.auth.errors import InvalidCredentialsError
 from voiceai.modules.auth.models.user import User
@@ -20,10 +21,8 @@ from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.static_methods import (
     issue_access_token,
     new_token,
-    token_hash,
     verify_access_token,
 )
-from voiceai.common.datetime_utils import utc_now
 from voiceai.modules.auth.tests.conftest import _JWT
 from voiceai.modules.auth.tests.test_service import FakeAuthStore, _owner_principal, _signed_up
 

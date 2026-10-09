@@ -7,8 +7,8 @@ import pytest
 from voiceai.modules.agents.errors import AgentConfigInvalidError
 from voiceai.modules.agents.schemas import AgentsContract
 from voiceai.modules.agents.static_methods import apply_agent_patch
-from voiceai.modules.agents.tests.test_service import FakeDefinitionStore, agent_model, build_service
 from voiceai.modules.agents.tests.test_catalog_validation import _Catalog
+from voiceai.modules.agents.tests.test_service import FakeDefinitionStore, agent_model, build_service
 
 
 def _stored() -> dict:

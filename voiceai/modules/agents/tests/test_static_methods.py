@@ -12,7 +12,6 @@ import json
 
 import pytest
 
-from voiceai.modules.agents import static_methods
 from voiceai.modules.agents.static_methods import (
     collect_agent_records,
     is_agent_key,

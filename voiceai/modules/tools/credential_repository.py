@@ -1,4 +1,4 @@
-"""Vault-backed credential store for the executor (spec 0059).
+"""Vault-backed credential repository for the executor (spec 0059, renamed spec 0062).
 
 `VaultCredentialStore` implements `CredentialStorePort` over tenant-scoped
 vault rows: `auth_ref` pins to `cred:<id>` (anything else fails closed —
@@ -18,8 +18,8 @@ from typing import Any
 
 from voiceai.common.logger import get_logger
 from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 __all__ = ["VaultCredentialStore"]
 

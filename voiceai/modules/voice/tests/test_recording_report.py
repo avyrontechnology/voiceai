@@ -20,8 +20,8 @@ from voiceai.modules.voice.models import (
     RECORDING_REASON_AWAITING_UPLOAD,
     RECORDING_REASON_DISABLED,
     RECORDING_REASON_NO_AUDIO,
-    RECORDING_REASON_UPLOADED,
     RECORDING_REASON_UPLOAD_FAILED,
+    RECORDING_REASON_UPLOADED,
     RECORDING_STATUS_DISABLED,
     RECORDING_STATUS_FAILED,
     RECORDING_STATUS_PENDING_UPLOAD,
@@ -122,7 +122,7 @@ def _session(
         _prepare_precise_transcript_messages=lambda messages: [],
         _collect_flux_lid_events=lambda: [],
     )
-    setattr(session, "_TaskManager__snapshot_lid_events", lambda: [])
+    session._TaskManager__snapshot_lid_events = lambda: []
     if should_record is not None:
         session.should_record = should_record
     return session

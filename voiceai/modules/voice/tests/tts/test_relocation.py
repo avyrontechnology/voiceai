@@ -13,21 +13,21 @@ in ``kalpa_synthesizer``. Third, the new tree owns the moved bodies' lookup site
 ``isinstance`` gates.
 """
 
-import voiceai.synthesizer as legacy_pkg
-import voiceai.modules.voice.tts.providers as new_pkg
-import voiceai.synthesizer.base_synthesizer as legacy_base
 import voiceai.modules.voice.tts.base as new_base
-import voiceai.synthesizer.synthesizer_pool as legacy_pool
 import voiceai.modules.voice.tts.pool as new_pool
-import voiceai.synthesizer.stream_synthesizer as legacy_stream
-import voiceai.modules.voice.tts.stream as new_stream
-import voiceai.synthesizer.kalpa_synthesizer as legacy_kalpa
-import voiceai.modules.voice.tts.providers.kalpa_synthesizer as new_kalpa
+import voiceai.modules.voice.tts.providers as new_pkg
 import voiceai.modules.voice.tts.providers.kalpa_http as new_kalpa_http
-import voiceai.synthesizer.sarvam_synthesizer as legacy_sarvam
-import voiceai.modules.voice.tts.providers.sarvam_synthesizer as new_sarvam
-import voiceai.synthesizer.maya_synthesizer as legacy_maya
+import voiceai.modules.voice.tts.providers.kalpa_synthesizer as new_kalpa
 import voiceai.modules.voice.tts.providers.maya_synthesizer as new_maya
+import voiceai.modules.voice.tts.providers.sarvam_synthesizer as new_sarvam
+import voiceai.modules.voice.tts.stream as new_stream
+import voiceai.synthesizer as legacy_pkg
+import voiceai.synthesizer.base_synthesizer as legacy_base
+import voiceai.synthesizer.kalpa_synthesizer as legacy_kalpa
+import voiceai.synthesizer.maya_synthesizer as legacy_maya
+import voiceai.synthesizer.sarvam_synthesizer as legacy_sarvam
+import voiceai.synthesizer.stream_synthesizer as legacy_stream
+import voiceai.synthesizer.synthesizer_pool as legacy_pool
 
 
 def test_provider_shims_are_identity_reexports():

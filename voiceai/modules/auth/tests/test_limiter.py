@@ -31,8 +31,8 @@ from voiceai.modules.auth.models.session import SessionRecord
 from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter
 from voiceai.modules.auth.service import AuthService
-from voiceai.modules.auth.tests.conftest import _JWT
 from voiceai.modules.auth.static_methods import hash_password
+from voiceai.modules.auth.tests.conftest import _JWT
 from voiceai.modules.auth.utils import (
     LocalLoginLimiter,
     RedisLoginLimiter,

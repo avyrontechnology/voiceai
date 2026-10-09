@@ -27,10 +27,10 @@ from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules import tools as tools_module
 from voiceai.modules.auth import InvalidCredentialsError, Principal
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
+from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration
 from voiceai.modules.tools.oauth_service import OAuthService
+from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
-from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-from voiceai.modules.tools.vault_repository import VaultRepository
 
 BASE = "http://oauth.test"
 PREFIX = "/api/v1"

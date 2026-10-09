@@ -427,10 +427,14 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any, va
     from voiceai.modules.tools.auth_resolver import ToolAuthResolver
     from voiceai.modules.tools.credential_store import VaultCredentialStore
     from voiceai.modules.tools.executor import ToolExecutor
-    from voiceai.modules.tools.models import ToolDefinition, ToolExecutionLog
-    from voiceai.modules.tools.repository import LogsRepository, ToolsRepository
-    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-    from voiceai.modules.tools.vault_repository import VaultRepository
+    from voiceai.modules.tools.models import (
+        IntegrationTemplate,
+        PartnerCredential,
+        PartnerIntegration,
+        ToolDefinition,
+        ToolExecutionLog,
+    )
+    from voiceai.modules.tools.repository import LogsRepository, ToolsRepository, VaultRepository
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
     tenant_id = current_tenant().tenant_id
@@ -486,10 +490,8 @@ def _build_integration_service(db_client: Any, vault: Any) -> Any:
     from voiceai.database.scoped import TenantScopedRepository
     from voiceai.modules.tools.dcr_service import DcrService
     from voiceai.modules.tools.integration_service import IntegrationService
-    from voiceai.modules.tools.models import ToolDefinition
-    from voiceai.modules.tools.repository import ToolsRepository
-    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-    from voiceai.modules.tools.vault_repository import VaultRepository
+    from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
+    from voiceai.modules.tools.repository import ToolsRepository, VaultRepository
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
 
@@ -549,9 +551,9 @@ def _build_oauth_service(db_client: Any, vault: Any, cache_client: Any, environm
     from voiceai.database.constants import Collections
     from voiceai.database.repository import InMemoryRepository, MotorRepository
     from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration
     from voiceai.modules.tools.oauth_service import OAuthService
-    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
-    from voiceai.modules.tools.vault_repository import VaultRepository
+    from voiceai.modules.tools.repository import VaultRepository
 
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
 

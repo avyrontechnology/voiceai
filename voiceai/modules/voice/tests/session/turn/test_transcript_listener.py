@@ -22,7 +22,7 @@ static_methods).
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from voiceai.agent_manager.task_manager import TaskManager
 from voiceai.modules.voice.session.turn import transcript_listener

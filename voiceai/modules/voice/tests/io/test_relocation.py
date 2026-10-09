@@ -10,21 +10,21 @@ R3) and the handlers bind their legacy lookups through ``adapters.io_runtime``.
 """
 
 import voiceai.input_handlers as legacy_input_pkg
+import voiceai.input_handlers.default as legacy_in_default
+import voiceai.input_handlers.telephony as legacy_in_telephony
+import voiceai.input_handlers.telephony_providers.sip_trunk as legacy_in_sip
+import voiceai.input_handlers.telephony_providers.talko as legacy_in_talko
 import voiceai.modules.voice.io.input as new_input_pkg
 import voiceai.modules.voice.io.input.default as new_in_default
 import voiceai.modules.voice.io.input.telephony as new_in_telephony
 import voiceai.modules.voice.io.input.telephony_providers.sip_trunk as new_in_sip
 import voiceai.modules.voice.io.input.telephony_providers.talko as new_in_talko
-import voiceai.input_handlers.default as legacy_in_default
-import voiceai.input_handlers.telephony as legacy_in_telephony
-import voiceai.input_handlers.telephony_providers.sip_trunk as legacy_in_sip
-import voiceai.input_handlers.telephony_providers.talko as legacy_in_talko
-import voiceai.output_handlers as legacy_output_pkg
 import voiceai.modules.voice.io.output as new_output_pkg
 import voiceai.modules.voice.io.output.default as new_out_default
 import voiceai.modules.voice.io.output.telephony as new_out_telephony
 import voiceai.modules.voice.io.output.telephony_providers.sip_trunk as new_out_sip
 import voiceai.modules.voice.io.output.telephony_providers.talko as new_out_talko
+import voiceai.output_handlers as legacy_output_pkg
 import voiceai.output_handlers.default as legacy_out_default
 import voiceai.output_handlers.telephony as legacy_out_telephony
 import voiceai.output_handlers.telephony_providers.sip_trunk as legacy_out_sip

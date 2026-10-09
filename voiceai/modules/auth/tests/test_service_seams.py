@@ -21,7 +21,6 @@ from voiceai.modules.auth.static_methods import hash_password
 from voiceai.modules.auth.utils import check_login_allowed, try_login_attempt
 from voiceai.platform.store import MemoryStore
 
-
 #: Identity methods (spec 0040) the frozen legacy stores intentionally lack.
 #: `save/get_organization` are NOT listed: legacy already speaks single
 #: organizations, so they ride the pre-identity surface (integrator correction).
@@ -102,12 +101,11 @@ def test_public_user_hides_secrets() -> None:
 
 async def test_memory_store_lists_user_sessions() -> None:
     """The password-change sweep reads back exactly one user's sessions."""
-    from voiceai.modules.auth.models.session import SessionRecord
-    from voiceai.modules.auth.static_methods import token_hash
-
     from datetime import timedelta
 
     from voiceai.common.datetime_utils import utc_now
+    from voiceai.modules.auth.models.session import SessionRecord
+    from voiceai.modules.auth.static_methods import token_hash
 
     store = MemoryStore()
     for seq, uid in enumerate(("u1", "u1", "u2")):

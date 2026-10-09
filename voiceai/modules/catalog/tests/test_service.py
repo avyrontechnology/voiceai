@@ -15,7 +15,6 @@ from voiceai.modules.catalog.repository import CatalogRepository
 from voiceai.modules.catalog.service import CatalogService
 
 
-
 def _service() -> CatalogService:
     """Service over a fresh in-memory collection."""
     db = InMemoryDatabase()
