@@ -395,7 +395,8 @@ class ToolExecutor:
                         "Query-placed keys cannot ride MCP calls — use header mode.",
                         details={"tool_id": tool.tool_id},
                     ) from last_exc
-        assert last_exc is not None  # the loop always runs at least once
+        if last_exc is None:  # defensive — the loop always runs at least once
+            last_exc = ToolExecutionError("Tool execution produced no attempts.")
         return self._unreachable_result(tool, agent_id, fingerprint, started, last_exc)
 
     async def _call_with_auth_retry(

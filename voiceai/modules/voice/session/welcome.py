@@ -305,34 +305,34 @@ async def synthesize_welcome_audio(self: WelcomeSession, text: Any) -> Any:
         except Exception:
             logger.error("Welcome TTS returned an undecodable text payload")
             return None
-    pcm = None
+    processed: bytes | None = None
     try:
         processor = getattr(synth, "_process_audio_data", None) or getattr(synth, "_process_audio_chunk", None)
-        pcm = processor(raw) if callable(processor) else None
+        processed = processor(raw) if callable(processor) else None
     except Exception as e:
         logger.error(f"Welcome TTS post-processing failed: {e}")
-        pcm = None
-    if pcm is None and isinstance(raw, (bytes, bytearray)):
+        processed = None
+    if processed is None and isinstance(raw, (bytes, bytearray)):
         try:
-            pcm = wav_bytes_to_pcm(bytes(raw)) if get_synth_audio_format(bytes(raw)) == "wav" else bytes(raw)
+            processed = wav_bytes_to_pcm(bytes(raw)) if get_synth_audio_format(bytes(raw)) == "wav" else bytes(raw)
         except Exception:
             return None
-    if not pcm:
+    if not processed:
         return None
     # Cache at the synth's native rate (cache_key is keyed by synth_rate);
     # the resample below adapts to the session rate on every play.
-    _welcome_synth_cache_put(cache_key, bytes(pcm))
+    _welcome_synth_cache_put(cache_key, bytes(processed))
     try:
         synth_rate = int(getattr(synth, "sampling_rate", self.sampling_rate) or self.sampling_rate)
     except (TypeError, ValueError):
         synth_rate = self.sampling_rate
     if synth_rate != self.sampling_rate:
         try:
-            pcm = resample(pcm, self.sampling_rate, format="pcm", original_sample_rate=synth_rate)
+            processed = resample(processed, self.sampling_rate, format="pcm", original_sample_rate=synth_rate)
         except Exception as e:
             logger.error(f"Welcome TTS resample failed: {e}")
             return None
-    return pcm
+    return processed
 
 
 async def first_message(self: WelcomeSession, timeout: float = 10.0) -> None:

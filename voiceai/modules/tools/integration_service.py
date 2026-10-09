@@ -569,7 +569,8 @@ class IntegrationService:
             extra_meta: Extra stamps beside `synced_from`.
             counters: Mutable `{created, updated, skipped, tool_ids}` tallies.
         """
-        assert self._tools is not None  # sync entry points check wiring first
+        if self._tools is None:
+            raise InvalidToolError("Tool sync called before wiring check.")
         existing = await self._tools.get_tool(tool_id)
         if existing is not None and existing.meta.get(_SYNCED_FROM_KEY) != provider:
             counters["skipped"].append(tool_id)
@@ -674,7 +675,8 @@ class IntegrationService:
                 extra_headers = {str(key): value for key, value in headers.items() if isinstance(value, str)}
             else:
                 raise InvalidToolError(
-                    f"Credential type {template.credential_type!r} cannot ride MCP discovery — use bearer, oauth2, or custom.",
+                    f"Credential type {template.credential_type!r} cannot ride MCP "
+                    "discovery — use bearer, oauth2, or custom.",
                     details={"provider": provider},
                 )
         try:
@@ -686,7 +688,8 @@ class IntegrationService:
                 "MCP discovery failed for the server.",
                 details={"provider": provider},
             ) from exc
-        assert self._tools is not None  # checked by the sync entry point
+        if self._tools is None:
+            raise InvalidToolError("MCP discovery called before wiring check.")
         auth_ref = await self._sync_auth_ref(template)
         counters: dict[str, Any] = {"created": 0, "updated": 0, "skipped": [], "tool_ids": []}
         problems: list[str] = []

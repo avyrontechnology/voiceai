@@ -138,7 +138,7 @@ def _auth_params_for(
         username = auth_config.get(C.AUTH_USERNAME_FIELD, "")
         password = material.get(C.AUTH_PASSWORD_FIELD)
         if isinstance(username, str) and isinstance(password, str) and password:
-            raw = f"{username}:{password}".encode("utf-8")
+            raw = f"{username}:{password}".encode()
             return AuthParams(headers={C.AUTHORIZATION_HEADER: f"Basic {base64.b64encode(raw).decode('ascii')}"})
     elif credential_type == C.CREDENTIAL_TYPE_CUSTOM:
         raw_headers = material.get(C.AUTH_HEADERS_FIELD)
