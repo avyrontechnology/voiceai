@@ -6,10 +6,10 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "fa27546d-3317-49f0-8d17-366fc9e22807",
+  "deliveryReceiptId": "0b69ab3a-c84d-4e01-bde2-8310fed4210c",
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
-    "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+    "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
     "bytes": 762955
   },
   "state": {

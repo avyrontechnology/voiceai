@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "fa27546d-3317-49f0-8d17-366fc9e22807",
+  "receiptId": "0b69ab3a-c84d-4e01-bde2-8310fed4210c",
   "status": "current",
   "command": "deliver",
   "type": "architecture",
   "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.candidate.json",
   "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
   "specification": {
-    "sha256": "ccebaea7a635049038864e7e697c81da834815caedac76cef79e4542250d1d20",
+    "sha256": "646fa94d2e3526aab843a30f9a5b8e1da846d7bbf60923538c39ca0a3185808f",
     "bytes": 5736
   },
   "artifact": {
-    "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+    "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
     "bytes": 762955
   }
 }

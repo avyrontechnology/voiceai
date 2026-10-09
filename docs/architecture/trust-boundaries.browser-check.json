@@ -6,10 +6,10 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "8459ffee-44be-4118-8ffd-78f3070f6e64",
+  "deliveryReceiptId": "0411f8ec-0d93-4a8b-a72b-52167c3bb56c",
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/trust-boundaries.html",
-    "sha256": "4da141cc87c3eba94dbbe2031d11ce447883376f49e083492614b2bd4940a3fb",
+    "sha256": "19e3a5dd3172324c1144b345b88b1a86d524e82918fe6c28e065dbb81a0f9460",
     "bytes": 762089
   },
   "state": {

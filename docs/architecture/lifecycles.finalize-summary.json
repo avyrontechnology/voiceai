@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.candidate.json",
-    "sha256": "56069d613e76450074c9599563733cc8543e17befa027ffe024cfeb5a32cc37b",
+    "sha256": "823e42c02e95f0ec70bd7a969c8c2767de146c0111d1ae7c339c6500cbf413c8",
     "bytes": 5740
   },
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
-    "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+    "sha256": "66000c54309218b719ac19798e7028fa681e1c74f5cad2594650045f43a0fac4",
     "bytes": 765212
   },
   "gates": {
@@ -43,5 +43,5 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 1940
+  "durationMs": 1597
 }

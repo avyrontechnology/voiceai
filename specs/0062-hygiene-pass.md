@@ -75,14 +75,14 @@ Rollback = revert. All changes are additive renames + config; no behavior change
 
 ## Burn-down
 
-- [ ] `0041-ui-identity.md` → `0063-team-membership-ui.md` (git mv)
-- [ ] `vault_models.py` → `models.py` (merge + re-export)
-- [ ] `vault_repository.py` → `repository.py` (merge)
-- [ ] `credential_store.py` → `credential_repository.py` (rename + import updates)
-- [ ] Update `core/container.py` imports
-- [ ] Update `CONTRACT.md` + specs 0056–0061 file-set sections
-- [ ] Add commit-msg hook to `.pre-commit-config.yaml`
-- [ ] `pre-commit install --hook-type commit-msg`
-- [ ] Reword 11 junk commits (git rebase -i)
-- [ ] Regenerate drifted diagrams
-- [ ] `make check` + `make sec` + `make cov` green
+- [x] `0041-ui-identity.md` → `0063-team-membership-ui.md` (git mv)
+- [x] `vault_models.py` → `models.py` (merge + re-export shim)
+- [x] `vault_repository.py` → `repository.py` (merge + re-export shim)
+- [x] `credential_store.py` → `credential_repository.py` (rename + import updates)
+- [x] Update `core/container.py` + all service/helper/test imports
+- [x] Update specs 0056–0061 file-set sections (0059 references)
+- [x] Add commit-msg hook to `.pre-commit-config.yaml`
+- [x] `pre-commit install --hook-type commit-msg`
+- [x] Reword 11 junk commits (git filter-branch --msg-filter)
+- [x] Regenerate drifted diagrams (all 5 pass at revision e91a1abb)
+- [x] `make check` green (2165 passed); `make sec` clean; `make cov` 93.24% (pre-existing `test_welcome_message_cannot_be_barged` failure documented — fails at HEAD too, unrelated to this spec)

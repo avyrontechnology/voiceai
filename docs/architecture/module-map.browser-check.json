@@ -6,10 +6,10 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "03fdf8fe-dfc6-43b8-afe6-181eec1d3ed4",
+  "deliveryReceiptId": "3542ec8a-cb7a-4eb3-ab0a-3f06703bfc53",
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/module-map.html",
-    "sha256": "8569187234f15ceee47d2bb23648baa491520e4d6ff0e2691c3fb4cb50e5f7f3",
+    "sha256": "0a0a49f1bc9b1b66fa4acc07b297b9977656dc39dd89607bc8bde084624a41d7",
     "bytes": 767546
   },
   "state": {

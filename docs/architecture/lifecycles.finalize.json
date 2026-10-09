@@ -5,15 +5,15 @@
   "status": "pass",
   "type": "sequence",
   "quality": "showcase",
-  "startedAt": "2026-10-09T15:40:42.580Z",
+  "startedAt": "2026-10-09T17:19:41.329Z",
   "specification": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.candidate.json",
-    "sha256": "56069d613e76450074c9599563733cc8543e17befa027ffe024cfeb5a32cc37b",
+    "sha256": "823e42c02e95f0ec70bd7a969c8c2767de146c0111d1ae7c339c6500cbf413c8",
     "bytes": 5740
   },
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
-    "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+    "sha256": "66000c54309218b719ac19798e7028fa681e1c74f5cad2594650045f43a0fac4",
     "bytes": 765212
   },
   "stages": {
@@ -40,7 +40,7 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "56069d613e76450074c9599563733cc8543e17befa027ffe024cfeb5a32cc37b",
+          "sha256": "823e42c02e95f0ec70bd7a969c8c2767de146c0111d1ae7c339c6500cbf413c8",
           "bytes": 5740
         },
         "validation": {
@@ -56,7 +56,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 261,
+      "durationMs": 341,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -72,18 +72,18 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "bf292bcc-8f3c-4fe6-b8c1-6c645537c7e6",
+        "receiptId": "9c88b51a-eb6f-440a-8fc3-c4ca96c833bf",
         "ok": true,
         "command": "deliver",
         "type": "sequence",
         "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.candidate.json",
         "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
         "specification": {
-          "sha256": "56069d613e76450074c9599563733cc8543e17befa027ffe024cfeb5a32cc37b",
+          "sha256": "823e42c02e95f0ec70bd7a969c8c2767de146c0111d1ae7c339c6500cbf413c8",
           "bytes": 5740
         },
         "artifact": {
-          "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+          "sha256": "66000c54309218b719ac19798e7028fa681e1c74f5cad2594650045f43a0fac4",
           "bytes": 765212
         },
         "validation": {
@@ -97,7 +97,7 @@
         "evidence": {
           "verified": true,
           "repository": "https://github.com/avyrontechnology/voiceai",
-          "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+          "revision": "e91a1abbef96e07f47d65d612f794525c81c9287",
           "references": 8
         },
         "update": {
@@ -116,7 +116,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 133,
+      "durationMs": 130,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -128,7 +128,7 @@
         "ok": true,
         "file": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
         "artifact": {
-          "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+          "sha256": "66000c54309218b719ac19798e7028fa681e1c74f5cad2594650045f43a0fac4",
           "bytes": 765212
         },
         "checks": [
@@ -258,13 +258,13 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "bf292bcc-8f3c-4fe6-b8c1-6c645537c7e6"
+        "deliveryReceiptId": "9c88b51a-eb6f-440a-8fc3-c4ca96c833bf"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1395,
+      "durationMs": 950,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -282,10 +282,10 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "bf292bcc-8f3c-4fe6-b8c1-6c645537c7e6",
+        "deliveryReceiptId": "9c88b51a-eb6f-440a-8fc3-c4ca96c833bf",
         "artifact": {
           "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.html",
-          "sha256": "032a1aa0504a0c9ae471e721614c61c4a216760b950cba12e189f09666ca25d8",
+          "sha256": "66000c54309218b719ac19798e7028fa681e1c74f5cad2594650045f43a0fac4",
           "bytes": 765212
         },
         "state": {
@@ -980,8 +980,8 @@
     "browserCheckReceipt": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/lifecycles.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-09T15:40:44.520Z",
-  "durationMs": 1940,
+  "finishedAt": "2026-10-09T17:19:42.926Z",
+  "durationMs": 1597,
   "update": {
     "status": "current",
     "installedVersion": "3.0.1",

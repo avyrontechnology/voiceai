@@ -5,15 +5,15 @@
   "status": "pass",
   "type": "architecture",
   "quality": "showcase",
-  "startedAt": "2026-10-09T15:23:15.819Z",
+  "startedAt": "2026-10-09T17:19:24.294Z",
   "specification": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.candidate.json",
-    "sha256": "ccebaea7a635049038864e7e697c81da834815caedac76cef79e4542250d1d20",
+    "sha256": "646fa94d2e3526aab843a30f9a5b8e1da846d7bbf60923538c39ca0a3185808f",
     "bytes": 5736
   },
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
-    "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+    "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
     "bytes": 762955
   },
   "stages": {
@@ -40,7 +40,7 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "ccebaea7a635049038864e7e697c81da834815caedac76cef79e4542250d1d20",
+          "sha256": "646fa94d2e3526aab843a30f9a5b8e1da846d7bbf60923538c39ca0a3185808f",
           "bytes": 5736
         },
         "validation": {
@@ -56,7 +56,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 348,
+      "durationMs": 345,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -72,18 +72,18 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "fa27546d-3317-49f0-8d17-366fc9e22807",
+        "receiptId": "0b69ab3a-c84d-4e01-bde2-8310fed4210c",
         "ok": true,
         "command": "deliver",
         "type": "architecture",
         "input": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.candidate.json",
         "output": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
         "specification": {
-          "sha256": "ccebaea7a635049038864e7e697c81da834815caedac76cef79e4542250d1d20",
+          "sha256": "646fa94d2e3526aab843a30f9a5b8e1da846d7bbf60923538c39ca0a3185808f",
           "bytes": 5736
         },
         "artifact": {
-          "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+          "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
           "bytes": 762955
         },
         "validation": {
@@ -97,7 +97,7 @@
         "evidence": {
           "verified": true,
           "repository": "https://github.com/avyrontechnology/voiceai",
-          "revision": "18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9",
+          "revision": "e91a1abbef96e07f47d65d612f794525c81c9287",
           "references": 14
         },
         "update": {
@@ -116,7 +116,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 162,
+      "durationMs": 186,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -128,7 +128,7 @@
         "ok": true,
         "file": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
         "artifact": {
-          "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+          "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
           "bytes": 762955
         },
         "checks": [
@@ -255,13 +255,13 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "fa27546d-3317-49f0-8d17-366fc9e22807"
+        "deliveryReceiptId": "0b69ab3a-c84d-4e01-bde2-8310fed4210c"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 1298,
+      "durationMs": 872,
       "command": [
         "/Users/avyron/.local/node/bin/node",
         "/Users/avyron/.agents/skills/archify/bin/archify.mjs",
@@ -279,10 +279,10 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "fa27546d-3317-49f0-8d17-366fc9e22807",
+        "deliveryReceiptId": "0b69ab3a-c84d-4e01-bde2-8310fed4210c",
         "artifact": {
           "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
-          "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+          "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
           "bytes": 762955
         },
         "state": {
@@ -977,8 +977,8 @@
     "browserCheckReceipt": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-09T15:23:17.823Z",
-  "durationMs": 2004,
+  "finishedAt": "2026-10-09T17:19:25.851Z",
+  "durationMs": 1556,
   "update": {
     "status": "current",
     "installedVersion": "3.0.1",

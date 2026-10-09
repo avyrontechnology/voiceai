@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/module-map.candidate.json",
-    "sha256": "ec1fbc174b9e877531472926f6ce1f9e387a2f974104436cac4123b43280a114",
+    "sha256": "d7a2ee304391f333db0d04b23cbe1e82ca04d0d84deaa8c44039bb3b0cf88e03",
     "bytes": 6933
   },
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/module-map.html",
-    "sha256": "8569187234f15ceee47d2bb23648baa491520e4d6ff0e2691c3fb4cb50e5f7f3",
+    "sha256": "0a0a49f1bc9b1b66fa4acc07b297b9977656dc39dd89607bc8bde084624a41d7",
     "bytes": 767546
   },
   "gates": {
@@ -43,5 +43,5 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 1982
+  "durationMs": 1525
 }

@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.candidate.json",
-    "sha256": "ccebaea7a635049038864e7e697c81da834815caedac76cef79e4542250d1d20",
+    "sha256": "646fa94d2e3526aab843a30f9a5b8e1da846d7bbf60923538c39ca0a3185808f",
     "bytes": 5736
   },
   "artifact": {
     "path": "/Users/avyron/Desktop/avyron-workspace/voiceai/docs/architecture/repo-topology.html",
-    "sha256": "8b200eeaab7541a3b8971f3ce03ffba2fef3ac5201b9524107444f8469ddc59e",
+    "sha256": "556ab076f7af887301189d1c037ec05e9c360e6bc75951b2fb712e65efcc0d17",
     "bytes": 762955
   },
   "gates": {
@@ -43,5 +43,5 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 2004
+  "durationMs": 1556
 }
