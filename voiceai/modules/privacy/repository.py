@@ -12,9 +12,9 @@ from collections.abc import Sequence
 
 from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.privacy import constants as C
-from voiceai.modules.privacy.models import ConsentRecord
+from voiceai.modules.privacy.models import ConsentRecord, PrivacyAuditRecord
 
-__all__ = ["ConsentRepository"]
+__all__ = ["ConsentRepository", "PrivacyAuditRepository"]
 
 
 class ConsentRepository:
@@ -50,7 +50,7 @@ class ConsentRepository:
             in the service, so no caller can forget the filter.
         """
         rows = await self._store.find_many(C.SUBJECT_ID_FIELD, subject_id)
-        return [row for row in rows if row.granted]
+        return [row for row in rows if row.granted and row.is_active]
 
     async def find_one(self, subject_id: str, purpose: str) -> ConsentRecord | None:
         """Return the active row for a subject/purpose pair, or `None`.
@@ -70,3 +70,48 @@ class ConsentRepository:
     async def list_all(self) -> Sequence[ConsentRecord]:
         """Return every row in this view, walking all pages."""
         return [row async for row in walk_pages(self._store)]
+
+    async def delete(self, consent_id: str) -> bool:
+        """Soft-delete one consent row (tombstone — never destroys).
+
+        Args:
+            consent_id: Storage id of the row to erase.
+
+        Returns:
+            Whether this call was the one that erased it.
+        """
+        return await self._store.soft_delete(consent_id)
+
+
+class PrivacyAuditRepository:
+    """`PrivacyAuditRecord` storage over one collection view (spec 0072).
+
+    Args:
+        store: The `privacy_audit_log` collection behind a `BaseRepository`
+            (tenant-scoped view — the container stamps the ambient tenant).
+    """
+
+    def __init__(self, store: BaseRepository[PrivacyAuditRecord]) -> None:
+        self._store = store
+
+    async def record(self, audit: PrivacyAuditRecord) -> PrivacyAuditRecord:
+        """Persist one privacy-action audit row.
+
+        Args:
+            audit: The row (id assigned here when absent, never by callers).
+
+        Returns:
+            The persisted row.
+        """
+        return await self._store.insert(audit)
+
+    async def list_for_subject(self, subject_id: str) -> Sequence[PrivacyAuditRecord]:
+        """Return every audit row recorded for a subject, oldest first.
+
+        Args:
+            subject_id: Opaque subject identifier.
+
+        Returns:
+            The subject's action history in this view.
+        """
+        return await self._store.find_many(C.SUBJECT_ID_FIELD, subject_id)

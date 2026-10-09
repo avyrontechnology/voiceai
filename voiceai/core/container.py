@@ -627,11 +627,14 @@ def _build_privacy_service(db_client: Any) -> Any:
         A `PrivacyService` over this request's consent view.
     """
     from voiceai.database.constants import Collections
-    from voiceai.modules.privacy.models import ConsentRecord
-    from voiceai.modules.privacy.repository import ConsentRepository
+    from voiceai.modules.privacy.models import ConsentRecord, PrivacyAuditRecord
+    from voiceai.modules.privacy.repository import ConsentRepository, PrivacyAuditRepository
     from voiceai.modules.privacy.service import PrivacyService
 
-    return PrivacyService(ConsentRepository(_scoped_collection(db_client, Collections.CONSENT_RECORDS, ConsentRecord)))
+    return PrivacyService(
+        ConsentRepository(_scoped_collection(db_client, Collections.CONSENT_RECORDS, ConsentRecord)),
+        PrivacyAuditRepository(_scoped_collection(db_client, Collections.PRIVACY_AUDIT_LOG, PrivacyAuditRecord)),
+    )
 
 
 def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:

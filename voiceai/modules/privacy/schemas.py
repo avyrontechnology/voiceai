@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from voiceai.modules.privacy.models import ConsentRecord
 
-__all__ = ["ConsentView", "GrantConsentPayload"]
+__all__ = ["ConsentView", "GrantConsentPayload", "RectifySubjectPayload", "SubjectDataView"]
 
 
 class GrantConsentPayload(BaseModel):
@@ -54,3 +54,19 @@ class ConsentView(BaseModel):
             granted_at=record.granted_at,
             withdrawn_at=record.withdrawn_at,
         )
+
+
+class RectifySubjectPayload(BaseModel):
+    """Body for `PATCH /privacy/subject/{subject_id}` — consent rectification."""
+
+    model_config = {"extra": "forbid"}
+
+    purpose: str = Field(..., min_length=1)
+    policy_version: str = Field(..., min_length=1)
+
+
+class SubjectDataView(BaseModel):
+    """Read shape for a data-subject access request (Art. 15/20)."""
+
+    subject_id: str
+    consent: list[ConsentView]

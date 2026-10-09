@@ -10,7 +10,7 @@ import pytest
 
 from voiceai.modules.privacy.errors import ConsentNotFoundError, UnknownPurposeError
 from voiceai.modules.privacy.models import ConsentRecord
-from voiceai.modules.privacy.repository import ConsentRepository
+from voiceai.modules.privacy.repository import ConsentRepository, PrivacyAuditRepository
 from voiceai.modules.privacy.service import PrivacyService
 
 
@@ -30,6 +30,13 @@ class _FakeStore:
 
     async def find_many(self, field: str, value: object) -> list[ConsentRecord]:
         return [row for row in self.rows.values() if getattr(row, field) == value]
+
+    async def soft_delete(self, item_id: str, *, user_id: str | None = None) -> bool:
+        row = self.rows.get(item_id)
+        if row is None or not row.is_active:
+            return False
+        row.is_active = False
+        return True
 
 
 def _service() -> PrivacyService:
@@ -95,3 +102,59 @@ async def test_withdraw_unknown_pair_404() -> None:
 
     with pytest.raises(ConsentNotFoundError):
         await service.withdraw(subject_id="nobody", purpose="analytics")
+
+
+async def test_access_records_the_action() -> None:
+    """Access returns active rows AND records the action in the audit log."""
+    service, audit = _service_with_audit()
+    await service.grant(subject_id="sub-1", purpose="analytics", policy_version="v3")
+
+    rows = await service.access_data(subject_id="sub-1", actor_id="op-1")
+
+    assert [row.purpose for row in rows] == ["analytics"]
+    history = await audit.list_for_subject("sub-1")
+    assert [(h.action, h.actor_id) for h in history] == [("access", "op-1")]
+
+
+async def test_erase_soft_deletes_and_records() -> None:
+    """Erasure erases every active row and records the action."""
+    service, audit = _service_with_audit()
+    await service.grant(subject_id="sub-1", purpose="analytics", policy_version="v3")
+    await service.grant(subject_id="sub-1", purpose="marketing", policy_version="v3")
+
+    erased = await service.erase_subject(subject_id="sub-1", actor_id="op-1")
+
+    assert erased == 2
+    assert await service.list_consents(subject_id="sub-1") == []
+    history = await audit.list_for_subject("sub-1")
+    assert [h.action for h in history] == ["erasure"]
+
+
+async def test_erase_is_idempotent() -> None:
+    """A second erasure reports zero; the tombstone rows survive."""
+    service, _ = _service_with_audit()
+    await service.grant(subject_id="sub-1", purpose="analytics", policy_version="v3")
+
+    assert await service.erase_subject(subject_id="sub-1", actor_id="op-1") == 1
+    assert await service.erase_subject(subject_id="sub-1", actor_id="op-1") == 0
+
+
+async def test_rectify_refreshes_and_records() -> None:
+    """Rectification grants the pair (idempotent) and records the action."""
+    service, audit = _service_with_audit()
+
+    record = await service.rectify_subject(
+        subject_id="sub-1", purpose="analytics", policy_version="v9", actor_id="op-1"
+    )
+
+    assert record.policy_version == "v9"
+    history = await audit.list_for_subject("sub-1")
+    assert [h.action for h in history] == ["rectification"]
+
+
+def _service_with_audit() -> tuple[PrivacyService, PrivacyAuditRepository]:
+    """Service over a fake consent store plus a fake audit store."""
+    store = _FakeStore()
+    audit_store = _FakeStore()
+    audit = PrivacyAuditRepository(audit_store)  # type: ignore[arg-type]
+    return PrivacyService(ConsentRepository(store), audit), audit  # type: ignore[arg-type]

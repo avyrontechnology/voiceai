@@ -100,6 +100,7 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     # so this rule only ever matches a row that should not exist —
     # harmless (spec-0038 precedent).
     "consent_records",
+    "privacy_audit_log",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).

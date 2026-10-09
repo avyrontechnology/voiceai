@@ -82,6 +82,9 @@ class Collections(str, Enum):
     #: GDPR consent records (spec 0071): demonstrable consent per subject/purpose.
     #: Grants and withdrawals both persist; withdrawal is a tombstone, never a delete.
     CONSENT_RECORDS = "consent_records"
+    #: GDPR privacy audit trail (spec 0072): one row per subject-rights action
+    #: (access/rectification/erasure), so the act itself is provable.
+    PRIVACY_AUDIT_LOG = "privacy_audit_log"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

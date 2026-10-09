@@ -37,3 +37,16 @@ envelope, and the gate runs before any service call.
 
 - `consent_records` (`Collections.CONSENT_RECORDS`): `ConsentRecord`
   rows, `tenant_id`-scoped; tombstones retained as audit evidence.
+
+## Data subject rights (spec 0072)
+
+| Route | Scope | Contract |
+|---|---|---|
+| `GET /api/v1/privacy/subject/{subject_id}/data` | `platform:read` | 200 `{subject_id, consent:[...]}` — every active row (Art. 15); records the access in the audit log |
+| `DELETE /api/v1/privacy/subject/{subject_id}` | `platform:write` | 200 `{erased: true, records: n}` — soft-erases every active row (Art. 17); idempotent |
+| `PATCH /api/v1/privacy/subject/{subject_id}` | `platform:write` | 200 consent view — re-stamps `policy_version` on the active row (Art. 16) |
+
+- Every subject-rights action writes a `PrivacyAuditRecord`
+  (`privacy_audit_log`): `subject_id`, `action`
+  (`access|rectification|erasure`), `actor_id`, identifiers-only detail.
+- Erasure is soft by contract; tombstone rows stay as audit evidence.

@@ -10,6 +10,8 @@ ROUTE_PREFIX: Final[str] = "/privacy"
 CONSENT_PATH: Final[str] = "/consent"
 CONSENT_SUBJECT_PATH: Final[str] = "/consent/{subject_id}"
 CONSENT_WITHDRAW_PATH: Final[str] = "/consent/{subject_id}/{purpose}"
+SUBJECT_PATH: Final[str] = "/subject/{subject_id}"
+SUBJECT_DATA_PATH: Final[str] = "/subject/{subject_id}/data"
 
 # --- Consent purposes (closed vocabulary — new purposes arrive via spec, never free text) --
 PURPOSE_ANALYTICS: Final[str] = "analytics"
@@ -44,3 +46,15 @@ CONSENT_NOT_FOUND_MESSAGE: Final[str] = "Consent record not found"
 # --- Log templates (%-style: the logger formats them only when the record is emitted) ---
 CONSENT_GRANTED_LOG: Final[str] = "consent granted subject=%s purpose=%s"
 CONSENT_WITHDRAWN_LOG: Final[str] = "consent withdrawn subject=%s purpose=%s"
+SUBJECT_ERASED_LOG: Final[str] = "subject data erased subject=%s records=%s actor=%s"
+
+# --- Audit actions (spec 0072 — the closed vocabulary of recorded rights actions) --------
+ACTION_ACCESS: Final[str] = "access"
+ACTION_RECTIFICATION: Final[str] = "rectification"
+ACTION_ERASURE: Final[str] = "erasure"
+
+KNOWN_ACTIONS: Final[tuple[str, ...]] = (ACTION_ACCESS, ACTION_RECTIFICATION, ACTION_ERASURE)
+
+# --- Wire field names (subject-rights views) --------------------------------------------
+RECORDS_FIELD: Final[str] = "records"
+ERASED_FIELD: Final[str] = "erased"

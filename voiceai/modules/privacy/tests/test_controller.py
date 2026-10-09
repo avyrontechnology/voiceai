@@ -140,3 +140,27 @@ async def test_withdraw_unknown_404() -> None:
     response = await client.delete(f"{PREFIX}/privacy/consent/nobody/analytics")
 
     assert response.status_code == 404, response.text
+
+
+async def test_subject_rights_round_trip() -> None:
+    """Access → rectification → erasure over the real app factory."""
+    client = await _client()
+    await client.post(f"{PREFIX}/privacy/consent", json=GRANT_BODY)
+
+    accessed = await client.get(f"{PREFIX}/privacy/subject/sub-1/data")
+    assert accessed.status_code == 200, accessed.text
+    assert [row["purpose"] for row in accessed.json()["data"]["consent"]] == ["analytics"]
+
+    rectified = await client.patch(
+        f"{PREFIX}/privacy/subject/sub-1", json={"purpose": "analytics", "policy_version": "v9"}
+    )
+    assert rectified.status_code == 200, rectified.text
+    assert rectified.json()["data"]["policy_version"] == "v9"
+
+    erased = await client.delete(f"{PREFIX}/privacy/subject/sub-1")
+    assert erased.status_code == 200, erased.text
+    assert erased.json()["data"]["erased"] is True
+    assert erased.json()["data"]["records"] == 1
+
+    relisted = await client.get(f"{PREFIX}/privacy/consent/sub-1")
+    assert relisted.json()["data"] == []
