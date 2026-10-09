@@ -28,6 +28,14 @@ AuthN/Z decisions (service layer), PII handling (identifiers at INFO, never payl
 secrets (env only, `redact_secrets` before logging), SSRF (`is_safe_outbound_url` +
 timeout), rate limits / idempotency for mutating endpoints, CORS impact.
 
+## Architecture delta
+
+If this spec changes module topology, adds a cross-module boundary, or introduces a
+new trust/security perimeter, attach an archify diagram under `docs/architecture/`.
+The diagram must cite real source paths and be validated against the pinned revision.
+Update an existing diagram if the change fits; create a new one if the topology shifts.
+Pure internal refactors (no boundary change) write "N/A — no topology change" with a reason.
+
 ## Test plan
 
 Unit (service/repository/static_methods with DI fakes) + controller tests through the

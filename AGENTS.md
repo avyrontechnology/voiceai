@@ -20,8 +20,10 @@ Two worlds coexist in this repo:
 ## 1. The iteration loop (SDD)
 
 1. **Spec** in `specs/NNNN-slug.md` — goal, non-goals, interface contracts, data model,
-   security notes, test plan, verification, rollout.
+   security notes, architecture delta, test plan, verification, rollout.
 2. **Architect pass** — a review (human or Plan agent) attacks the spec before code exists.
+   Start with a read-only Ask/Plan pass: reassess current architecture (see
+   `docs/architecture/`), identify drift, and confirm the spec's assumptions match reality.
 3. **Implement** to the spec's contracts. Multi-agent orchestration protocol: each agent owns a
    **disjoint file set** stated in its prompt; agents code only against the spec, never edit
    files they do not own, and report deviations instead of improvising; one integrator merges,
