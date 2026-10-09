@@ -42,7 +42,6 @@ DEBT_FILE_LINES = 800
 #: M6 (0025): platform router/store retirement. M3 (0022): audio move + skeletons.
 SIZE_DEBT: dict[str, str] = {
     "voiceai/agent_manager/task_manager.py": "spec-0024",
-    "voiceai/modules/voice/session/turn/transcript_listener.py": "spec-0024",
     "voiceai/modules/voice/session/language/switcher.py": "spec-0024",
     "voiceai/modules/voice/session/turn/generation.py": "spec-0024",
     "voiceai/modules/voice/session/turn/history_sync.py": "spec-0024",

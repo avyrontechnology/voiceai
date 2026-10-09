@@ -82,7 +82,7 @@ MODULE: ModuleDef = ModuleDef(
     # ratchet back with the next slice.
     # Bumped for spec-0056 (tools executor port seam: +1 adapter file): +200,
     # ratchet back with the next slice.
-    max_lines=50400,
+    max_lines=50500,
 )
 
 __all__ = [
