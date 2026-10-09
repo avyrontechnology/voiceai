@@ -614,6 +614,26 @@ def _build_oauth_service(db_client: Any, vault: Any, cache_client: Any, environm
     )
 
 
+def _build_privacy_service(db_client: Any) -> Any:
+    """Build the privacy service over a tenant-scoped consent view (spec 0071).
+
+    Called per request (Factory): the scoped view pins the ambient tenant at
+    construction, so a Singleton must never serve this (first-request pinning).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `PrivacyService` over this request's consent view.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.privacy.models import ConsentRecord
+    from voiceai.modules.privacy.repository import ConsentRepository
+    from voiceai.modules.privacy.service import PrivacyService
+
+    return PrivacyService(ConsentRepository(_scoped_collection(db_client, Collections.CONSENT_RECORDS, ConsentRecord)))
+
+
 def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:
     """Build the MCP server envelope router over tenant-wired services (spec 0057).
 
@@ -888,6 +908,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     oauth_service = providers.Factory(_build_oauth_service, db_client, credential_vault, redis_cache, environment)
     mcp_server_router = providers.Factory(_build_mcp_server_router, tools_service, tool_executor)
 
+    # Spec 0071 privacy lane: per-request (Factory — the scoped consent view
+    # pins the ambient tenant at construction, same hazard as tools_service).
+    privacy_service = providers.Factory(_build_privacy_service, db_client)
+
     agent_service = providers.Factory(
         _build_agent_service,
         definitions=agent_definitions,
@@ -965,6 +989,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.agents.controller",
             "voiceai.modules.voice.controller",
             "voiceai.modules.wallet.controller",
+            "voiceai.modules.privacy.controller",
         ]
     )
 

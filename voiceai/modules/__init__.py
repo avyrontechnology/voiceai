@@ -38,7 +38,7 @@ class ModuleDef:
 
 # Imported below the definition on purpose: each module builds its ``MODULE`` from ``ModuleDef``,
 # so the class has to exist before the module packages are imported.
-from voiceai.modules import agents, auth, catalog, chat, health, tools, voice, voices, wallet  # noqa: E402
+from voiceai.modules import agents, auth, catalog, chat, health, privacy, tools, voice, voices, wallet  # noqa: E402
 
 # Registration order is landing order; voice mounts an empty router until spec 0004 step B14.
 ALL_MODULES: tuple[ModuleDef, ...] = (
@@ -51,6 +51,7 @@ ALL_MODULES: tuple[ModuleDef, ...] = (
     voices.MODULE,
     tools.MODULE,
     chat.MODULE,
+    privacy.MODULE,
 )
 
 __all__ = ["ALL_MODULES", "ModuleDef"]

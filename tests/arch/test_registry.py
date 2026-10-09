@@ -6,11 +6,11 @@ import dataclasses
 
 import pytest
 
-from voiceai.modules import ALL_MODULES, ModuleDef, agents, auth, catalog, chat, health, tools, voice, voices, wallet
+from voiceai.modules import ALL_MODULES, ModuleDef, agents, auth, catalog, chat, health, privacy, tools, voice, voices, wallet
 
 
 def test_registry_lists_exactly_the_registered_modules() -> None:
-    """Core mounts what this tuple says: health, agents, voice (spec 0004 B0), auth (spec 0005 C5), wallet, catalog (spec 0022), voices (spec 0025), tools (spec 0029), chat (spec 0038)."""
+    """Core mounts what this tuple says: health, agents, voice (spec 0004 B0), auth (spec 0005 C5), wallet, catalog (spec 0022), voices (spec 0025), tools (spec 0029), chat (spec 0038), privacy (spec 0071)."""
     assert ALL_MODULES == (
         health.MODULE,
         agents.MODULE,
@@ -21,6 +21,7 @@ def test_registry_lists_exactly_the_registered_modules() -> None:
         voices.MODULE,
         tools.MODULE,
         chat.MODULE,
+        privacy.MODULE,
     )
     assert all(isinstance(module, ModuleDef) for module in ALL_MODULES)
 

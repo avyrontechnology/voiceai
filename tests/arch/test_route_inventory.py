@@ -18,7 +18,7 @@ from voiceai.core.environment import Environment
 #: FastAPI's own documentation endpoints, the only paths outside the API prefix.
 DOCS_PATHS: frozenset[str] = frozenset({"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"})
 
-#: Every `METHOD PATH` the single app serves, module and platform alike (135 entries).
+#: Every `METHOD PATH` the single app serves, module and platform alike (138 entries).
 PINNED_ROUTES: frozenset[str] = frozenset(
     {
         "DELETE /api/v1/agent/{agent_id}",
@@ -34,6 +34,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "DELETE /api/v1/partner-credentials/{credential_id}",
         "DELETE /api/v1/partner-integrations/{integration_id}",
         "DELETE /api/v1/phone-numbers/{number_id}",
+        "DELETE /api/v1/privacy/consent/{subject_id}/{purpose}",
         "DELETE /api/v1/sub-accounts/{sub_id}",
         "DELETE /api/v1/sub-accounts/{sub_id}/members",
         "DELETE /api/v1/talko/partners/{partner_id}",
@@ -80,6 +81,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "GET /api/v1/oauth/callback",
         "GET /api/v1/phone-numbers",
         "GET /api/v1/phone-numbers/resolve",
+        "GET /api/v1/privacy/consent/{subject_id}",
         "GET /api/v1/sub-accounts",
         "GET /api/v1/sub-accounts/{sub_id}",
         "GET /api/v1/talko/partners",
@@ -141,6 +143,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "POST /api/v1/phone-numbers",
         "POST /api/v1/phone-numbers/{number_id}/assign",
         "POST /api/v1/phone-numbers/{number_id}/unassign",
+        "POST /api/v1/privacy/consent",
         "POST /api/v1/sub-accounts",
         "POST /api/v1/sub-accounts/{sub_id}/members",
         "POST /api/v1/talko/partners",

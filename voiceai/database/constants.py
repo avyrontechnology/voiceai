@@ -79,6 +79,9 @@ class Collections(str, Enum):
     PARTNER_CREDENTIALS = "partner_credentials"
     PARTNER_INTEGRATIONS = "partner_integrations"
     INTEGRATION_TEMPLATES = "integration_templates"
+    #: GDPR consent records (spec 0071): demonstrable consent per subject/purpose.
+    #: Grants and withdrawals both persist; withdrawal is a tombstone, never a delete.
+    CONSENT_RECORDS = "consent_records"
 
 
 # Repository error text and the detail keys attached to it. Messages stay generic on purpose:

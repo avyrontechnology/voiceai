@@ -95,6 +95,11 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     "platform_workflow_campaigns",
     "platform_ledger",
     "platform_singletons",
+    # Spec 0071 privacy lane: consent rows are stamped from the request
+    # tenant at write time and the scoped repository fails closed on None,
+    # so this rule only ever matches a row that should not exist —
+    # harmless (spec-0038 precedent).
+    "consent_records",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).
