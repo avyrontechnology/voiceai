@@ -79,6 +79,9 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/tools/tests/test_vault.py",  # spec 0056: vault tenancy pins
         "voiceai/modules/tools/tests/test_mcp_server.py",  # spec 0057: pilot tenancy pins
         "voiceai/modules/tools/tests/test_integrations.py",  # spec 0058: vault tenancy pins
+        "voiceai/modules/tools/oauth_service.py",  # spec 0061: state-tenant login storage
+        "voiceai/modules/tools/controller.py",  # spec 0061: login tenant handoff
+        "voiceai/modules/tools/tests/test_oauth.py",  # spec 0061: login tenancy pins
         "voiceai/modules/tools/helpers.py",  # spec 0058: template tenant badge projection
         "voiceai/modules/voice/tests/test_outbound_bridge.py",  # spec 0026: tenant pass-through pin
         "voiceai/modules/voice/tests/test_place_call.py",  # spec 0021, M2: dial ownership pins

@@ -21,6 +21,7 @@ from voiceai.modules.tools.models import ToolDefinition
 from voiceai.modules.tools.static_methods import build_tool_id
 
 __all__ = [
+    "AuthorizeUrlPayload",
     "ConnectCredentialPayload",
     "CreateToolPayload",
     "DcrRegisterPayload",
@@ -110,6 +111,19 @@ class DcrRegisterPayload(BaseModel):
 
     issuer_url: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+
+
+class AuthorizeUrlPayload(BaseModel):
+    """Body for `POST /oauth/authorize-url` — everything to mint a login."""
+
+    model_config = {"extra": "forbid"}
+
+    provider: str = Field(..., min_length=1)
+    authorization_endpoint: str = Field(..., min_length=1)
+    token_endpoint: str = Field(..., min_length=1)
+    client_id: str = Field(..., min_length=1)
+    client_secret: str | None = Field(default=None)
+    scope: str = Field(default="")
 
 
 class TemplatePayload(BaseModel):

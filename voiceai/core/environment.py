@@ -164,6 +164,10 @@ class Environment(BaseModel):
     #: keeps ``POST /api/v1/mcp`` dark (404); operators enable it for the
     #: one pilot partner key only. ``MCP_SERVER_ENABLED`` in the environment.
     mcp_server_enabled: bool = False
+    #: Public base URL of this deployment (spec 0061): the OAuth callback is
+    #: addressed as ``{PUBLIC_BASE_URL}/api/v1/oauth/callback``. Empty keeps
+    #: provider-login dark (token-paste/DCR still work). Never logged raw.
+    public_base_url: str = ""
 
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod

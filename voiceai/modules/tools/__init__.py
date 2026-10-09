@@ -23,7 +23,8 @@ MODULE: ModuleDef = ModuleDef(
     # spec 0058: integration endpoints (service + routes + tests; split next).
     # spec 0059: custom integrations (all auth types + sync-tools; split next).
     # spec 0060: http + mcp transports (discovery sync + executor path; split next).
-    max_lines=7500,
+    # spec 0061: oauth2 login connector (authorize/callback/refresh; split next).
+    max_lines=8500,
 )
 
 __all__ = [

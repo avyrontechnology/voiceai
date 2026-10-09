@@ -127,3 +127,18 @@ values with `error_id` — same shape as HTTP).
 | `POST /api/v1/partner-integrations` | `platform:write` | 201 row; 400 without a live credential |
 | `DELETE /api/v1/partner-integrations/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
 | `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata + `client_secret_once`; 400 undiscoverable/MANUAL |
+
+## OAuth2 login (spec 0061: authorize → callback → refresh)
+
+Click-to-connect without pasting tokens. Login needs Redis (handshake
+state) + `PUBLIC_BASE_URL` (callback origin) — both dark fail closed.
+- `POST /api/v1/oauth/authorize-url` (`platform:write`) → 200
+  `{authorization_url, expires_in}`; SSRF-checked endpoints; PKCE S256 +
+  single-use TTL state (tenant pinned server-side).
+- `GET /api/v1/oauth/callback?code=&state=` (public, state-verified) →
+  HTML popup page (`postMessage({type:"oauth:connected"})`, no secrets;
+  injection-escaped) or the 400 error page. Code exchange seals
+  `{token, refresh_token?, client_secret?}` as an oauth2 credential
+  (idempotent by provider).
+- `POST /api/v1/partner-credentials/{id}/refresh` (`platform:write`) →
+  200 metadata; 400 without refresh material; 404 foreign/missing.

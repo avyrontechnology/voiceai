@@ -528,6 +528,60 @@ def _build_integration_service(db_client: Any, vault: Any) -> Any:
     )
 
 
+def _build_oauth_service(db_client: Any, vault: Any, cache_client: Any, environment: Any) -> Any:
+    """Build the OAuth2 login service over a tenant-view factory (spec 0061).
+
+    Called per request (Factory), but the callback route is anonymous: the
+    service resolves vault views per state-record tenant through `repos_for`,
+    so no ambient binding is read at construction (first-request pinning is
+    impossible — views materialize per call).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        vault: The process `CredentialVault` (token sealing).
+        cache_client: Redis state backend, or `None` (login stays dark).
+        environment: Process configuration (`public_base_url` pins callback).
+
+    Returns:
+        An `OAuthService` (Redis `None` fails closed per call, not here).
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.oauth_service import OAuthService
+    from voiceai.modules.tools.vault_models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+    from voiceai.modules.tools.vault_repository import VaultRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+
+    def _views(tenant_id: str) -> VaultRepository:
+        return VaultRepository(
+            credentials=TenantScopedRepository(
+                factory(db_client, Collections.PARTNER_CREDENTIALS, PartnerCredential),
+                tenant_id,
+                Collections.PARTNER_CREDENTIALS,
+            ),
+            integrations=TenantScopedRepository(
+                factory(db_client, Collections.PARTNER_INTEGRATIONS, PartnerIntegration),
+                tenant_id,
+                Collections.PARTNER_INTEGRATIONS,
+            ),
+            templates=TenantScopedRepository(
+                factory(db_client, Collections.INTEGRATION_TEMPLATES, IntegrationTemplate),
+                tenant_id,
+                Collections.INTEGRATION_TEMPLATES,
+            ),
+        )
+
+    return OAuthService(
+        repos_for=_views,
+        vault=vault,
+        redis=cache_client,
+        public_base_url=environment.public_base_url,
+    )
+
+
 def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:
     """Build the MCP server envelope router over tenant-wired services (spec 0057).
 
@@ -797,6 +851,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     credential_vault = providers.Singleton(_build_credential_vault, environment)
     tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment, credential_vault)
     integration_service = providers.Factory(_build_integration_service, db_client, credential_vault)
+    oauth_service = providers.Factory(_build_oauth_service, db_client, credential_vault, redis_cache, environment)
     mcp_server_router = providers.Factory(_build_mcp_server_router, tools_service, tool_executor)
 
     agent_service = providers.Factory(

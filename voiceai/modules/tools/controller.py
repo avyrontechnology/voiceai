@@ -13,11 +13,13 @@ from typing import Annotated, Any, Protocol
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from voiceai.common.constants import HTTP_CREATED
 from voiceai.common.errors import NotFoundError
+from voiceai.common.logger import get_logger
 from voiceai.common.responses import success_response
+from voiceai.common.tenancy import current_tenant
 from voiceai.core.container import VoiceAIContainer
 from voiceai.core.environment import Environment
 from voiceai.modules.auth import SESSION_COOKIE, AuthService, ensure_permitted, request_principal
@@ -34,7 +36,9 @@ from voiceai.modules.tools.helpers import (
     wire_tool_list,
 )
 from voiceai.modules.tools.integration_service import IntegrationService
+from voiceai.modules.tools.oauth_service import OAuthService
 from voiceai.modules.tools.schemas import (
+    AuthorizeUrlPayload,
     ConnectCredentialPayload,
     CreateToolPayload,
     DcrRegisterPayload,
@@ -47,6 +51,8 @@ from voiceai.modules.tools.service import ToolsService
 __all__ = ["router"]
 
 router = APIRouter(tags=[C.TOOLS_TAG])
+
+logger = get_logger(C.MODULE_NAME)
 
 
 class McpRouterPort(Protocol):
@@ -77,6 +83,7 @@ AuthServiceDep = Annotated[AuthService, Depends(Provide[VoiceAIContainer.auth_se
 McpRouterDep = Annotated[McpRouterPort, Depends(Provide[VoiceAIContainer.mcp_server_router])]
 EnvDep = Annotated[Environment, Depends(Provide[VoiceAIContainer.environment])]
 IntegrationsDep = Annotated[IntegrationService, Depends(Provide[VoiceAIContainer.integration_service])]
+OAuthDep = Annotated[OAuthService, Depends(Provide[VoiceAIContainer.oauth_service])]
 
 
 async def _require_scope(request: Request, auth: AuthService, scope: str) -> None:
@@ -332,3 +339,64 @@ async def sync_template_tools(
     """Materialize a template's tool entries into registry rows (`platform:write`)."""
     await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
     return success_response(await service.sync_tools(provider), status_code=HTTP_CREATED)
+
+
+@router.post(C.OAUTH_AUTHORIZE_PATH)
+@inject
+async def oauth_authorize_url(
+    payload: AuthorizeUrlPayload,
+    request: Request,
+    auth: AuthServiceDep,
+    service: OAuthDep,
+) -> JSONResponse:
+    """Mint a provider login URL + handshake state (`platform:write`)."""
+    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    return success_response(
+        await service.build_authorize_url(
+            tenant_id=current_tenant().tenant_id,
+            provider=payload.provider,
+            authorization_endpoint=payload.authorization_endpoint,
+            token_endpoint=payload.token_endpoint,
+            client_id=payload.client_id,
+            client_secret=payload.client_secret,
+            scope=payload.scope,
+        )
+    )
+
+
+@router.get(C.OAUTH_CALLBACK_PATH, response_class=HTMLResponse)
+@inject
+async def oauth_callback(
+    service: OAuthDep,
+    code: Annotated[str, Query()] = "",
+    state: Annotated[str, Query()] = "",
+) -> HTMLResponse:
+    """Finish a provider login in the browser (public; state-verified).
+
+    Deliberately outside the scope gate: the browser redirect carries no
+    credential — trust comes from the single-use server-side state record
+    (tenant pinned there, never from query params). Answers an HTML popup
+    page (the documented envelope exception), never JSON.
+    """
+    try:
+        provider = await service.handle_callback(code=code, state=state)
+    except Exception as exc:  # every login failure lands as the error page, never a traceback
+        from voiceai.common.errors import AppError
+
+        logger.warning("oauth callback failed (%s)", type(exc).__name__)
+        detail = exc.public_message if isinstance(exc, AppError) else "Login failed — restart it."
+        html, status_code = service.callback_page(ok=False, provider="", detail=detail)
+        return HTMLResponse(content=html, status_code=status_code)
+    html, status_code = service.callback_page(ok=True, provider=provider, detail="Connected.")
+    return HTMLResponse(content=html, status_code=status_code)
+
+
+@router.post(C.CREDENTIAL_REFRESH_PATH)
+@inject
+async def refresh_credential(
+    credential_id: str, request: Request, auth: AuthServiceDep, service: OAuthDep
+) -> JSONResponse:
+    """Rotate one oauth2 credential via its stored refresh token (`platform:write`)."""
+    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    row = await service.refresh_credential(tenant_id=current_tenant().tenant_id, credential_id=credential_id)
+    return success_response(wire_credential_meta(row))

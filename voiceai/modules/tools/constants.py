@@ -32,11 +32,17 @@ INTEGRATIONS_PATH: Final[str] = "/partner-integrations"
 INTEGRATION_ITEM_PATH: Final[str] = "/partner-integrations/{integration_id}"
 DCR_REGISTER_PATH: Final[str] = "/integrations/dcr-register"
 
+#: OAuth login routes (spec 0061): authorize URL mints the handshake, the
+#: callback finishes it in the browser, refresh rotates stored tokens.
+OAUTH_AUTHORIZE_PATH: Final[str] = "/oauth/authorize-url"
+OAUTH_CALLBACK_PATH: Final[str] = "/oauth/callback"
+CREDENTIAL_REFRESH_PATH: Final[str] = "/partner-credentials/{credential_id}/refresh"
+
 #: Wire keys for credential/integration payloads (identifiers only on reads).
 CREDENTIALS_KEY: Final[str] = "credentials"
-SECRET_ONCE_KEY: Final[str] = "secret_once"
+SECRET_ONCE_KEY: Final[str] = "secret_once"  # noqa: S105 — wire key name, not a password value
 REPLACED_KEY: Final[str] = "replaced"
-CLIENT_SECRET_ONCE_KEY: Final[str] = "client_secret_once"
+CLIENT_SECRET_ONCE_KEY: Final[str] = "client_secret_once"  # noqa: S105 — wire key name, not a secret value
 CLIENT_ID_KEY: Final[str] = "client_id"
 ISSUER_URL_KEY: Final[str] = "issuer_url"
 
@@ -169,11 +175,11 @@ AUTH_LOCATION_QUERY: Final[str] = "query"
 AUTH_LOCATION_FIELD: Final[str] = "location"
 AUTH_NAME_FIELD: Final[str] = "name"
 AUTH_USERNAME_FIELD: Final[str] = "username"
-AUTH_PASSWORD_FIELD: Final[str] = "password"
+AUTH_PASSWORD_FIELD: Final[str] = "password"  # noqa: S105 — wire field name, not a credential value
 DEFAULT_API_KEY_HEADER: Final[str] = "X-API-Key"
 
 #: Sealed-material JSON keys (values only — names live in `auth_config`).
-AUTH_SECRET_FIELD: Final[str] = "secret"
+AUTH_SECRET_FIELD: Final[str] = "secret"  # noqa: S105 — wire key name, not a secret value
 
 #: Default lifecycle state for a freshly linked integration.
 INTEGRATION_STATUS_ACTIVE: Final[str] = "active"
