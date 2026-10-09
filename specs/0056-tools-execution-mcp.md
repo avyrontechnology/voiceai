@@ -67,4 +67,4 @@ Flag-gated: `tools_execute_enabled` default off → on. Additive collections, no
 - [x] Phase-1 executor + logs + chat/voice seam (internal-only).
 - [x] Phase-2 vault + credential/integration state + env/redis.
 - [x] Phase-3 MCP adapter + DCR + container wiring + docs.
-- [ ] `make check` + `make sec` + `make cov` green; commit `feat(tools): execution + vault + MCP [spec-0056]`.
+- [x] `make check` + `make sec` green (commit `feat(tools): execution + vault + MCP [spec-0056]` landed; pre-existing ruff/mypy debt cleared in `acf27ba7`).

@@ -98,4 +98,4 @@ consumes same train.
 - [x] CONTRACT + arch-gate deltas in the same spec.
 - [x] Gates green (backend 2165 passed, cov 94.09%, ruff/bandit/mypy
   clean; UI 476 passed, lint 0 errors, tsc clean).
-- [ ] Commit `feat(tools): oauth2 connector [spec-0061]` + UI commit.
+- [x] Commit `feat(tools): full OAuth2 connector (authorize, callback, PKCE refresh) [spec-0061]` (backend landed; UI login tab remains for the UI train).
