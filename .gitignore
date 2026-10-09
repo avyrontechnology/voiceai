@@ -179,7 +179,8 @@ testing/
 test_3.wav
 
 # Graph agent exploration (temporary)
-scripts/
+scripts/*
+!scripts/check_commit_msg.py
 docs/*
 !docs/architecture/
 !docs/architecture/**

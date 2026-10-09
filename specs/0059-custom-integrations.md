@@ -21,7 +21,7 @@ kare; vault kabhi plaintext wapas nahi deta.
 Owning module `voiceai/modules/tools` (`squad-platform`), additive only.
 
 - Auth model: `CredentialType = none|api_key|bearer|basic|oauth2|custom`
-  (vault_models + constants + UI enum, ek hi vocabulary). `PartnerCredential`
+  (models + constants + UI enum, ek hi vocabulary). `PartnerCredential`
   gains `auth_config: dict` (NON-secret: api_key `{location, name}`,
   basic `{username}`, custom `{}` — values sealed). Sealed JSON material per
   type: api_key `{"api_key"}`, bearer/oauth2 `{"token"}`, basic `{"password"}`,
@@ -34,7 +34,7 @@ Owning module `voiceai/modules/tools` (`squad-platform`), additive only.
 - Executor `_execute_http`/`_call_with_auth_retry` use `resolve_auth`; query
   half merges into request params (GET: with arguments; others: URL query +
   JSON body). Header-only creds behave byte-identical to today.
-- `VaultCredentialStore` (new `credential_store.py`, implements
+- `VaultCredentialStore` (new `credential_repository.py`, implements
   `CredentialStorePort`): `cred:<id>` → tenant vault row → decrypt → envelope
   `{credential_type, auth_config, **material}`; unknown/corrupt → `None`
   (resolver fails closed, identifiers only). Container wires it into
@@ -104,7 +104,7 @@ as today. Rollback = revert. UI builder consumes new endpoints same train.
 ## Burn-down
 
 - [x] Auth model (`CredentialType` ×6, `auth_config`, `cred:` refs).
-- [x] `credential_store.py` + container wiring (store stops being `None`).
+- [x] `credential_repository.py` + container wiring (store stops being `None`).
 - [x] `resolve_auth` + executor query merge.
 - [x] `sync_tools` + route + validation.
 - [x] UI builder wizard + hooks + tests.
