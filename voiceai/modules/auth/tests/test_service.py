@@ -28,12 +28,17 @@ from voiceai.modules.auth.models.invite import Invite
 from voiceai.modules.auth.models.membership import Membership
 from voiceai.modules.auth.models.organization import Organization
 from voiceai.modules.auth.models.principal import Principal
+from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter
+from voiceai.modules.auth.repos.mongo_user_repo import MongoUserRepo  # noqa: F401 — port type reference
+from voiceai.modules.auth.service import AuthService, _StoreUserRepo
+from voiceai.modules.auth.service_base import JwtSettings
+from voiceai.modules.auth.services.token_service import DefaultTokenService
 from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.session import SessionRecord
 from voiceai.modules.auth.models.team import Team
 from voiceai.modules.auth.models.tenant import Tenant
 from voiceai.modules.auth.models.user import User
-from voiceai.modules.auth.service import AuthService, SessionTokens
+from voiceai.modules.auth.service import SessionTokens
 from voiceai.modules.auth.static_methods import hash_password, new_token, token_hash
 from voiceai.modules.auth.tests.conftest import _JWT
 
@@ -208,7 +213,7 @@ async def _signed_up(service: AuthService, email: str = "owner@x.test") -> tuple
 
 async def test_signup_mints_owner_with_live_session() -> None:
     """First signup yields an owner whose token authenticates."""
-    service = AuthService(FakeAuthStore(), jwt=_JWT)
+    service = _make_service(FakeAuthStore(), _JWT)
 
     user, tokens = await _signed_up(service)
 
@@ -219,7 +224,7 @@ async def test_signup_mints_owner_with_live_session() -> None:
 
 async def test_signup_closed_after_first_user() -> None:
     """Second signup is forbidden even with a fresh email."""
-    service = AuthService(FakeAuthStore(), jwt=_JWT)
+    service = _make_service(FakeAuthStore(), _JWT)
     await _signed_up(service)
 
     with pytest.raises(ForbiddenError, match="Signup is closed"):
@@ -229,7 +234,7 @@ async def test_signup_closed_after_first_user() -> None:
 async def test_signup_closed_gate_fires_before_duplicate_check() -> None:
     """Any existing user closes signup — even for a taken email (verbatim order)."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     await store.save_user(User(user_id="u1", email="taken@x.test", password_hash=hash_password("x"), role="owner"))
 
     with pytest.raises(ForbiddenError, match="Signup is closed"):
@@ -239,7 +244,7 @@ async def test_signup_closed_gate_fires_before_duplicate_check() -> None:
 async def test_login_stamps_last_login_and_honors_remember_ttl() -> None:
     """Login returns a live token and records the login instant."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, _ = await _signed_up(service)
 
     same, tokens = await service.login(user.email, "owner-pass-1", True, client_ip="10.0.0.1")
@@ -252,7 +257,7 @@ async def test_login_stamps_last_login_and_honors_remember_ttl() -> None:
 async def test_login_rejects_bad_password_disabled_and_unknown() -> None:
     """Wrong password, disabled flag, and unknown email all read 401."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, _ = await _signed_up(service)
 
     with pytest.raises(InvalidCredentialsError, match="Invalid email or password"):
@@ -268,7 +273,7 @@ async def test_login_rejects_bad_password_disabled_and_unknown() -> None:
 
 async def test_login_throttle_trips_after_five_per_ip() -> None:
     """Sixth attempt from one IP reads 429 even with right credentials."""
-    service = AuthService(FakeAuthStore(), jwt=_JWT)
+    service = _make_service(FakeAuthStore(), _JWT)
     user, _ = await _signed_up(service)
     ip = "10.9.9.9"
 
@@ -282,7 +287,7 @@ async def test_login_throttle_trips_after_five_per_ip() -> None:
 async def test_logout_revokes_token_and_audits() -> None:
     """Logout kills the session; the token stops authenticating."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
 
     await service.logout(tokens.legacy_token, None, _owner_principal(user))
@@ -295,7 +300,7 @@ async def test_logout_revokes_token_and_audits() -> None:
 async def test_authenticate_prefers_session_then_bearer() -> None:
     """Session wins; bearer resolves keys; garbage reads 401."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
     secret = new_token()
     store.keys["k1"] = ApiKey(
@@ -323,7 +328,7 @@ async def test_authenticate_prefers_session_then_bearer() -> None:
 async def test_invite_accept_round_trip() -> None:
     """Owner invites → token redeems into a member with a live session."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
 
     invite, raw = await service.invite(_owner_principal(owner), "new@x.test", "New", "member")
@@ -341,7 +346,7 @@ async def test_invite_accept_round_trip() -> None:
 async def test_accept_rejects_expired_invite() -> None:
     """Past-expires invites read invalid even with the right token."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     invite, raw = await service.invite(_owner_principal(owner), "old@x.test", None, "member")
     invite.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -354,7 +359,7 @@ async def test_accept_rejects_expired_invite() -> None:
 async def test_invite_guards_roles_and_duplicates() -> None:
     """Non-admins cannot invite; admins cannot crown owners; dup emails collide."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, owner_tokens = await _signed_up(service)
     _, member_tokens = await service.accept_invite(
         (await service.invite(_owner_principal(owner), "m@x.test", None, "member"))[1],
@@ -381,7 +386,7 @@ async def test_invite_guards_roles_and_duplicates() -> None:
 async def test_list_and_revoke_invites_are_admin_only() -> None:
     """Pending-only listing plus revocation; members are refused."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     owner_p = _owner_principal(owner)
     invite, raw = await service.invite(owner_p, "p@x.test", None, "member")
@@ -404,7 +409,7 @@ async def test_list_and_revoke_invites_are_admin_only() -> None:
 async def test_set_role_revokes_sessions_and_protects_last_owner() -> None:
     """Role change kills the target's sessions; last owner is untouchable."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     owner_p = _owner_principal(owner)
     invite, raw = await service.invite(owner_p, "a@x.test", None, "member")
@@ -428,7 +433,7 @@ async def test_set_role_revokes_sessions_and_protects_last_owner() -> None:
 async def test_owner_gate_rejects_members() -> None:
     """Member principals read 403 on every owner-only call."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     _, raw = await service.invite(_owner_principal(owner), "b@x.test", None, "member")
     _, member_tokens = await service.accept_invite(raw, None, "b-pass-1")
@@ -449,7 +454,7 @@ async def test_owner_gate_rejects_members() -> None:
 async def test_delete_user_removes_record_and_sessions() -> None:
     """Delete drops the user row plus sessions; self-delete is refused."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     owner_p = _owner_principal(owner)
     _, raw = await service.invite(owner_p, "gone@x.test", None, "member")
@@ -470,7 +475,7 @@ async def test_delete_user_removes_record_and_sessions() -> None:
 async def test_change_password_rotates_everything_and_reissues() -> None:
     """Rotation kills every session (no keep-current carve-out) and hands a fresh pair."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens_a = await _signed_up(service)
     _, tokens_b = await service.login(user.email, "owner-pass-1", False, client_ip="10.1.1.1")
 
@@ -491,7 +496,7 @@ async def test_change_password_rotates_everything_and_reissues() -> None:
 async def test_change_password_requires_login_session() -> None:
     """API-key callers read 403 on password change."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, _ = await _signed_up(service)
     key_p = Principal(
         user_id=user.user_id,
@@ -509,7 +514,7 @@ async def test_change_password_requires_login_session() -> None:
 async def test_ticket_mint_redeem_is_single_use() -> None:
     """Ticket redeems once to a session principal; tickets never authenticate."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, owner_tokens = await _signed_up(service)
     owner_p = await service.authenticate(owner_tokens.legacy_token, None)
 
@@ -527,7 +532,7 @@ async def test_ticket_mint_redeem_is_single_use() -> None:
 async def test_ticket_needs_calls_write_scope() -> None:
     """Viewers read 403 on ticket mint."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     _, raw = await service.invite(_owner_principal(owner), "v@x.test", None, "viewer")
     _, viewer_tokens = await service.accept_invite(raw, None, "v-pass-1")
@@ -540,7 +545,7 @@ async def test_auth_events_are_admin_only() -> None:
     """Audit listing needs admin; entries arrive newest-first."""
     store = FakeAuthStore()
     await store.save_tenant(Tenant(tenant_id="a" * 24, slug="default", name="Default"))
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     assert owner.tenant_id is not None  # seeded default tenant above stamps it
     owner_p = _owner_principal(owner)
@@ -563,7 +568,7 @@ async def test_audit_never_fails_the_operation() -> None:
         async def add_auth_event(self, event: AuthEvent) -> None:
             raise RuntimeError("sink down")
 
-    user, tokens = await _signed_up(AuthService(BrokenAudit(), jwt=_JWT))
+    user, tokens = await _signed_up(_make_service(BrokenAudit(), _JWT))
 
     assert user.role == "owner" and tokens.access_token
 
@@ -574,7 +579,7 @@ async def test_audit_never_fails_the_operation() -> None:
 async def test_api_key_resolution_edge_cases() -> None:
     """Legacy unhashed keys skip, unknown digests refuse, expiry and disabled refuse."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, _ = await _signed_up(service)
     store.keys["legacy"] = ApiKey(key_id="legacy", name="old", prefix="", key_hash=None, created_by=user.user_id)
     secret = new_token()
@@ -617,7 +622,7 @@ async def test_api_key_last_used_failure_still_authenticates() -> None:
             await super().save_api_key(key)
 
     store = FlakyKeys()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, _ = await _signed_up(service)
     secret = new_token()
     await store.save_api_key(
@@ -635,7 +640,7 @@ async def test_redeem_rejects_session_tokens_and_expired_tickets() -> None:
             return self.sessions.get(token_hash_)
 
     store = NoExpiryFake()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, owner_tokens = await _signed_up(service)
 
     assert await service.redeem_ticket(owner_tokens.legacy_token) is None
@@ -647,7 +652,7 @@ async def test_redeem_rejects_session_tokens_and_expired_tickets() -> None:
 async def test_accept_invite_collides_when_email_registered_meanwhile() -> None:
     """Invite email taken between issue and redeem reads 409."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     _, raw = await service.invite(_owner_principal(owner), "race@x.test", None, "member")
     await store.save_user(
@@ -666,7 +671,7 @@ async def test_accept_invite_collides_when_email_registered_meanwhile() -> None:
 async def test_dead_sessions_and_empty_bearer_read_401() -> None:
     """Tokens of deleted users stop working; an empty bearer is no credential."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
     await store.delete_user(user.user_id)
 
@@ -685,7 +690,7 @@ async def test_naive_datetimes_from_redis_style_rows_still_compare() -> None:
             return self.sessions.get(token_hash_)
 
     store = NoExpiryFake()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, _ = await _signed_up(service)
     owner_p = _owner_principal(owner)
     ticket = await service.mint_ticket(owner_p)
@@ -705,7 +710,7 @@ async def test_naive_datetimes_from_redis_style_rows_still_compare() -> None:
 async def test_logout_without_principal_still_revokes() -> None:
     """Anonymous logout revokes the token and skips audit."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     _, tokens = await _signed_up(service)
     before = len(store.events)
 
@@ -714,3 +719,12 @@ async def test_logout_without_principal_still_revokes() -> None:
     with pytest.raises(InvalidCredentialsError):
         await service.authenticate(tokens.legacy_token, None)
     assert len(store.events) == before
+
+
+def _make_service(
+    store: AuthStorePort, jwt: JwtSettings | None, limiter: LoginLimiter | None = None
+) -> AuthService:
+    """Build AuthService with explicit ports (spec 0068 — no fallback construction)."""
+    tokens = DefaultTokenService(jwt=jwt, store=store)
+    users = _StoreUserRepo(store)
+    return AuthService(store, jwt=jwt, tokens=tokens, users=users, limiter=limiter)

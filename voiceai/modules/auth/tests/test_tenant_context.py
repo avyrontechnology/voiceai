@@ -28,6 +28,7 @@ from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.static_methods import issue_access_token, new_token, token_hash
 from voiceai.modules.auth.tests.conftest import _JWT
+from voiceai.modules.auth.tests.test_service import _make_service
 
 #: Tenant object hexes carried through these tests (opaque strings — the
 #: service never parses them, it only compares).
@@ -98,7 +99,7 @@ class _TenantFakeStore:
 
 def _service(store: _TenantFakeStore) -> AuthService:
     """Build the real service over the local fake (cast: the fake covers the exercised seam)."""
-    return AuthService(cast(AuthStorePort, store), jwt=_JWT)
+    return _make_service(cast(AuthStorePort, store), _JWT)
 
 
 def _tenant_user(tenant_id: str | None = TENANT_HEX) -> User:

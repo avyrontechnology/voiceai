@@ -32,7 +32,7 @@ from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.repository import MongoAuthStore
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.tests.conftest import _JWT
-from voiceai.modules.auth.tests.test_service import FakeAuthStore
+from voiceai.modules.auth.tests.test_service import FakeAuthStore, _make_service
 
 
 def _principal(user_id: str, org_id: str, role: UserRole) -> Principal:
@@ -78,7 +78,7 @@ async def _tenant_stack(service: AuthService, owner: Principal, slug: str) -> tu
 
 async def test_create_tenant_mints_objectid_hex_and_normalizes_slug() -> None:
     """New tenants carry an ObjectId hex key; slugs strip and lowercase."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
 
     tenant = await _tenant(service, _principal("owner-1", "default", "owner"), "Acme")
 
@@ -90,7 +90,7 @@ async def test_create_tenant_mints_objectid_hex_and_normalizes_slug() -> None:
 
 async def test_create_tenant_duplicate_slug_conflicts() -> None:
     """A taken slug reads 409, even with different casing (verbatim order)."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     await _tenant(service, owner, "default")
 
@@ -100,7 +100,7 @@ async def test_create_tenant_duplicate_slug_conflicts() -> None:
 
 async def test_create_tenant_requires_owner() -> None:
     """Admins and members read 403 on tenant creation (owner-only)."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
 
     with pytest.raises(ForbiddenError, match="Requires owner"):
         await _tenant(service, _principal("admin-1", "default", "admin"))
@@ -114,7 +114,7 @@ async def test_create_tenant_requires_owner() -> None:
 async def test_organization_team_membership_round_trip() -> None:
     """Owner builds org → team; admin adds a member; the member reads it back."""
     store = FakeAuthStore()
-    service = AuthService(store)
+    service = _make_service(store, None)
     owner = _principal("owner-1", "default", "owner")
     tenant, org_id, team_id = await _tenant_stack(service, owner, "acme")
 
@@ -131,7 +131,7 @@ async def test_organization_team_membership_round_trip() -> None:
 
 async def test_add_membership_duplicate_conflicts() -> None:
     """A second add of the same (user, team) reads 409."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     tenant, _, team_id = await _tenant_stack(service, owner, "acme")
     admin = _principal("owner-1", tenant.tenant_id, "admin")
@@ -143,7 +143,7 @@ async def test_add_membership_duplicate_conflicts() -> None:
 
 async def test_identity_gates_reject_non_admins() -> None:
     """Members read 403 on team/membership writes and on other users' teams."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     tenant, org_id, team_id = await _tenant_stack(service, owner, "acme")
     member = _principal("user-1", tenant.tenant_id, "member")
@@ -160,7 +160,7 @@ async def test_identity_gates_reject_non_admins() -> None:
 
 async def test_remove_membership_round_trip_and_missing() -> None:
     """Remove drops the row; a second remove reads 404."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     tenant, _, team_id = await _tenant_stack(service, owner, "acme")
     admin = _principal("owner-1", tenant.tenant_id, "admin")
@@ -175,7 +175,7 @@ async def test_remove_membership_round_trip_and_missing() -> None:
 
 async def test_create_guards_unknown_parents() -> None:
     """Organizations need a tenant; teams and memberships need their parents."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
 
     with pytest.raises(AuthNotFoundError, match="Tenant not found"):
@@ -191,7 +191,7 @@ async def test_create_guards_unknown_parents() -> None:
 
 async def test_second_tenant_is_invisible() -> None:
     """Membership reads scope to the acting tenant — no cross-tenant oracle."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     tenant_a, _, team_a = await _tenant_stack(service, owner, "acme")
     tenant_b, _, _ = await _tenant_stack(service, owner, "globex")
@@ -210,7 +210,7 @@ async def test_second_tenant_is_invisible() -> None:
 
 async def test_pre_migration_slug_principal_still_scopes() -> None:
     """A principal carrying the legacy slug resolves to the tenant hex server-side."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     owner = _principal("owner-1", "default", "owner")
     tenant, _, team_id = await _tenant_stack(service, owner, "default")
     await service.add_membership(_principal("owner-1", tenant.tenant_id, "admin"), team_id, "user-1", "member")
@@ -226,7 +226,7 @@ async def test_pre_accept_email_grant_claimed_at_accept() -> None:
     No user row exists at invite time, so the UI grants by email; accept_invite
     re-keys those pending rows to the minted user_id instead of orphaning them.
     """
-    service = AuthService(FakeAuthStore(), jwt=_JWT)
+    service = _make_service(FakeAuthStore(), _JWT)
     owner = _principal("owner-1", "default", "owner")
     tenant, _, team_id = await _tenant_stack(service, owner, "acme")
     admin = _principal("owner-1", tenant.tenant_id, "admin")
@@ -300,7 +300,7 @@ async def test_redeemed_ticket_carries_projected_tenancy() -> None:
     tenant-less ticket principal would strand the call on the system tenant.
     """
     store = FakeAuthStore()
-    service = AuthService(store)
+    service = _make_service(store, None)
     owner = _principal("owner-1", "default", "owner")
     tenant, _, team_id = await _tenant_stack(service, owner, "acme")
     await service.add_membership(_principal("owner-1", tenant.tenant_id, "admin"), team_id, "user-1", "member")

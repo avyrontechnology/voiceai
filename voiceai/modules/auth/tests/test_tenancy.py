@@ -16,7 +16,7 @@ from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.tests.conftest import _JWT
-from voiceai.modules.auth.tests.test_service import FakeAuthStore, _owner_principal, _signed_up
+from voiceai.modules.auth.tests.test_service import FakeAuthStore, _make_service, _owner_principal, _signed_up
 
 
 async def _two_orgs() -> tuple[AuthService, FakeAuthStore, User, User]:
@@ -28,7 +28,7 @@ async def _two_orgs() -> tuple[AuthService, FakeAuthStore, User, User]:
     org checks the service still enforces alongside.
     """
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     acme, _ = await _signed_up(service, email="owner@acme.test")
     acme.org_id = "acme"
     acme.tenant_id = "a" * 24

@@ -21,6 +21,7 @@ from voiceai.modules.auth import constants as C
 from voiceai.modules.auth.ports import AuthStorePort
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.tests.conftest import _JWT
+from voiceai.modules.auth.tests.test_service import _make_service
 from voiceai.platform.store import MemoryStore
 
 BASE = "http://auth.test"
@@ -33,7 +34,7 @@ async def _client(store: MemoryStore | None = None) -> AsyncClient:
     backing = store if store is not None else MemoryStore()
     container.auth_store.override(providers.Object(backing))
     container.auth_service.override(
-        providers.Object(AuthService(cast(AuthStorePort, backing), jwt=_JWT))
+        providers.Object(_make_service(cast(AuthStorePort, backing), _JWT))
     )
     app = create_app(env=Environment(), container=container)
     transport = ASGITransport(app=app)

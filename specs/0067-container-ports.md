@@ -55,7 +55,7 @@ make sec
 
 ## Burn-down
 
-- [ ] Create `core/ports.py` — re-export protocols
-- [ ] Update `container.py` — type annotations + wiring
-- [ ] `test_container_ports.py` — port resolution tests
-- [ ] `make check` green
+- [x] Create `core/ports.py` — re-export SessionStore, TokenService, UserRepo
+- [x] Update `container.py` — token_service + user_repo providers, builder functions
+- [x] `test_container_ports.py` — port resolution tests
+- [x] `make check` green (2170 passed, bandit clean)

@@ -20,6 +20,7 @@ from voiceai.core.container import VoiceAIContainer, build_container
 from voiceai.core.db import InMemoryDatabase
 from voiceai.core.environment import Environment
 from voiceai.modules.auth.service import AuthService
+from voiceai.modules.auth.services.token_service import DefaultTokenService
 from voiceai.modules.auth.tests.conftest import _JWT
 
 BASE = "http://single.test"
@@ -31,7 +32,10 @@ OWNER = {"email": "owner@single.test", "name": "Owner", "password": "owner-pass-
 def container(arch_environment: Environment) -> VoiceAIContainer:
     built = build_container(arch_environment)
     # Signup mints a token pair, which needs signing keys the offline env leaves dark.
-    built.auth_service.override(providers.Object(AuthService(built.auth_store(), jwt=_JWT)))
+    store = built.auth_store()
+    built.auth_service.override(
+        providers.Object(AuthService(store, jwt=_JWT, tokens=DefaultTokenService(jwt=_JWT, store=store), users=built.user_repo()))
+    )
     return built
 
 

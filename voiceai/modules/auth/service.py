@@ -34,7 +34,6 @@ from voiceai.modules.auth.service_admin import AuthAdminMixin
 from voiceai.modules.auth.service_base import JwtSettings as JwtSettings
 from voiceai.modules.auth.service_base import SessionTokens as SessionTokens
 from voiceai.modules.auth.service_identity import AuthIdentityMixin
-from voiceai.modules.auth.services.token_service import DefaultTokenService
 from voiceai.modules.auth.static_methods import hash_password, token_hash, verify_password
 
 __all__ = ["AuthService", "JwtSettings", "SessionTokens"]
@@ -85,8 +84,10 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
     `SessionTokens`) never moves.
 
     Spec 0064: JWT operations delegate to `self._tokens` (a `TokenService`);
-    user CRUD delegates to `self._users` (a `MongoUserRepo`). Both are
-    injected via the constructor; fallbacks preserve backward compatibility.
+    user CRUD delegates to `self._users` (a `MongoUserRepo` in prod, or the
+    store-backed `_StoreUserRepo` adapter in tests). Both are injected via
+    the constructor — the service never constructs its own dependencies
+    (spec 0068, DIP).
     """
 
     def __init__(
@@ -95,8 +96,8 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         *,
         limiter: LoginLimiter | None = None,
         jwt: JwtSettings | None = None,
-        tokens: TokenService | None = None,
-        users: MongoUserRepo | None = None,
+        tokens: TokenService,
+        users: MongoUserRepo | _StoreUserRepo,
     ) -> None:
         """Compose the auth service over its ports.
 
@@ -105,13 +106,13 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
             limiter: The login-throttle seam (spec 0006, E3); `None` keeps the
                 in-process ledger so existing behavior is unchanged.
             jwt: The JWT configuration, or `None` when the JWT flows stay dark.
-            tokens: The JWT mint/verify port; `None` falls back to
-                `DefaultTokenService(jwt=jwt, store=store)`.
-            users: The user CRUD port; `None` falls back to a store-backed adapter.
+            tokens: The JWT mint/verify port (container-injected).
+            users: The user CRUD port (container-injected; tests use the
+                store-backed `_StoreUserRepo` adapter).
         """
         super().__init__(store, limiter=limiter, jwt=jwt)
-        self._tokens: TokenService = tokens if tokens is not None else DefaultTokenService(jwt=jwt, store=store)
-        self._users: MongoUserRepo | _StoreUserRepo = users if users is not None else _StoreUserRepo(store)
+        self._tokens: TokenService = tokens
+        self._users: MongoUserRepo | _StoreUserRepo = users
 
     async def _principal_from_session(self, token: str | None) -> Principal | None:
         """Resolve a session token to a principal (tickets never authenticate)."""

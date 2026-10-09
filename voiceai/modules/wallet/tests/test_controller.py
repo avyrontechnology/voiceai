@@ -25,6 +25,7 @@ from voiceai.modules.auth.models.user import User
 from voiceai.modules.auth.repository import MongoAuthStore
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.tests.conftest import _JWT
+from voiceai.modules.auth.tests.test_service import _make_service
 from voiceai.modules.wallet.models import LedgerEntry, StoredTemplate, Wallet
 from voiceai.modules.wallet.repository import MongoWalletRepository
 from voiceai.modules.wallet.service import WalletService
@@ -48,7 +49,7 @@ async def _admin_client(arch_app, client_factory):
         events=InMemoryRepository(database, Collections.AUTH_EVENTS, AuthEvent),
         revoked=InMemoryRepository(database, Collections.REVOKED_TOKENS, RevokedToken),
     )
-    arch_app.state.container.auth_service.override(providers.Object(AuthService(auth_store, jwt=_JWT)))
+    arch_app.state.container.auth_service.override(providers.Object(_make_service(auth_store, _JWT)))
     templates = InMemoryRepository(database, Collections.AGENT_TEMPLATES, StoredTemplate)
     seed = StoredTemplate(
         template_id="tmpl-t1",

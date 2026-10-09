@@ -24,7 +24,7 @@ from voiceai.modules.auth.static_methods import (
     verify_access_token,
 )
 from voiceai.modules.auth.tests.conftest import _JWT
-from voiceai.modules.auth.tests.test_service import FakeAuthStore, _owner_principal, _signed_up
+from voiceai.modules.auth.tests.test_service import FakeAuthStore, _make_service, _owner_principal, _signed_up
 
 
 def _claims() -> dict[str, object]:
@@ -99,7 +99,7 @@ def test_verify_rejects_tampered_wrong_key_and_expired() -> None:
 async def test_login_pair_authenticates_over_bearer() -> None:
     """The access token authorizes; the refresh row exists with the user stamp."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
 
     principal = await service.authenticate(None, f"Bearer {tokens.access_token}")
@@ -113,7 +113,7 @@ async def test_login_pair_authenticates_over_bearer() -> None:
 async def test_refresh_rotates_single_use() -> None:
     """Rotation hands a fresh pair and kills the presented refresh row."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
 
     same, rotated = await service.refresh(tokens.refresh_token, client_ip="10.2.2.2")
@@ -129,7 +129,7 @@ async def test_refresh_rotates_single_use() -> None:
 async def test_refresh_reuse_after_version_bump_quarantines() -> None:
     """A live refresh row trailing the user version kills every session (stolen-secret path)."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
 
     user.token_version += 1
@@ -145,7 +145,7 @@ async def test_refresh_reuse_after_version_bump_quarantines() -> None:
 async def test_role_change_kills_outstanding_access_tokens() -> None:
     """Version bump (no denylist write) is enough: old JWTs trail the row."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     owner, owner_tokens = await _signed_up(service)
     member, member_tokens = await service.accept_invite(
         (await service.invite(_owner_principal(owner), "r@x.test", None, "member"))[1], None, "r-pass-1"
@@ -161,7 +161,7 @@ async def test_role_change_kills_outstanding_access_tokens() -> None:
 async def test_logout_denies_only_the_presented_jwt() -> None:
     """Single logout writes the denylist; sibling tokens keep working."""
     store = FakeAuthStore()
-    service = AuthService(store, jwt=_JWT)
+    service = _make_service(store, _JWT)
     user, tokens = await _signed_up(service)
     _, other = await service.login(user.email, "owner-pass-1", False, client_ip="10.2.2.4")
     principal = await service.authenticate(None, f"Bearer {tokens.access_token}")
@@ -175,7 +175,7 @@ async def test_logout_denies_only_the_presented_jwt() -> None:
 
 async def test_jwt_dark_service_fails_loudly() -> None:
     """Without keys every pair flow raises instead of minting half a session."""
-    service = AuthService(FakeAuthStore())
+    service = _make_service(FakeAuthStore(), None)
     user = User(user_id="u1", email="a@x.test", password_hash="x", role="owner")
     await service._store.save_user(user)
 

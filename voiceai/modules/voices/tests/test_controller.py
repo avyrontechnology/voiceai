@@ -20,6 +20,7 @@ from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules import auth as auth_module
 from voiceai.modules import voices as voices_module
 from voiceai.modules.auth.service import AuthService
+from voiceai.modules.auth.services.token_service import DefaultTokenService
 from voiceai.modules.auth.tests.conftest import _JWT
 from voiceai.modules.voices.models import VoiceRecord
 from voiceai.modules.voices.repository import VoicesRepository
@@ -41,7 +42,7 @@ async def _authed_client() -> AsyncClient:
     )
     container = build_container(Environment())
     container.voices_service.override(providers.Object(service))
-    container.auth_service.override(providers.Object(AuthService(container.auth_store(), jwt=_JWT)))
+    container.auth_service.override(providers.Object(AuthService(container.auth_store(), jwt=_JWT, tokens=DefaultTokenService(jwt=_JWT, store=container.auth_store()), users=container.user_repo())))
     app = create_app(env=Environment(), container=container, modules=[voices_module.MODULE, auth_module.MODULE])
     client = AsyncClient(transport=ASGITransport(app=app), base_url=BASE)
     signup = await client.post(

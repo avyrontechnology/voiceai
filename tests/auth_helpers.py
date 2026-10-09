@@ -19,6 +19,7 @@ def build_platform_test_app():
     from voiceai.core.container import build_container
     from voiceai.core.environment import Environment
     from voiceai.modules.auth.service import AuthService
+    from voiceai.modules.auth.services.token_service import DefaultTokenService
     from voiceai.modules.auth.tests.conftest import _JWT
 
     environment = Environment(
@@ -32,7 +33,10 @@ def build_platform_test_app():
         cookie_secure=None,
     )
     container = build_container(environment)
-    container.auth_service.override(providers.Object(AuthService(container.auth_store(), jwt=_JWT)))
+    store = container.auth_store()
+    container.auth_service.override(
+        providers.Object(AuthService(store, jwt=_JWT, tokens=DefaultTokenService(jwt=_JWT, store=store), users=container.user_repo()))
+    )
     return create_app(env=environment, container=container)
 
 

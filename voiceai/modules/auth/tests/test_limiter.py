@@ -33,6 +33,7 @@ from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter
 from voiceai.modules.auth.service import AuthService
 from voiceai.modules.auth.static_methods import hash_password
 from voiceai.modules.auth.tests.conftest import _JWT
+from voiceai.modules.auth.tests.test_service import _make_service
 from voiceai.modules.auth.utils import (
     LocalLoginLimiter,
     RedisLoginLimiter,
@@ -338,7 +339,7 @@ async def test_redis_outage_fails_open_with_error_log(
 async def test_service_default_preserves_local_throttle() -> None:
     """Default ctor keeps C3 behavior: sixth login from one IP reads 429."""
     store = FakeAuthStore()
-    service = AuthService(cast(AuthStorePort, store), jwt=_JWT)
+    service = _make_service(cast(AuthStorePort, store), _JWT)
     user, _ = await service.signup("owner@x.test", "Owner", "owner-pass-1")
     ip = "192.0.2.109"
 
@@ -362,7 +363,7 @@ async def test_service_uses_injected_limiter() -> None:
 
     store = FakeAuthStore()
     deny = DenyAll()
-    service = AuthService(cast(AuthStorePort, store), limiter=deny, jwt=_JWT)
+    service = _make_service(cast(AuthStorePort, store), _JWT, limiter=deny)
     await store.save_user(
         User(
             user_id="usr_1",
@@ -382,7 +383,7 @@ async def test_service_uses_injected_limiter() -> None:
 async def test_service_accepts_redis_limiter_end_to_end() -> None:
     """The redis limiter plugs into `login` through the ctor seam."""
     store = FakeAuthStore()
-    service = AuthService(cast(AuthStorePort, store), limiter=RedisLoginLimiter(FakeCounterRedis()), jwt=_JWT)
+    service = _make_service(cast(AuthStorePort, store), _JWT, limiter=RedisLoginLimiter(FakeCounterRedis()))
     user, _ = await service.signup("owner@x.test", "Owner", "owner-pass-1")
 
     same, _ = await service.login(user.email, "owner-pass-1", False, client_ip="192.0.2.111")
