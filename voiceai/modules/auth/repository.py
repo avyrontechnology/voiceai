@@ -102,6 +102,11 @@ class MongoAuthStore:
         self._team_rows: dict[str, Team] = {}
         self._membership_rows: dict[str, Membership] = {}
 
+    @property
+    def user_repository(self) -> BaseRepository[User]:
+        """Return the user repository for external wiring (spec 0064)."""
+        return self._users
+
     async def _all(self, repo: BaseRepository[Any]) -> list[Any]:  # why: heterogeneous owned collections
         """Return every active document of a collection, oldest first."""
         return [row async for row in walk_pages(repo)]

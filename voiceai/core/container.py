@@ -131,7 +131,10 @@ def create_platform_store(db_client: Any, auth_store: Any) -> Any:
 
 
 def _build_auth_service(auth_store: Any, environment: Any) -> Any:
-    from voiceai.modules.auth.service import AuthService, JwtSettings
+    from voiceai.modules.auth.repos.mongo_user_repo import MongoUserRepo
+    from voiceai.modules.auth.service import AuthService
+    from voiceai.modules.auth.service_base import JwtSettings
+    from voiceai.modules.auth.services.token_service import DefaultTokenService
 
     jwt = None
     if environment.jwt_enabled:
@@ -143,7 +146,9 @@ def _build_auth_service(auth_store: Any, environment: Any) -> Any:
             access_ttl_s=environment.jwt_access_ttl_s,
             refresh_ttl_s=environment.jwt_refresh_ttl_s,
         )
-    return AuthService(auth_store, jwt=jwt)
+    tokens = DefaultTokenService(jwt=jwt, store=auth_store)
+    users = MongoUserRepo(auth_store.user_repository)
+    return AuthService(auth_store, jwt=jwt, tokens=tokens, users=users)
 
 
 def _build_tenant_resolver(auth_service: Any) -> Any:

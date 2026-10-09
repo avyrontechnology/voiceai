@@ -4,15 +4,12 @@
 `service_identity.AuthIdentityMixin` over the `service_base.AuthServiceBase`
 kernel: this file holds the credential lifecycle only (session/key/JWT
 resolvers, signup/login/refresh/logout, ticket mint/redeem, `me`), while user
-administration and the identity program live in their slices. Split cited by
-spec 0040 (integrator): the identity program grew this file past the
-800-line canonical budget.
+administration and the identity program live in their slices.
 
-Greenfield deltas (T2): JWT access tokens (stateless, RS256) plus opaque rotating
-refresh rows, dual-written with the legacy Redis sessions until the T7 cutover
-retires them; indexed store lookups (no collection scans); `token_version` bumps
-on role change, password rotation and logout-all; single-token logout via the
-revocation store. Legacy session/ticket/key flows are byte-identical otherwise.
+Spec 0064 (ISP): JWT minting and user CRUD are delegated to focused ports —
+`TokenService` (mint/verify) and `MongoUserRepo` (lookup/create/version-bump) —
+so each concern is independently testable and replaceable. The service
+receives them via DI; backward-compatible fallbacks keep existing tests green.
 """
 
 from __future__ import annotations
@@ -31,15 +28,51 @@ from voiceai.modules.auth.exceptions import ensure_authenticated, ensure_permitt
 from voiceai.modules.auth.models.principal import Principal
 from voiceai.modules.auth.models.revoked import RevokedToken
 from voiceai.modules.auth.models.user import User
+from voiceai.modules.auth.ports import AuthStorePort, LoginLimiter, TokenService
+from voiceai.modules.auth.repos.mongo_user_repo import MongoUserRepo
 from voiceai.modules.auth.service_admin import AuthAdminMixin
 from voiceai.modules.auth.service_base import JwtSettings as JwtSettings
 from voiceai.modules.auth.service_base import SessionTokens as SessionTokens
 from voiceai.modules.auth.service_identity import AuthIdentityMixin
-from voiceai.modules.auth.static_methods import hash_password, token_hash, verify_access_token, verify_password
+from voiceai.modules.auth.services.token_service import DefaultTokenService
+from voiceai.modules.auth.static_methods import hash_password, token_hash, verify_password
 
 __all__ = ["AuthService", "JwtSettings", "SessionTokens"]
 
 logger: logging.Logger = get_logger("auth")
+
+
+class _StoreUserRepo:
+    """Backward-compatible user repo that delegates to the auth store.
+
+    Used when `AuthService` is constructed without an explicit `MongoUserRepo`
+    (existing tests, legacy wiring). Satisfies the same interface:
+    `get_by_id`, `get_by_email`, `create`, `update_version`.
+    """
+
+    def __init__(self, store: AuthStorePort) -> None:
+        self._store = store
+
+    async def get_by_id(self, user_id: str) -> User | None:
+        """Return the user with this id via the store."""
+        return await self._store.get_user(user_id)
+
+    async def get_by_email(self, email: str) -> User | None:
+        """Return the user with this email via the store."""
+        return await self._store.get_user_by_email(email)
+
+    async def create(self, user: User) -> User:
+        """Persist a new user via the store."""
+        await self._store.save_user(user)
+        return user
+
+    async def update_version(self, user: User) -> User:
+        """Bump `token_version` and persist via the store."""
+        if "token_version" in type(user).model_fields:
+            version = getattr(user, "token_version", 0)
+            user.token_version = (version if isinstance(version, int) else 0) + 1
+        await self._store.save_user(user)
+        return user
 
 
 class AuthService(AuthAdminMixin, AuthIdentityMixin):
@@ -50,7 +83,35 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
     tenancy projection) rides `service_base.AuthServiceBase` — all composed
     here so the public surface (`AuthService`, `JwtSettings`,
     `SessionTokens`) never moves.
+
+    Spec 0064: JWT operations delegate to `self._tokens` (a `TokenService`);
+    user CRUD delegates to `self._users` (a `MongoUserRepo`). Both are
+    injected via the constructor; fallbacks preserve backward compatibility.
     """
+
+    def __init__(
+        self,
+        store: AuthStorePort,
+        *,
+        limiter: LoginLimiter | None = None,
+        jwt: JwtSettings | None = None,
+        tokens: TokenService | None = None,
+        users: MongoUserRepo | None = None,
+    ) -> None:
+        """Compose the auth service over its ports.
+
+        Args:
+            store: The auth persistence behind ``AuthStorePort`` (a fake in tests).
+            limiter: The login-throttle seam (spec 0006, E3); `None` keeps the
+                in-process ledger so existing behavior is unchanged.
+            jwt: The JWT configuration, or `None` when the JWT flows stay dark.
+            tokens: The JWT mint/verify port; `None` falls back to
+                `DefaultTokenService(jwt=jwt, store=store)`.
+            users: The user CRUD port; `None` falls back to a store-backed adapter.
+        """
+        super().__init__(store, limiter=limiter, jwt=jwt)
+        self._tokens: TokenService = tokens if tokens is not None else DefaultTokenService(jwt=jwt, store=store)
+        self._users: MongoUserRepo | _StoreUserRepo = users if users is not None else _StoreUserRepo(store)
 
     async def _principal_from_session(self, token: str | None) -> Principal | None:
         """Resolve a session token to a principal (tickets never authenticate)."""
@@ -59,7 +120,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         session = await self._store.get_session(token_hash(token))
         if not session or session.kind != C.SESSION_KIND:
             return None
-        user = await self._store.get_user(session.user_id)
+        user = await self._users.get_by_id(session.user_id)
         if not user or user.disabled:
             return None
         if await self._tenant_is_suspended(user):
@@ -91,7 +152,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
             await self._store.save_api_key(key)
         except Exception:  # noqa: BLE001 - last-used is advisory, never fail auth
             logger.warning("Could not touch last_used_at for key %s", key.key_id)
-        user = await self._store.get_user(key.created_by) if key.created_by else None
+        user = await self._users.get_by_id(key.created_by) if key.created_by else None
         if user is None or user.disabled:
             # DEVIATION from verbatim legacy (which skips this gate): a disabled
             # user's keys must stop working, mirroring the session resolver.
@@ -125,7 +186,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         """
         if await self._store.count_users() > 0:
             raise ForbiddenError("Signup is closed — ask an admin for an invite")
-        if await self._store.get_user_by_email(email.strip().lower()) is not None:
+        if await self._users.get_by_email(email.strip().lower()) is not None:
             raise ConflictError("Email already registered")
         user = User(
             user_id=new_id("usr"),
@@ -135,11 +196,11 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
             role="owner",
             tenant_id=await self._default_tenant_hex(),
         )
-        await self._store.save_user(user)
+        await self._users.create(user)
         legacy = await self._new_session(
             user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S, tenant_id=user.tenant_id
         )
-        access, refresh = await self._new_jwt_pair(user)
+        access, refresh = await self._tokens.mint_jwt_pair(user)
         await self.audit("signup", user_id=user.user_id, email=user.email, detail="first user (owner)")
         return user, SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
 
@@ -151,14 +212,14 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
             InvalidCredentialsError: When the email/password/disabled gate fails.
         """
         await self._limiter.check(client_ip)
-        user = await self._store.get_user_by_email(email)
+        user = await self._users.get_by_email(email)
         if not user or user.disabled or not verify_password(password, user.password_hash):
             await self.audit("login_failed", email=email.strip().lower())
             raise InvalidCredentialsError("Invalid email or password")
         legacy = await self._new_session(
             user.user_id, user.org_id, ttl_s=C.REMEMBER_TTL_S if remember else C.SESSION_TTL_S, tenant_id=user.tenant_id
         )
-        access, refresh = await self._new_jwt_pair(user)
+        access, refresh = await self._tokens.mint_jwt_pair(user)
         user.last_login_at = utc_now()
         await self._store.save_user(user)
         await self.audit("login", user_id=user.user_id, email=user.email)
@@ -189,7 +250,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         if expires_at < utc_now():
             await self._store.delete_session(row.token_hash)
             raise InvalidCredentialsError("Session expired, sign in again")
-        user = await self._store.get_user(row.user_id)
+        user = await self._users.get_by_id(row.user_id)
         if not user or user.disabled or self._version_of(user) != row.token_version:
             if user is not None:
                 await self._quarantine_user(user)
@@ -199,28 +260,24 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         legacy = await self._new_session(
             user.user_id, user.org_id, ttl_s=C.SESSION_TTL_S, tenant_id=user.tenant_id
         )
-        access, refresh = await self._new_jwt_pair(user)
+        access, refresh = await self._tokens.mint_jwt_pair(user)
         await self.audit("refresh", user_id=user.user_id, email=user.email)
         return user, SessionTokens(legacy_token=legacy, access_token=access, refresh_token=refresh)
 
     async def _quarantine_user(self, user: User) -> None:
         """Kill every session of a user whose refresh secret may be replayed."""
-        await self._bump_version(user)
-        await self._store.save_user(user)
+        await self._users.update_version(user)
         await self._store.delete_user_sessions(user.user_id)
 
     async def _principal_from_jwt_token(self, secret: str) -> Principal | None:
         """Resolve a JWT access token to a principal (denylist- and version-checked)."""
-        settings = self._require_jwt()
-        claims = verify_access_token(
-            secret, public_key=settings.public_key, issuer=settings.issuer, audience=settings.audience
-        )
+        claims = await self._tokens.verify_jwt(secret)
         if claims is None:
             return None
         jti = str(claims["jti"])
         if await self._store.is_revoked(jti):
             return None
-        user = await self._store.get_user(str(claims["sub"]))
+        user = await self._users.get_by_id(str(claims["sub"]))
         if not user or user.disabled or self._version_of(user) != int(claims["ver"]):
             return None
         if await self._tenant_is_suspended(user):
@@ -363,7 +420,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
         ensure_authenticated(principal)
         if principal.auth_type != "session" or not principal.user_id:
             raise InvalidCredentialsError("Session required")
-        user = await self._store.get_user(principal.user_id)
+        user = await self._users.get_by_id(principal.user_id)
         if not user or user.disabled:
             raise InvalidCredentialsError("Session required")
         if user.tenant_id is not None:
@@ -393,7 +450,7 @@ class AuthService(AuthAdminMixin, AuthIdentityMixin):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at < utc_now():
             return None
-        user = await self._store.get_user(session.user_id)
+        user = await self._users.get_by_id(session.user_id)
         if not user or user.disabled:
             return None
         if await self._tenant_is_suspended(user):

@@ -101,13 +101,14 @@ make sec
 
 ## Burn-down
 
-- [ ] Create `transcript_listener/` package with `__init__.py`
-- [ ] `protocols.py` — ListenerSession
-- [ ] `predicates.py` — 7 pure functions
-- [ ] `regen.py` — 4 regen functions
-- [ ] `router.py` — handle_transcriber_output
-- [ ] `consumer.py` — listen_transcriber
-- [ ] `__init__.py` re-exports + adapter-bound globals
-- [ ] Update all imports across voice module
-- [ ] `make check` green
-- [ ] File size gate: all files ≤ 500 lines
+- [x] Create `transcript_listener/` package with `__init__.py`
+- [x] `protocols.py` — ListenerSession (129 lines)
+- [x] `predicates.py` — 7 pure functions (81 lines)
+- [x] `regen.py` — 4 regen functions (68 lines)
+- [x] `router.py` — handle_transcriber_output + send_first_message (153 lines)
+- [x] `consumer.py` — listen_transcriber + http_transcription + accumulated (476 lines)
+- [x] `llm.py` — followup, llm_queue, run_llm, kickoff, errors (305 lines)
+- [x] `__init__.py` re-exports + adapter-bound globals (105 lines)
+- [x] Update all imports across voice module
+- [x] `make check` green (2165 passed, bandit clean)
+- [x] File size gate: all files ≤ 500 lines

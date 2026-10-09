@@ -22,9 +22,9 @@ from voiceai.modules.auth.models.team import Team
 from voiceai.modules.auth.models.tenant import Tenant
 from voiceai.modules.auth.models.user import User
 
-__all__ = ["AuthStorePort", "LoginLimiter"]
+__all__ = ["AuthStorePort", "LoginLimiter", "TokenService"]
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -197,5 +197,36 @@ class LoginLimiter(Protocol):
 
         Raises:
             TooManyAttemptsError: When the IP exhausted its window.
+        """
+        ...
+
+
+@runtime_checkable
+class TokenService(Protocol):
+    """JWT mint/verify seam behind `AuthService` (spec 0064, ISP).
+
+    Stateless RS256 access tokens plus opaque rotating refresh rows — the
+    service mints, verifies, and rotates without touching the store.
+    """
+
+    async def mint_jwt_pair(self, user: User) -> tuple[str, str]:
+        """Mint a fresh access + refresh token pair for a user.
+
+        Args:
+            user: The authenticated user (version stamped into the JWT).
+
+        Returns:
+            The `(access_token, refresh_token)` pair.
+        """
+        ...
+
+    async def verify_jwt(self, secret: str) -> dict[str, Any] | None:
+        """Verify a JWT access token and return its claims.
+
+        Args:
+            secret: The bearer token from the Authorization header.
+
+        Returns:
+            The decoded claims, or `None` when the token is invalid/expired.
         """
         ...
