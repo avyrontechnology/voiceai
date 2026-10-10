@@ -24,7 +24,9 @@ MODULE: ModuleDef = ModuleDef(
     # spec 0059: custom integrations (all auth types + sync-tools; split next).
     # spec 0060: http + mcp transports (discovery sync + executor path; split next).
     # spec 0061: oauth2 login connector (authorize/callback/refresh; split next).
-    max_lines=8500,
+    # one-click connector (specs 0058/0061): server-side DCR secret + vault
+    #   credential resolve + post-login auto-sync + tests (8750 ceiling; split next).
+    max_lines=8750,
 )
 
 __all__ = [
