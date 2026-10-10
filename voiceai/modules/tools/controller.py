@@ -287,13 +287,12 @@ async def dcr_register(
     auth: AuthServiceDep,
     service: IntegrationsDep,
 ) -> JSONResponse:
-    """Register at an issuer; issued secret surfaces once (`platform:write`)."""
+    """Register at an issuer; the issued secret seals server-side (`platform:write`)."""
     await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    row, record = await service.dcr_register(issuer_url=payload.issuer_url, provider=payload.provider)
+    row = await service.dcr_register(issuer_url=payload.issuer_url, provider=payload.provider)
     body = wire_credential_meta(row)
-    body[C.CLIENT_ID_KEY] = record.client_id
+    body[C.CLIENT_ID_KEY] = row.auth_config.get(C.CLIENT_ID_KEY, "")
     body[C.ISSUER_URL_KEY] = payload.issuer_url
-    body[C.CLIENT_SECRET_ONCE_KEY] = record.client_secret
     return success_response(body, status_code=HTTP_CREATED)
 
 

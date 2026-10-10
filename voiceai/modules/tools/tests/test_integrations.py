@@ -171,14 +171,32 @@ async def test_revoke_then_link_fails_and_missing_is_404() -> None:
         await service.unlink_integration("missing")
 
 
-async def test_dcr_register_stores_credential_and_returns_secret_once() -> None:
-    """DCR success seals the issued secret and surfaces it exactly once."""
-    record = ClientRecord(issuer_url="https://issuer.test", client_id="cid-1", client_secret="shh")
-    service = _service(InMemoryDatabase(), _Dcr(record))
-    row, returned = await service.dcr_register(issuer_url="https://issuer.test", provider="github")
-    assert returned.client_secret == "shh"
+async def test_dcr_register_seals_secret_and_returns_identifiers_only() -> None:
+    """DCR success seals the issued secret server-side; the caller learns
+    identifiers only — no secret ever surfaces (Claude-connector flow)."""
+    import json
+
+    from voiceai.modules.tools.vault import CredentialVault
+
+    record = ClientRecord(
+        issuer_url="https://issuer.test",
+        client_id="cid-1",
+        client_secret="shh",
+        authorization_endpoint="https://issuer.test/authorize",
+        token_endpoint="https://issuer.test/token",
+    )
+    db = InMemoryDatabase()
+    service = _service(db, _Dcr(record))
+    row = await service.dcr_register(issuer_url="https://issuer.test", provider="github")
     assert row.provider == "github"
     assert row.encrypted_data != "shh"
+    assert row.auth_config["client_id"] == "cid-1"
+    assert row.auth_config["issuer_url"] == "https://issuer.test"
+    assert row.auth_config["authorization_endpoint"] == "https://issuer.test/authorize"
+    assert row.auth_config["token_endpoint"] == "https://issuer.test/token"
+    material = json.loads(CredentialVault("test-master-key").decrypt(row.encrypted_data, key_version=row.key_version).decode("utf-8"))
+    assert material == {"client_secret": "shh"}
+    assert "token" not in material
 
 
 async def test_dcr_failure_propagates_without_storing() -> None:
@@ -258,7 +276,8 @@ async def test_controller_link_without_credential_is_400() -> None:
 
 
 async def test_controller_dcr_register_flow() -> None:
-    """DCR register persists the credential and surfaces the secret once."""
+    """DCR register persists the credential and exposes identifiers only —
+    the issued secret never reaches the wire."""
     async with await _client() as client:
         response = await client.post(
             f"{PREFIX}/integrations/dcr-register",
@@ -267,7 +286,8 @@ async def test_controller_dcr_register_flow() -> None:
     assert response.status_code == 201
     body = response.json()["data"]
     assert body["client_id"] == "cid-1"
-    assert body["client_secret_once"] is None
+    assert "client_secret_once" not in body
+    assert "client_secret" not in body
 
 
 async def test_controller_gates_anonymous_and_foreign_rows() -> None:

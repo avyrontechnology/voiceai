@@ -43,11 +43,17 @@ class ClientRecord(BaseModel):
         issuer_url: Provider issuer the client registered with.
         client_id: Issued client id (an identifier — safe to log).
         client_secret: Issued secret, or `None` for public clients (never logged).
+        authorization_endpoint: Issuer login page from discovery (a URL —
+            safe for `auth_config`, needed so the login step never asks the
+            caller for endpoints).
+        token_endpoint: Issuer token URL from discovery (same treatment).
     """
 
     issuer_url: str = Field(..., min_length=1)
     client_id: str = Field(..., min_length=1)
     client_secret: str | None = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
 
 
 class DcrService:
@@ -210,8 +216,12 @@ class DcrService:
                 details={"issuer_url": issuer_url},
             )
         self._logger.info("dcr client registered for issuer")
+        authorization_endpoint = metadata.get(_AUTHORIZATION_KEY)
+        token_endpoint = metadata.get(_TOKEN_KEY)
         return ClientRecord(
             issuer_url=issuer_url,
             client_id=client_id,
             client_secret=client_secret if isinstance(client_secret, str) else None,
+            authorization_endpoint=authorization_endpoint if isinstance(authorization_endpoint, str) else None,
+            token_endpoint=token_endpoint if isinstance(token_endpoint, str) else None,
         )

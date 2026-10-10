@@ -126,7 +126,7 @@ values with `error_id` — same shape as HTTP).
 | `GET /api/v1/partner-integrations[?agent_id=]` | `platform:read` | 200 `{"integrations": [...]}` |
 | `POST /api/v1/partner-integrations` | `platform:write` | 201 row; 400 without a live credential |
 | `DELETE /api/v1/partner-integrations/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
-| `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata + `client_secret_once`; 400 undiscoverable/MANUAL |
+| `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata + `client_id` (issued secret seals server-side, never surfaces); 400 undiscoverable/MANUAL |
 
 ## OAuth2 login (spec 0061: authorize → callback → refresh)
 

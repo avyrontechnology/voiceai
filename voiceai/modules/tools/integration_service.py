@@ -373,16 +373,25 @@ class IntegrationService:
                 details={"integration_id": integration_id},
             )
 
-    async def dcr_register(self, *, issuer_url: str, provider: str) -> tuple[PartnerCredential, Any]:
-        """Register at an issuer and store the issued secret as a credential.
+    async def dcr_register(self, *, issuer_url: str, provider: str) -> PartnerCredential:
+        """Register at an issuer and seal the issued secret immediately.
+
+        The issued `client_secret` never leaves the server: it is sealed
+        into the vault material at registration, and the caller only learns
+        identifiers (`client_id`, endpoints). There is deliberately no
+        one-time display — the login step resolves the secret server-side
+        from this row, so no human ever handles it (Claude-connector flow).
+
+        The row carries no access `token` yet: DCR mints client credentials,
+        it logs no user in. A missing `token` in the material is the
+        "login pending" state the login step completes.
 
         Args:
             issuer_url: Provider issuer URL (SSRF-checked inside DCR).
             provider: Partner name the credential is stored under.
 
         Returns:
-            `(credential_row, client_record)`: the persisted row and the
-            issued record (callers surface `client_secret` once, never store it).
+            The persisted credential row (metadata only on the wire).
 
         Raises:
             ToolExecutionError: When discovery fails or MANUAL is required.
@@ -395,13 +404,29 @@ class IntegrationService:
                 details={"issuer_url": issuer_url},
             )
         record = await self._dcr.register_client(issuer_url)
-        row, _ = await self.connect_credential(
+        auth_config: dict[str, Any] = {
+            C.CLIENT_ID_KEY: record.client_id,
+            C.ISSUER_URL_KEY: issuer_url,
+        }
+        if record.authorization_endpoint:
+            auth_config["authorization_endpoint"] = record.authorization_endpoint
+        if record.token_endpoint:
+            auth_config["token_endpoint"] = record.token_endpoint
+        material = {"client_secret": record.client_secret or ""}
+        envelope = self._vault.encrypt(json.dumps(material).encode("utf-8"), key_version=_INITIAL_KEY_VERSION)
+        existing = [row for row in await self._tenant.find_credentials_by_provider(provider)]
+        row = PartnerCredential(
             provider=provider,
             credential_type=C.CREDENTIAL_TYPE_OAUTH2,
-            secret=record.client_secret or "",
+            auth_config=auth_config,
+            encrypted_data=envelope,
+            key_version=_INITIAL_KEY_VERSION,
         )
+        if existing:
+            row.id = existing[0].id
+        saved = await self._tenant.save_credential(row)
         logger.info("dcr client stored for provider")
-        return row, record
+        return saved
 
     async def sync_tools(self, provider: str) -> dict[str, Any]:
         """Materialize a template's tools into registry rows (specs 0059/0060).
