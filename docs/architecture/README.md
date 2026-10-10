@@ -3,6 +3,9 @@
 Source-evidenced architecture diagrams generated with [archify](https://github.com/tt-a1i/archify).
 Each diagram cites real code paths and is validated against the pinned repository revision.
 
+**Open [`index.html`](index.html)** — one hub with a live preview of every diagram,
+a full viewer per diagram, and keyboard routing (`←` / `→` / `Esc`).
+
 **Revision:** `18f4b2f44a779ba2aa1bb00d00fee6acce86f5a9`
 
 ## Diagrams
@@ -15,6 +18,25 @@ Each diagram cites real code paths and is validated against the pinned repositor
 | [trust-boundaries.html](trust-boundaries.html) | Security perimeter: auth, tenancy, vault, SSRF guard |
 | [data-model.html](data-model.html) | BaseFields inheritance + Collections registry |
 
+## The hub (`index.html`)
+
+A navigation page over the five artifacts. It is **not** an archify output and carries
+no provenance receipt — it only links and previews the real diagrams.
+
+- Previews use archify's own `?embed=1` mode, so each card shows the actual diagram
+  rather than a screenshot; `loading` is gated by `IntersectionObserver` so only
+  visible diagrams load.
+- `?theme=` is forwarded onto every link, and the toggle is persisted, so the hub and
+  the diagram it opens never disagree on light/dark.
+- `#<diagram-id>` deep-links straight into the full viewer (`index.html#trust-boundaries`).
+
+The hub never rewrites a generated `.html`, so every file's sha256 receipt stays
+verifiable:
+
+```sh
+node ~/.agents/skills/archify/bin/archify.mjs check <diagram>.html --require-provenance
+```
+
 ## How to regenerate
 
 ```sh
@@ -24,6 +46,9 @@ npx -y skills add tt-a1i/archify --skill archify --agent opencode --global --cop
 # Regenerate a diagram
 node ~/.agents/skills/archify/bin/archify.mjs finalize architecture docs/architecture/<name>.candidate.json docs/architecture/<name>.html --repo-root . --quality showcase --json
 ```
+
+If you add a diagram, register it in the `DIAGRAMS` array at the top of
+`index.html` — that one list drives the grid, the counter, and the prev/next routing.
 
 ## Rules
 

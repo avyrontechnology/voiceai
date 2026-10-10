@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<!--
+  Architecture diagram hub — one entry point for all five archify diagrams.
+
+  Why a hub and not a wiki index: each diagram is a self-contained ~760 KB
+  artifact carrying its own viewer (theme, pan/zoom, export, search). Loading all
+  five at once is wasteful, so this page shows lightweight previews and opens
+  the full viewer only on demand.
+
+  Prefixes are loaded with `?embed=1`, which is archify's own embed mode: it
+  hides the inner toolbar/header and renders the diagram surface edge to edge.
+  That is a runtime query param — the generated .html files are never modified,
+  so their sha256 provenance receipts stay valid (`archify check
+  --require-provenance`).
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Otoba AI — Architecture Diagrams</title>
+<style>
+  /* Theme tokens mirror the archify viewer so the hub and the diagrams it
+     opens read as one product rather than a wrapper bolted onto them. */
+  :root, [data-theme="dark"] {
+    --bg: #020617;
+    --grid: #1e293b;
+    --text: #ffffff;
+    --text-muted: #94a3b8;
+    --text-faint: #7d8da1;
+    --panel: rgba(15, 23, 42, 0.5);
+    --panel-border: #1e293b;
+    --toolbar-bg: rgba(15, 23, 42, 0.8);
+    --toolbar-border: #334155;
+    --toolbar-text: #e2e8f0;
+    --cyan: #22d3ee;
+    --green: #34d399;
+    --violet: #a78bfa;
+    --amber: #fbbf24;
+    --rose: #fb7185;
+    --shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.85);
+  }
+  [data-theme="light"] {
+    --bg: #f4f5f7;
+    --grid: #e9edf2;
+    --text: #111827;
+    --text-muted: #5b6474;
+    --text-faint: #6b7280;
+    --panel: #ffffff;
+    --panel-border: #e5e7eb;
+    --toolbar-bg: rgba(255, 255, 255, 0.85);
+    --toolbar-border: #d1d5db;
+    --toolbar-text: #1f2937;
+    --cyan: #0891b2;
+    --green: #059669;
+    --violet: #7c3aed;
+    --amber: #d97706;
+    --rose: #e11d48;
+    --shadow: 0 18px 40px -20px rgba(15, 23, 42, 0.35);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', Roboto, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 14% -10%, color-mix(in srgb, var(--cyan) 14%, transparent), transparent 34rem),
+      radial-gradient(circle at 90% 12%, color-mix(in srgb, var(--violet) 12%, transparent), transparent 30rem);
+    background-attachment: fixed;
+    min-height: 100vh;
+    color: var(--text);
+    padding: 2.5rem 2rem 4rem;
+  }
+
+  .mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .wrap { max-width: 1400px; margin: 0 auto; }
+
+  /* ---------- header ---------- */
+  header { margin-bottom: 2rem; }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-faint); margin-bottom: 0.75rem;
+  }
+  .eyebrow::before {
+    content: ''; width: 1.75rem; height: 1px;
+    background: linear-gradient(90deg, var(--cyan), transparent);
+  }
+
+  h1 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); font-weight: 600; letter-spacing: -0.02em; }
+  .lede { margin-top: 0.6rem; max-width: 68ch; color: var(--text-muted); line-height: 1.65; }
+
+  .meta { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.65rem; border-radius: 999px;
+    border: 1px solid var(--panel-border); background: var(--panel);
+    font-size: 0.72rem; color: var(--text-muted);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  /* ---------- toolbar ---------- */
+  .toolbar {
+    position: sticky; top: 0; z-index: 40;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
+    margin: 1.75rem 0 1.5rem; padding: 0.7rem 0.85rem;
+    border: 1px solid var(--toolbar-border); border-radius: 14px;
+    background: var(--toolbar-bg);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--shadow);
+  }
+  .toolbar-label { font-size: 0.72rem; color: var(--text-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .tab {
+    appearance: none; cursor: pointer;
+    padding: 0.42rem 0.8rem; border-radius: 9px;
+    border: 1px solid var(--panel-border); background: transparent;
+    color: var(--text-muted); font: inherit; font-size: 0.82rem;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .tab:hover { color: var(--text); border-color: var(--toolbar-border); }
+  .tab[aria-current="page"] { color: var(--bg); background: var(--cyan); border-color: var(--cyan); font-weight: 600; }
+  .tab:focus-visible, .btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+  .spacer { flex: 1 1 auto; }
+
+  .btn {
+    appearance: none; cursor: pointer;
+    padding: 0.42rem 0.8rem; border-radius: 9px;
+    border: 1px solid var(--toolbar-border); background: transparent;
+    color: var(--toolbar-text); font: inherit; font-size: 0.8rem;
+  }
+  .btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+
+  /* ---------- view routing ---------- */
+  .view[hidden] { display: none; }
+
+  /* ---------- grid (overview) ---------- */
+  .grid {
+    display: grid; gap: 1.15rem;
+    grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  }
+
+  .card {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--panel-border); border-radius: 16px;
+    background: var(--panel); overflow: hidden;
+    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+  .card:focus-within { border-color: var(--cyan); }
+
+  /* The frame is a fixed-ratio window. Each preview renders the real diagram at
+     the frame's own size, so archify's embed SVG (width:100%, min-width:0) lays
+     out to fill it exactly — no transform, nothing cropped, and the preview is
+     literally the artifact rather than a scaled screenshot of it. */
+  .frame {
+    position: relative; aspect-ratio: 16 / 10; width: 100%;
+    border-bottom: 1px solid var(--panel-border);
+    background:
+      radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 22%, transparent) 1px, transparent 0)
+      0 0 / 22px 22px;
+    overflow: hidden;
+  }
+  .frame iframe {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; border: 0;
+    pointer-events: none;
+    opacity: 0; transition: opacity .35s ease;
+  }
+  .frame iframe.ready { opacity: 1; }
+  /* Diagrams are interactive on their own page; in a hub card they are a
+     preview, so a click opens the full viewer instead of panning in place. */
+  .frame::after {
+    content: ''; position: absolute; inset: 0;
+    background: var(--bg); opacity: 0;
+    transition: opacity .2s;
+  }
+  .card:hover .frame::after { opacity: 0.12; }
+
+  .card-body { padding: 1rem 1.1rem 1.15rem; display: flex; flex-direction: column; gap: 0.55rem; flex: 1; }
+  .card-top { display: flex; align-items: center; gap: 0.5rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .card h2 { font-size: 1.02rem; font-weight: 600; letter-spacing: -0.01em; }
+  .card p { color: var(--text-muted); font-size: 0.86rem; line-height: 1.6; flex: 1; }
+
+  .card-actions { display: flex; gap: 0.5rem; margin-top: 0.35rem; }
+  .card-actions .btn { flex: 1; text-align: center; text-decoration: none; display: inline-block; }
+  .card-actions .btn-primary {
+    background: color-mix(in srgb, var(--cyan) 16%, transparent);
+    border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+    color: var(--cyan);
+  }
+  .card-actions .btn-primary:hover { background: color-mix(in srgb, var(--cyan) 26%, transparent); }
+
+  .badge {
+    font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.14rem 0.45rem; border-radius: 5px;
+    border: 1px solid var(--panel-border); color: var(--text-faint);
+  }
+
+  /* ---------- single (focused viewer) ---------- */
+  .viewer { border: 1px solid var(--panel-border); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+  .viewer iframe { display: block; width: 100%; height: calc(100vh - 15rem); min-height: 520px; border: 0; background: var(--bg); }
+
+  .hint { margin-top: 0.9rem; color: var(--text-faint); font-size: 0.78rem; }
+
+  kbd {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: 0.72rem; padding: 0.08rem 0.36rem;
+    border: 1px solid var(--panel-border); border-bottom-width: 2px;
+    border-radius: 5px; background: var(--panel); color: var(--text-muted);
+  }
+
+  footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--panel-border);
+           color: var(--text-faint); font-size: 0.78rem; line-height: 1.7; }
+
+  @media (max-width: 560px) {
+    body { padding: 1.5rem 1rem 3rem; }
+    .grid { grid-template-columns: 1fr; }
+    .viewer iframe { height: calc(100vh - 17rem); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card { transition: none; }
+    .card:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow mono">voiceai · architecture docs</div>
+    <h1>Architecture Diagrams</h1>
+    <p class="lede">
+      Five source-evidenced views of the platform, generated with
+      <strong>archify</strong> and validated against a pinned repository revision.
+      Every node cites a real code path. Open the grid for an overview, or jump
+      straight into one diagram's full viewer.
+    </p>
+    <div class="meta">
+      <span class="chip mono"><b id="count">5</b>&nbsp;diagrams</span>
+      <span class="chip mono">revision&nbsp;<b id="rev">e91a1ab</b></span>
+      <span class="chip mono">provenance&nbsp;<b>sha256&nbsp;pinned</b></span>
+    </div>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="Diagram navigation">
+    <span class="toolbar-label mono">View</span>
+    <button class="tab" id="tab-all" type="button" data-view="all" aria-current="page">All diagrams</button>
+    <span class="spacer"></span>
+    <button class="btn" id="btn-prev" type="button" title="Previous diagram (&larr;)">← Prev</button>
+    <span class="mono" id="pos" style="font-size:0.78rem;color:var(--text-faint)">—</span>
+    <button class="btn" id="btn-next" type="button" title="Next diagram (&rarr;)">Next →</button>
+    <button class="btn" id="btn-theme" type="button" aria-pressed="false">Light</button>
+  </div>
+
+  <!-- Overview: one card per diagram, each a live scaled preview. -->
+  <main class="view" id="view-all">
+    <div class="grid" id="grid"></div>
+    <p class="hint">
+      Previews are rendered live with archify's <span class="mono">?embed=1</span> mode, so they match
+      the real diagrams exactly. Click a card to open its full viewer — pan, zoom, search, and export
+      are all in there.
+    </p>
+  </main>
+
+  <!-- Focus: one diagram at full size. -->
+  <main class="view" id="view-one" hidden>
+    <div class="viewer"><iframe id="stage" title="Diagram viewer" loading="lazy"></iframe></div>
+    <p class="hint">
+      <button class="btn" id="btn-back" type="button">← All diagrams</button>
+      &nbsp;Use <kbd>←</kbd> <kbd>→</kbd> to move between diagrams, <kbd>Esc</kbd> to go back.
+    </p>
+  </main>
+
+  <footer>
+    <p>
+      Diagrams live in <span class="mono">docs/architecture/</span> and are regenerated with
+      <span class="mono">archify finalize --repo-root .</span>. This hub only links them — it never
+      rewrites a generated artifact, so each file's provenance receipt stays verifiable.
+    </p>
+  </footer>
+</div>
+
+<script>
+  // One registry drives the grid, the focused viewer, and prev/next routing, so a
+  // new diagram is added in exactly one place.
+  const DIAGRAMS = [
+    {
+      id: 'repo-topology',
+      file: 'repo-topology.html',
+      title: 'Repo Topology',
+      blurb: 'Legacy vs new architecture and the strangler pattern: adapters are the only sanctioned legacy bridge.',
+      type: 'architecture',
+      color: 'var(--violet)'
+    },
+    {
+      id: 'module-map',
+      file: 'module-map.html',
+      title: 'Module Map',
+      blurb: 'The nine feature modules over the shared kernel (common / core / database) and how they depend on it.',
+      type: 'architecture',
+      color: 'var(--green)'
+    },
+    {
+      id: 'lifecycles',
+      file: 'lifecycles.html',
+      title: 'Request Lifecycle',
+      blurb: 'An HTTP call end to end: middleware → auth → controller → service → repository, and the response back.',
+      type: 'sequence',
+      color: 'var(--cyan)'
+    },
+    {
+      id: 'trust-boundaries',
+      file: 'trust-boundaries.html',
+      title: 'Trust Boundaries',
+      blurb: 'The security perimeter: authentication, tenant scoping, the credential vault, and the SSRF guard.',
+      type: 'architecture',
+      color: 'var(--rose)'
+    },
+    {
+      id: 'data-model',
+      file: 'data-model.html',
+      title: 'Data Model',
+      blurb: 'BaseFields inheritance and the Collections registry — what every persisted document inherits.',
+      type: 'architecture',
+      color: 'var(--amber)'
+    }
+  ];
+
+  const $ = (sel) => document.querySelector(sel);
+  const grid = $('#grid');
+  const stage = $('#stage');
+  const viewAll = $('#view-all');
+  const viewOne = $('#view-one');
+  const posLabel = $('#pos');
+
+  // The active theme, forwarded onto every diagram link: archify's viewer reads
+  // its own `?theme=` param, so without this a visitor who toggled the hub to
+  // light would land on a dark diagram.
+  const themeParam = () => `theme=${document.documentElement.getAttribute('data-theme')}`;
+
+  // Every embedded preview loads the diagram in archify's embed mode, which
+  // hides the inner viewer chrome so only the diagram surface is shown.
+  const embedUrl = (d) => `${d.file}?embed=1&${themeParam()}`;
+
+  // The card links are written before the first theme is applied, so their hrefs
+  // are refreshed whenever the theme changes.
+  function refreshThemeLinks() {
+    grid.querySelectorAll('[data-open]').forEach((a) => {
+      a.href = `${DIAGRAMS[Number(a.closest('.card').querySelector('.frame').dataset.index)].file}?${themeParam()}`;
+    });
+  }
+
+  // Cards are built once. The preview iframe is deferred until the card is
+  // near the viewport, otherwise all five ~760 KB viewers load at once.
+  const cardIndex = new Map();
+  DIAGRAMS.forEach((d, i) => {
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="frame" data-preview="${d.id}"></div>
+      <div class="card-body">
+        <div class="card-top">
+          <span class="dot" style="background:${d.color}"></span>
+          <h2>${d.title}</h2>
+          <span class="badge mono" style="margin-left:auto">${d.type}</span>
+        </div>
+        <p>${d.blurb}</p>
+        <div class="card-actions">
+          <a class="btn btn-primary" href="${d.file}" data-open="${d.id}">Open full viewer →</a>
+          <a class="btn mono" href="${d.file}#${d.id}">↗</a>
+        </div>
+      </div>`;
+    card.querySelector('[data-open]').addEventListener('click', (e) => {
+      e.preventDefault();
+      focus(i);
+    });
+    grid.appendChild(card);
+    cardIndex.set(d.id, { card, index: i });
+  });
+
+  $('#count').textContent = DIAGRAMS.length;
+
+  // Each preview is the diagram laid out into the card's own frame, so there is
+  // nothing to measure or scale — the iframe just reveals once it has rendered.
+  function revealPreview(host) {
+    host.querySelector('iframe')?.classList.add('ready');
+  }
+
+  // Load a card's preview only when it approaches the viewport.
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const host = entry.target;
+      const d = DIAGRAMS[Number(host.dataset.index)];
+      if (!d || host.dataset.loaded === '1') return;
+      host.dataset.loaded = '1';
+      const frame = document.createElement('iframe');
+      frame.src = embedUrl(d);
+      // No `loading=lazy` here: the IntersectionObserver above already gates
+      // *when* the iframe is inserted, and double-gating (lazy + observer)
+      // leaves previews blank in headless/embedded browsers.
+      frame.title = `${d.title} preview`;
+      frame.tabIndex = -1;
+      frame.addEventListener('load', () => revealPreview(host));
+      host.appendChild(frame);
+      io.unobserve(host);
+    });
+  }, { rootMargin: '250px' });
+
+  grid.querySelectorAll('.frame').forEach((el, i) => { el.dataset.index = String(i); io.observe(el); });
+
+  let current = -1;
+
+  function focus(i) {
+    current = (i + DIAGRAMS.length) % DIAGRAMS.length;
+    const d = DIAGRAMS[current];
+    stage.src = `${d.file}?${themeParam()}`;
+    viewAll.hidden = true;
+    viewOne.hidden = false;
+    posLabel.textContent = `${current + 1} / ${DIAGRAMS.length}`;
+    document.querySelectorAll('.tab').forEach((t) => t.removeAttribute('aria-current'));
+    $('#tab-all').removeAttribute('aria-current');
+    // Keep the URL shareable/bookmarkable without adding a history entry per click.
+    history.replaceState(null, '', `#${d.id}`);
+    stage.focus();
+  }
+
+  function overview() {
+    current = -1;
+    stage.removeAttribute('src');
+    viewOne.hidden = true;
+    viewAll.hidden = false;
+    posLabel.textContent = '—';
+    history.replaceState(null, '', location.pathname);
+    $('#tab-all').setAttribute('aria-current', 'page');
+  }
+
+  $('#tab-all').addEventListener('click', overview);
+  $('#btn-back').addEventListener('click', overview);
+  $('#btn-prev').addEventListener('click', () => focus(current <= 0 ? DIAGRAMS.length - 1 : current - 1));
+  $('#btn-next').addEventListener('click', () => focus(current < 0 ? 0 : current + 1));
+
+  // Keyboard routing only while a single diagram is open — the overview keeps
+  // normal tab/arrow behaviour for the card links.
+  document.addEventListener('keydown', (e) => {
+    if (viewOne.hidden) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); $('#btn-prev').click(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); $('#btn-next').click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); overview(); }
+  });
+
+  // Theme is shared with the opened diagram: archify reads the same stored key,
+  // so the hub and its diagrams never disagree on light vs dark.
+  //
+  // `?theme=` wins over `prefers-color-scheme` so an explicit request (and the
+  // diagram viewer's own `?theme=` deep link) is always honoured; the OS
+  // preference is only the fallback when neither the visitor nor the link said
+  // anything.
+  const themeBtn = $('#btn-theme');
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    themeBtn.textContent = t === 'dark' ? 'Light' : 'Dark';
+    themeBtn.setAttribute('aria-pressed', String(t === 'light'));
+    try { localStorage.setItem('archify-theme', t); } catch (_) { /* private mode */ }
+  }
+  const requested = new URLSearchParams(location.search).get('theme');
+  let stored = null;
+  try { stored = localStorage.getItem('archify-theme'); } catch (_) { /* private mode */ }
+  applyTheme(
+    requested === 'light' || requested === 'dark' ? requested
+      : stored === 'light' || stored === 'dark' ? stored
+      : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  );
+  themeBtn.addEventListener('click', () => {
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    refreshThemeLinks();
+    // An open diagram keeps its own theme; reloading it is the only way to hand
+    // the new one down, and only matters while a focused viewer is on screen.
+    if (current >= 0) focus(current);
+  });
+
+  // Deep link: /index.html#trust-boundaries opens straight into that diagram.
+  const initial = DIAGRAMS.findIndex((d) => d.id === location.hash.slice(1));
+  if (initial >= 0) focus(initial);
+</script>
+</body>
+</html>
