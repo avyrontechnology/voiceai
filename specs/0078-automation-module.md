@@ -1,172 +1,68 @@
-# Spec 0078: automation module (retire the graphs / workflows / campaigns families)
+# Spec 0078: automation cluster — survey and split plan
 
-## Goal
+## Status: SURVEY COMPLETE, SCOPE SPLIT REQUIRED
 
-Move the automation cluster out of the legacy `platform` bucket into one module,
-`voiceai/modules/automation/`: graphs, workflows, and campaigns, plus their
-version and run children.
+This spec was written as one cutover and the survey proved that wrong. It is
+kept as the record of what was found, and **replaced by the split below**. Do
+not implement it as written.
 
-Fifth and **largest** family of the composition-root strangler — 26 routes and 7
-collections, against 6/5/3/5 for the four before it. This spec exists to land
-that work as one coherent cutover rather than three interlocking partial ones.
+## What the survey found
 
-## Why one module, not three
+The cluster is **26 routes and ~25 models across 7 collections**, not the 9
+models first estimated. More importantly, it is not a CRUD family:
 
-The three families are not separable:
+- `platform/graphs.py` (221 lines) holds `GraphDefinition` and
+  `graph_to_agent_payload`.
+- `platform/workflows.py` (317 lines) holds `WorkflowDefinition` and
+  `run_workflow` — the **execution engine**.
+- `deploy_graph` calls `graph_to_agent_payload`; `test_run` calls `run_workflow`.
 
-- A `WorkflowCampaign` names a `workflow_id` — campaigns cannot exist without
-  workflows.
-- A `WorkflowVersion` belongs to a workflow; a `WorkflowRun` belongs to a
-  version. The version chain is `workflow → version → run`.
+So the endpoints are not just moving records: **two of them run the automation**.
+Migrating "the CRUD" while leaving the engine in `platform/` would recreate the
+numbers→voice seam (spec 0074) in a worse form — a module whose routes call into
+legacy for its actual behaviour.
+
+538 lines of engine code does not belong in a migration commit whose purpose is
+"move the records".
+
+## The split
+
+| Spec | Scope | Why it stands alone |
+|---|---|---|
+| **0078** | Graphs: `GraphDoc`, `GraphVersion`, their routes | Record storage + versioning. `deploy_graph` is left mounted on the legacy router until 0079, so this spec has no engine dependency. |
+| **0079** | `platform/graphs.py` → the automation module (`GraphDefinition`, `graph_to_agent_payload`) | The graph engine. Separate because it is behaviour, not storage. |
+| **0080** | Workflows: `WorkflowDoc`, `WorkflowVersion`, `WorkflowRun` | Record storage + the version chain. |
+| **0081** | `platform/workflows.py` → the automation module (`WorkflowDefinition`, `run_workflow`) | The workflow execution engine. |
+| **0082** | Campaigns: `WorkflowCampaign`, entries, stats, the status machine | Depends on workflows (0080); moves after it. |
+
+Ordering rationale: **storage before engine** for each pair, so the engine
+migration never has to reach back into the platform store for records. The two
+domains (graph, workflow) are independent of each other, so 0079–0081 can be
+sequenced by whoever is free.
+
+## Coupling (unchanged from the survey, still the reason one module)
+
+- A `WorkflowCampaign` names a `workflow_id`; campaigns cannot exist without
+  workflows — hence 0082 after 0080.
+- A `WorkflowVersion` belongs to a workflow; a `WorkflowRun` to a version.
 - The legacy router carries **68 cross-references** between these identifiers.
 
-Migrating them separately would recreate exactly the coupling seam that
-`numbers` had with the voice inbound lookup (spec 0074) — the seam that cost a
-silent production bug to find. One module keeps the chain inside one place.
+The end state is still one module (`voiceai/modules/automation/`); the split is
+about how it gets there, so each step is reviewable and revertable on its own.
 
-## What makes this harder than the previous families
+## Original scope (kept for reference)
 
-The previous four were flat CRUD. This one is **nested and versioned**:
+- 26 routes across `/graphs`, `/workflows`, `/workflow-campaigns`, `/workflow-runs`
+- 7 collections: `platform_graphs`, `platform_graph_versions`, `platform_workflows`,
+  `platform_workflow_versions`, `platform_workflow_runs`, `platform_workflow_campaigns`
+- Version numbering, campaign binding and the campaign status machine are the
+  behaviours that must survive every step.
 
-| Document | Key | Children |
-|---|---|---|
-| `GraphDoc` | `graph_id` | `graph_versions` (many, ordered) |
-| `WorkflowDoc` | `workflow_id` | `workflow_versions` (many, ordered) → `workflow_runs` (many) |
-| `WorkflowCampaign` | `campaign_id` | references a `workflow_id`; carries `entries` |
+## Deviations
 
-Every write endpoint that touches a version bumps a number; the ordering of
-versions is a real invariant (`list_graph_versions` sorts by version number, and
-`list_workflow_versions` likewise). These are the behaviours a naive CRUD
-translation would drop.
+- The first estimate said ~9 models; the survey found ~25. Recorded rather than
+  quietly corrected, because it is the reason the estimate was not safe to plan
+  against.
+- The estimate said "executing anything is out of scope". That was wrong:
+  `deploy_graph` and `test_run` execute. Correcting it is what produced the split.
 
-## Non-goals
-
-- **Executing** anything. Deploy/run endpoints that actually dial or dispatch are
-  out of scope — this spec moves the *records*, not the engine behind them.
-- Migrating `batches` / `executions` (the calling families, own spec).
-- Changing the campaign status machine. It moves verbatim.
-- Any change to the version numbering scheme.
-
-## Interface contracts
-
-Module `voiceai/modules/automation/`, Rule 1 file set.
-
-### Models (`models.py`)
-
-Seven documents become `BaseFields`:
-
-- `GraphDoc`, `GraphVersion`
-- `WorkflowDoc`, `WorkflowVersion`, `WorkflowRun`
-- `WorkflowCampaign`, `CampaignEntry`, `CampaignStats`
-
-`id` replaces each family's legacy id field; the API keeps the legacy names.
-
-`WorkflowCampaign.status` keeps its **enum** (`draft|scheduled|running|completed|
-stopped`) — it is a state machine, not a free string, and flattening it would
-lose that.
-
-### Repository (`repository.py`)
-
-Four repositories over the same tenant-scoped base — one per document family:
-graphs (+ versions), workflows (+ versions), runs, campaigns. Reads go through
-`raw_documents()` as in specs 0074–0077, so pre-migration `{payload: {...}}`
-rows stay listable.
-
-### Service (`service.py`)
-
-Mirrors the legacy surface one method per endpoint. The behaviours that must
-survive exactly:
-
-- **Version numbering.** Publishing a new version assigns the next number for
-  that parent; versions are listed ordered by it.
-- **Campaign references.** Creating a campaign against an unknown `workflow_id`
-  is a 404, not an orphan.
-- **Campaign status transitions** are validated the way they are today.
-
-### Controller (`controller.py`)
-
-The 26 routes across four prefixes (`/graphs`, `/workflows`, `/workflow-campaigns`,
-`/workflow-runs`), same paths, same scopes, same status codes.
-
-## Data model
-
-Collections kept as-is (`platform_graphs`, `platform_graph_versions`,
-`platform_workflows`, `platform_workflow_versions`, `platform_workflow_runs`,
-`platform_workflow_campaigns`). Renaming would orphan live automation records.
-
-## Security notes
-
-- Scopes unchanged: `platform:read` on reads, `platform:write` on mutations.
-- `definition` (workflow) and `entries[].variables` (campaign) are open dicts of
-  user data. They are **not** credentials, but they are customer content: not
-  logged at INFO, only ids.
-- Campaign entries carry `to_number` — PII. Logged by campaign id only.
-- Delete is soft wherever the legacy delete is soft.
-
-## Architecture delta
-
-```
-NEW  voiceai/modules/automation/{constants,models,errors,repository,service,
-                                controller,schemas,static_methods,exceptions,
-                                helpers,utils}.py + CONTRACT.md / README.md / RUNBOOK.md
-MOD  voiceai/core/container.py       — automation services + container.wire
-MOD  voiceai/modules/__init__.py     — automation registered in ALL_MODULES
-MOD  voiceai/platform/router.py      — 4 routers removed
-DEL  voiceai/platform/store.py       — the cluster's store methods
-DEL  voiceai/platform/models.py      — the cluster's models
-MOD  tooling/backfill_upstash_to_atlas.py — _MODULE_RESTORES entries
-```
-
-`test_route_inventory.py` is updated in the same spec.
-
-## Test plan
-
-- **version numbering**: publishing twice yields 1 then 2; the list is ordered.
-- **campaign binding**: a campaign against an unknown workflow 404s.
-- **campaign status transitions**: the valid moves pass, an invalid one is
-  rejected.
-- **soft deletes** per family.
-- **legacy envelope reads** per family.
-- **tenant isolation** per repository.
-- controller: the 26 routes through the real app factory with `httpx`, plus the
-  scope gate.
-- **a route-count pin**: the module mounts exactly the legacy route set, so a
-  dropped or invented endpoint fails the suite rather than shipping.
-
-Coverage ≥85% on the new module.
-
-## Verification
-
-```sh
-make check
-make sec
-make cov
-```
-
-## Rollout
-
-Same shape as the previous four: module routers mount first, first match wins,
-one commit, rollback is reverting it.
-
-**Blast radius is the largest so far** — 26 routes and 7 collections move at once.
-Mitigation is the test plan, not a flag: the legacy surface is reproduced exactly
-and pinned by a route-count test, so the failure mode is a caught test rather
-than a production surprise. If the team wants a staged rollout instead, this
-spec is the one to split — it is the only remaining family big enough to warrant
-it.
-
-## Burn-down
-
-- [ ] survey: coupling map and route inventory pinned
-- [ ] `automation/constants.py`, `models.py`, `errors.py`
-- [ ] `automation/static_methods.py` (version numbering), `helpers.py`, `utils.py`
-- [ ] `automation/repository.py` (4 repositories), `service.py`
-- [ ] `automation/schemas.py` + `controller.py` (26 routes)
-- [ ] `automation/exceptions.py` + `CONTRACT.md` / `README.md` / `RUNBOOK.md`
-- [ ] container providers + `container.wire` + module registry
-- [ ] `platform/{router,store,models}.py`: cluster removed
-- [ ] backfill: `_MODULE_RESTORES` entries
-- [ ] `test_route_inventory.py` + auth shim `REMOVED_BY_SPEC`
-- [ ] `test_repository_store.py` fixture moved off this family
-- [ ] tests: versioning, campaign binding, status machine, storage, controller
-- [ ] `make check` + `make sec` green
