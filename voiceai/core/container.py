@@ -383,6 +383,36 @@ def _build_numbers_service(db_client: Any) -> Any:
     return PhoneNumbersService(_build_numbers_repository(db_client))
 
 
+def _build_knowledge_repository(db_client: Any) -> Any:
+    """Build the knowledge base repository over the tenant's scoped view (spec 0075).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `KnowledgeBaseRepository` bound to the request's tenant.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.knowledge.models import KnowledgeBase
+    from voiceai.modules.knowledge.repository import KnowledgeBaseRepository
+
+    return KnowledgeBaseRepository(_scoped_collection(db_client, Collections.PLATFORM_KBS, KnowledgeBase))
+
+
+def _build_knowledge_service(db_client: Any) -> Any:
+    """Build the knowledge base service over the tenant's scoped view (spec 0075).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `KnowledgeService` bound to the request's tenant.
+    """
+    from voiceai.modules.knowledge.service import KnowledgeService
+
+    return KnowledgeService(_build_knowledge_repository(db_client))
+
+
 def _build_inbound_store(db_client: Any, platform_store: Any) -> Any:
     """Adapt the numbers module to the voice inbound lookup seam (spec 0047 seam, rewired by 0074).
 
@@ -1060,6 +1090,9 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # request's tenant).
     numbers_service = providers.Factory(_build_numbers_service, db_client=db_client)
 
+    # Knowledge module (spec 0075): per-request tenant view, like every scoped service.
+    knowledge_service = providers.Factory(_build_knowledge_service, db_client=db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -1110,6 +1143,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.wallet.controller",
             "voiceai.modules.privacy.controller",
             "voiceai.modules.numbers.controller",
+            "voiceai.modules.knowledge.controller",
         ]
     )
 

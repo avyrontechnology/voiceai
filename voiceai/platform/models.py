@@ -172,33 +172,6 @@ class BatchListResponse(BaseModel):
     batches: List[Batch]
 
 
-class KBSource(BaseModel):
-    type: KBSourceType
-    ref: str = Field(..., min_length=1, description="URL, file key, or inline text.")
-
-
-class CreateKBRequest(BaseModel):
-    name: str = Field(..., min_length=1)
-    sources: List[KBSource] = Field(default_factory=list)
-
-
-class AttachKBRequest(BaseModel):
-    agent_id: str = Field(..., min_length=1)
-
-
-class KnowledgeBase(BaseModel):
-    kb_id: str
-    name: str
-    sources: List[KBSource] = Field(default_factory=list)
-    status: str = "ready"
-    agent_ids: List[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class KBListResponse(BaseModel):
-    knowledgebases: List[KnowledgeBase]
-
-
 class CreateToolRequest(BaseModel):
     agent_id: Optional[str] = None
     name: str = Field(..., min_length=1)

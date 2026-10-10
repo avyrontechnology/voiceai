@@ -83,7 +83,7 @@ PLATFORM_FAMILIES: Final[tuple[str, ...]] = tuple(FAMILY_COLLECTIONS)
 
 #: Families that left the platform bucket for a real module (spec 0074). Their
 #: rows are written typed, not as a `{payload: ...}` envelope.
-MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers",)
+MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers", "kbs")
 
 #: (Redis glob pattern, human description). Every family the platform ever wrote.
 FAMILIES: Final[tuple[tuple[str, str], ...]] = (
@@ -292,6 +292,18 @@ class AtlasTargets:
         with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
             return await _build_numbers_repository(self._numbers_source).restore(item_id, payload)
 
+    async def restore_knowledge(self, item_id: str, payload: dict[str, Any]) -> bool:
+        """Write one legacy knowledge-base row typed, unless it exists (spec 0075).
+
+        Same reason as `restore_number`: the family is a module collection now, so
+        a `{payload: ...}` row would be invisible to the module that owns it.
+        """
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+        from voiceai.core.container import _build_knowledge_repository
+
+        with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
+            return await _build_knowledge_repository(self._numbers_source).restore(item_id, payload)
+
     async def restore_organization(self, payload: dict[str, Any]) -> bool:
         """Seed the organization settings singleton unless one exists."""
         written: bool = await self._platform.restore_organization(payload)
@@ -380,7 +392,9 @@ async def _apply_platform(redis: RedisSource, targets: AtlasTargets, reports: li
                 continue
             restored = (
                 await targets.restore_number(item_id, payload)
-                if family in MODULE_FAMILIES
+                if family == "numbers"
+                else await targets.restore_knowledge(item_id, payload)
+                if family == "kbs"
                 else await targets.restore_platform(family, item_id, payload)
             )
             if restored:

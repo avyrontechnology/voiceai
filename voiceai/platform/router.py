@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
-    AttachKBRequest,
     AddMemberRequest,
     ApiKey,
     ApiKeyListResponse,
@@ -28,7 +27,6 @@ from voiceai.platform.models import (
     CreateApiKeyResponse,
     CreateGraphRequest,
     CreateIntegrationRequest,
-    CreateKBRequest,
     CreateSubAccountRequest,
     CreateToolRequest,
     CreateVoiceRequest,
@@ -55,8 +53,6 @@ from voiceai.platform.models import (
     UpdateIntegrationRequest,
     UpdateOrganizationRequest,
     UpdateWorkflowRequest,
-    KBListResponse,
-    KnowledgeBase,
     LedgerEntry,
     LedgerListResponse,
     Member,
@@ -383,61 +379,6 @@ async def delete_batch(batch_id: str, store: MemoryStore = Depends(get_store),
     batch.status = BatchStatus.STOPPED
     await store.save_batch(batch)
     return DeletedResponse()
-
-
-# --- knowledge bases ---------------------------------------------------------------
-
-kbs_router = APIRouter(prefix="/knowledgebases", tags=["Knowledge Bases"])
-
-
-@kbs_router.post("", response_model=KnowledgeBase, status_code=201)
-async def create_kb(payload: CreateKBRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> KnowledgeBase:
-    kb = KnowledgeBase(kb_id=new_id("kb"), name=payload.name, sources=list(payload.sources), status="ready")
-    await store.save_kb(kb)
-    return kb
-
-
-@kbs_router.get("", response_model=KBListResponse)
-async def list_kbs(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> KBListResponse:
-    return KBListResponse(knowledgebases=await store.list_kbs())
-
-
-@kbs_router.post("/{kb_id}/attach", response_model=KnowledgeBase)
-async def attach_kb(kb_id: str, payload: AttachKBRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> KnowledgeBase:
-    kb = await store.get_kb(kb_id)
-    if kb is None:
-        raise _not_found("Knowledge base", kb_id)
-    if payload.agent_id not in kb.agent_ids:
-        kb.agent_ids.append(payload.agent_id)
-    await store.save_kb(kb)
-    return kb
-
-
-@kbs_router.delete("/{kb_id}", response_model=DeletedResponse)
-async def delete_kb(kb_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DeletedResponse:
-    if not await store.delete_kb(kb_id):
-        raise _not_found("Knowledge base", kb_id)
-    return DeletedResponse()
-
-
-@kbs_router.post("/{kb_id}/detach", response_model=KnowledgeBase)
-async def detach_kb(kb_id: str, payload: AttachKBRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> KnowledgeBase:
-    kb = await store.get_kb(kb_id)
-    if kb is None:
-        raise _not_found("Knowledge base", kb_id)
-    kb.agent_ids = [agent_id for agent_id in kb.agent_ids if agent_id != payload.agent_id]
-    await store.save_kb(kb)
-    return kb
 
 
 # --- tools --------------------------------------------------------------------------
@@ -1232,9 +1173,8 @@ def single_app_routers() -> list[APIRouter]:
         simulate_router,
         executions_router,
         batches_router,
-        # numbers_router retired in spec 0074 — `voiceai/modules/numbers` owns the
+        # kbs_router retired in spec 0075; numbers_router in spec 0074 — `voiceai/modules/numbers` owns the
         # family now, and module routers mount first (first match wins).
-        kbs_router,
         webhooks_router,
         inbound_router,
         agents_router,

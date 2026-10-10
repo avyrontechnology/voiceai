@@ -60,6 +60,9 @@ class Collections(str, Enum):
     #: the name is deliberately unchanged so live rows are not orphaned by a
     #: rename, which is why the member keeps its `PLATFORM_` prefix.
     PLATFORM_NUMBERS = "platform_numbers"
+    #: The knowledge bases family. Owned by `voiceai/modules/knowledge` since
+    #: spec 0075 — the name predates the module and renaming it would orphan
+    #: live rows, which is why the member keeps its `PLATFORM_` prefix.
     PLATFORM_KBS = "platform_kbs"
     PLATFORM_TOOLS = "platform_tools"
     PLATFORM_WEBHOOKS = "platform_webhooks"

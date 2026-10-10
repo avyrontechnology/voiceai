@@ -44,6 +44,7 @@ from voiceai.modules import (  # noqa: E402
     catalog,
     chat,
     health,
+    knowledge,
     numbers,
     privacy,
     tools,
@@ -65,6 +66,7 @@ ALL_MODULES: tuple[ModuleDef, ...] = (
     chat.MODULE,
     privacy.MODULE,
     numbers.MODULE,
+    knowledge.MODULE,
 )
 
 __all__ = ["ALL_MODULES", "ModuleDef"]

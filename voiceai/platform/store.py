@@ -19,7 +19,6 @@ from voiceai.platform.models import (
     InboundConfig,
     Integration,
     Invite,
-    KnowledgeBase,
     LedgerEntry,
     Organization,
     SessionRecord,
@@ -170,19 +169,6 @@ class MemoryStore:
         return items
 
     # -- knowledge bases -------------------------------------------------------------
-
-    async def save_kb(self, kb: KnowledgeBase) -> None:
-        await self._put("kbs", kb.kb_id, kb.model_dump(mode="json"))
-
-    async def get_kb(self, kb_id: str) -> Optional[KnowledgeBase]:
-        raw = await self._get("kbs", kb_id)
-        return KnowledgeBase(**raw) if raw else None
-
-    async def list_kbs(self) -> List[KnowledgeBase]:
-        return [KnowledgeBase(**raw) for raw in await self._all("kbs")]
-
-    async def delete_kb(self, kb_id: str) -> bool:
-        return await self._delete("kbs", kb_id)
 
     # -- tools ---------------------------------------------------------------------
 

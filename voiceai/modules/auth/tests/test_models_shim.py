@@ -173,6 +173,11 @@ REMOVED_BY_SPEC: dict[str, str] = {
     "PhoneNumber": "spec 0074 — moved to voiceai.modules.numbers.models",
     "PhoneNumberListResponse": "spec 0074 — the numbers module's list response (NumberListResponse); the wire shape ('numbers') is unchanged",
     "CreatePhoneNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
+    "KnowledgeBase": "spec 0075 — moved to voiceai.modules.knowledge.models",
+    "KBSource": "spec 0075 — moved to voiceai.modules.knowledge.models",
+    "KBListResponse": "spec 0075 — the knowledge module's list response (KnowledgeListResponse); the wire shape ('knowledgebases') is unchanged",
+    "CreateKBRequest": "spec 0075 — CreateKnowledgeRequest in voiceai.modules.knowledge.schemas",
+    "AttachKBRequest": "spec 0075 — AttachKnowledgeRequest in voiceai.modules.knowledge.schemas",
     "AssignNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
 }
 
@@ -195,6 +200,14 @@ def test_removed_names_are_importable_from_their_new_home() -> None:
 
     assert numbers_models.PhoneNumber.__name__ == "PhoneNumber"
     assert numbers_schemas.NumberListResponse.__name__ == "NumberListResponse"
+    from voiceai.modules.knowledge import models as knowledge_models
+    from voiceai.modules.knowledge import schemas as knowledge_schemas
+
+    assert knowledge_models.KnowledgeBase.__name__ == "KnowledgeBase"
+    assert knowledge_models.KBSource.__name__ == "KBSource"
+    assert knowledge_schemas.KnowledgeListResponse.__name__ == "KnowledgeListResponse"
+    assert knowledge_schemas.CreateKnowledgeRequest.__name__ == "CreateKnowledgeRequest"
+    assert knowledge_schemas.AttachKnowledgeRequest.__name__ == "AttachKnowledgeRequest"
     assert numbers_schemas.CreateNumberRequest.__name__ == "CreateNumberRequest"
     assert numbers_schemas.AssignNumberRequest.__name__ == "AssignNumberRequest"
 
