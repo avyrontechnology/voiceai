@@ -231,7 +231,8 @@ def test_shared_paths_belong_to_modules_and_the_rest_to_the_platform_router(sing
     assert owners[("GET", f"{API_PREFIX}/tools")].startswith("voiceai.modules.tools")
     assert owners[("GET", f"{API_PREFIX}/voices")].startswith("voiceai.modules.voices")
     assert owners[("GET", f"{API_PREFIX}/wallet")].startswith("voiceai.modules.wallet")
-    assert owners[("GET", f"{API_PREFIX}/phone-numbers")] == "voiceai.platform.router"
+    # spec 0074: the numbers family moved out of the platform bucket into its module.
+    assert owners[("GET", f"{API_PREFIX}/phone-numbers")] == "voiceai.modules.numbers.controller"
     assert owners[("GET", f"{API_PREFIX}/api-keys")] == "voiceai.platform.router"
     platform_owned = sum(1 for owner in owners.values() if owner == "voiceai.platform.router")
-    assert platform_owned == 74
+    assert platform_owned == 68  # spec 0074: 6 phone-number routes left the platform bucket

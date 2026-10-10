@@ -166,10 +166,37 @@ SHARED_IDENTITIES = (
 )
 
 
+#: Names a spec deliberately removed from the legacy surface, with the spec that
+#: owns the removal. A deletion is only legal when it is listed here — an
+#: *unlisted* disappearance is still a regression.
+REMOVED_BY_SPEC: dict[str, str] = {
+    "PhoneNumber": "spec 0074 — moved to voiceai.modules.numbers.models",
+    "PhoneNumberListResponse": "spec 0074 — the numbers module's list response (NumberListResponse); the wire shape ('numbers') is unchanged",
+    "CreatePhoneNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
+    "AssignNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
+}
+
+
 def test_legacy_surface_stays_a_superset_of_the_snapshot() -> None:
-    """Recorded names may not disappear from the legacy module."""
+    """Recorded names may not disappear from the legacy module.
+
+    Exception: a name a spec deliberately migrated out, which must be listed in
+    `REMOVED_BY_SPEC` and still be importable from its new module home.
+    """
     current = {name for name in dir(legacy_models) if not name.startswith("_")}
-    assert PRE_MOVE_PUBLIC_NAMES <= current, sorted(PRE_MOVE_PUBLIC_NAMES - current)
+    missing = PRE_MOVE_PUBLIC_NAMES - current
+    assert missing <= set(REMOVED_BY_SPEC), sorted(missing - set(REMOVED_BY_SPEC))
+
+
+def test_removed_names_are_importable_from_their_new_home() -> None:
+    """A migration must move the name, not just delete it."""
+    from voiceai.modules.numbers import models as numbers_models
+    from voiceai.modules.numbers import schemas as numbers_schemas
+
+    assert numbers_models.PhoneNumber.__name__ == "PhoneNumber"
+    assert numbers_schemas.NumberListResponse.__name__ == "NumberListResponse"
+    assert numbers_schemas.CreateNumberRequest.__name__ == "CreateNumberRequest"
+    assert numbers_schemas.AssignNumberRequest.__name__ == "AssignNumberRequest"
 
 
 def test_moved_names_are_identical_objects_in_both_homes() -> None:

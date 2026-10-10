@@ -30,7 +30,6 @@ from voiceai.platform.models import (
     KnowledgeBase,
     LedgerEntry,
     Organization,
-    PhoneNumber,
     SessionRecord,
     SubAccount,
     Tool,
@@ -79,10 +78,9 @@ async def _run(store: MemoryStore, scenario: Scenario, tenant_id: str = TENANT_A
 # -- scenarios: the same script runs against MemoryStore and the bridge ----------------------
 
 # Models are built once so both stores see identical default timestamps.
-NUMBER_1 = PhoneNumber(number_id="n1", number="+911", created_at=T0)
-NUMBER_1B = PhoneNumber(number_id="n1", number="+913", created_at=T0)
-NUMBER_2 = PhoneNumber(number_id="n2", number="+912", created_at=T0)
-KB_1 = KnowledgeBase(kb_id="kb1", name="docs", created_at=T0)
+KB_1 = KnowledgeBase(kb_id="n1", name="first", created_at=T0)
+KB_1B = KnowledgeBase(kb_id="n1", name="first-replaced", created_at=T0)
+KB_2 = KnowledgeBase(kb_id="n2", name="second", created_at=T0)
 WEBHOOK_1 = Webhook(webhook_id="w1", url="https://example.test/hook", created_at=T0)
 TOOL_A = Tool(tool_id="t1", name="a", kind="custom", agent_id="agent-1")
 TOOL_B = Tool(tool_id="t2", name="b", kind="custom", agent_id="agent-2")
@@ -124,7 +122,7 @@ LEDGER_ROWS = [
     for index in range(1, 7)
 ]
 MANY_NUMBERS = [
-    PhoneNumber(number_id=f"many-{index}", number=f"+9100{index}", created_at=T0) for index in range(ROWS_PAST_ONE_PAGE)
+    KnowledgeBase(kb_id=f"many-{index}", name=f"kb-{index}", created_at=T0) for index in range(ROWS_PAST_ONE_PAGE)
 ]
 MANY_LEDGER_ROWS = [
     LedgerEntry(
@@ -135,17 +133,17 @@ MANY_LEDGER_ROWS = [
 
 
 async def _numbers_crud(store: MemoryStore) -> list[Any]:
-    await store.save_number(NUMBER_1)
-    await store.save_number(NUMBER_2)
-    await store.save_number(NUMBER_1B)  # same id: replace
+    await store.save_kb(KB_1)
+    await store.save_kb(KB_2)
+    await store.save_kb(KB_1B)  # same id: replace
     return [
-        await store.get_number("n1"),
-        await store.list_numbers(),
-        await store.delete_number("n2"),
-        await store.delete_number("n2"),  # already gone
-        await store.get_number("n2"),
-        await store.list_numbers(),
-        await store.get_number("missing"),
+        await store.get_kb("n1"),
+        await store.list_kbs(),
+        await store.delete_kb("n2"),
+        await store.delete_kb("n2"),  # already gone
+        await store.get_kb("n2"),
+        await store.list_kbs(),
+        await store.get_kb("missing"),
     ]
 
 
@@ -277,7 +275,7 @@ async def _organization_wallet_ledger(store: MemoryStore) -> list[Any]:
 
 
 async def _reset_platform(store: MemoryStore) -> list[Any]:
-    await store.save_number(NUMBER_1)
+    await store.save_kb(KB_1)
     await store.save_kb(KB_1)
     await store.save_execution(EXEC_OLD)
     await store.save_wallet(WALLET_1)
@@ -286,7 +284,7 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
     cleared = await store.reset_platform()
     return [
         cleared,
-        await store.list_numbers(),
+        await store.list_kbs(),
         await store.list_kbs(),
         await store.list_executions(),
         await store.get_wallet(),
@@ -297,15 +295,15 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
 
 async def _past_one_page(store: MemoryStore) -> list[Any]:
     for number in MANY_NUMBERS:
-        await store.save_number(number)
+        await store.save_kb(number)
     for entry in MANY_LEDGER_ROWS:
         await store.add_ledger_entry(entry)
     return [
-        await store.list_numbers(),  # every row, not the first page
+        await store.list_kbs(),  # every row, not the first page
         await store.list_ledger(limit=5),  # newest five sit past the first page
         await store.list_ledger(limit=3, entry_type="debit"),
         await store.reset_platform(),  # clears rows past the first page too
-        await store.list_numbers(),
+        await store.list_kbs(),
         await store.list_ledger(),
     ]
 
@@ -335,10 +333,10 @@ async def test_bridge_matches_memory_store(bridge: RepositoryPlatformStore, name
 async def test_memory_store_still_serves_legacy_callers() -> None:
     """The async-primitive split keeps MemoryStore's own behaviour (legacy suites rely on it)."""
     store = MemoryStore()
-    await store.save_number(NUMBER_1)
+    await store.save_kb(KB_1)
     assert await store.count_users() == 0
-    assert [number.number_id for number in await store.list_numbers()] == ["n1"]
-    assert (await store.reset_platform())["numbers"] == 1
+    assert [kb.kb_id for kb in await store.list_kbs()] == [KB_1.kb_id]
+    assert (await store.reset_platform())["kbs"] == 1
 
 
 # -- tenant isolation ---------------------------------------------------------------------
@@ -346,18 +344,18 @@ async def test_memory_store_still_serves_legacy_callers() -> None:
 
 async def test_rows_are_invisible_to_other_tenants(bridge: RepositoryPlatformStore) -> None:
     with _bound(TENANT_A):
-        await bridge.save_number(NUMBER_1)
+        await bridge.save_kb(KB_1)
         await bridge.save_organization(ORG_1)
         first_read = await bridge.get_wallet()
         assert (await bridge.get_wallet()) == first_read  # default materialised once, then stable
     with _bound(TENANT_B):
-        assert await bridge.list_numbers() == []
-        assert await bridge.get_number("n1") is None
-        assert await bridge.delete_number("n1") is False
+        assert await bridge.list_kbs() == []
+        assert await bridge.get_kb("n1") is None
+        assert await bridge.delete_kb("n1") is False
         assert (await bridge.get_organization()).name != ORG_1.name
-        assert (await bridge.reset_platform())["numbers"] == 0
+        assert (await bridge.reset_platform())["kbs"] == 0
     with _bound(TENANT_A):
-        assert (await bridge.get_number("n1")) is not None
+        assert (await bridge.get_kb("n1")) is not None
         assert (await bridge.get_organization()).name == ORG_1.name
 
 
@@ -365,16 +363,16 @@ async def test_listing_walks_every_own_row_past_one_page(bridge: RepositoryPlatf
     """130 rows for one tenant all list, in order; another tenant's rows never do (spec 0050)."""
     with _bound(TENANT_A):
         for number in MANY_NUMBERS:
-            await bridge.save_number(number)
+            await bridge.save_kb(number)
     with _bound(TENANT_B):
         for index in range(FOREIGN_ROWS):
-            await bridge.save_number(PhoneNumber(number_id=f"foreign-{index}", number=f"+9200{index}"))
-        foreign = [number.number_id for number in await bridge.list_numbers()]
+            await bridge.save_kb(KnowledgeBase(kb_id=f"foreign-{index}", name=f"foreign-{index}"))
+        foreign = [kb.kb_id for kb in await bridge.list_kbs()]
     with _bound(TENANT_A):
-        own = [number.number_id for number in await bridge.list_numbers()]
-        everything = await bridge.scan_family("numbers")  # the tenant-blind inbound read
+        own = [kb.kb_id for kb in await bridge.list_kbs()]
+        everything = await bridge.scan_family("kbs")  # the tenant-blind inbound read
 
-    assert own == [number.number_id for number in MANY_NUMBERS]
+    assert own == [kb.kb_id for kb in MANY_NUMBERS]
     assert foreign == [f"foreign-{index}" for index in range(FOREIGN_ROWS)]
     assert len(everything) == ROWS_PAST_ONE_PAGE + FOREIGN_ROWS
 
@@ -393,39 +391,39 @@ class _RecordingRepository(InMemoryRepository[PlatformRow]):
 
 async def test_tenant_listing_pages_only_that_tenant(database: InMemoryDatabase, auth_store: MongoAuthStore) -> None:
     """A tenant listing is tenant-paged at the driver: a neighbour's volume costs it no query."""
-    numbers = _RecordingRepository(database, Collections.PLATFORM_NUMBERS)
+    numbers = _RecordingRepository(database, Collections.PLATFORM_KBS)
     repositories: dict[Collections, BaseRepository[PlatformRow]] = {
         collection: InMemoryRepository(database, collection, PlatformRow) for collection in PLATFORM_COLLECTIONS
     }
-    repositories[Collections.PLATFORM_NUMBERS] = numbers
+    repositories[Collections.PLATFORM_KBS] = numbers
     store = RepositoryPlatformStore(auth_store, repositories)
     with _bound(TENANT_B):
         for number in MANY_NUMBERS:
-            await store.save_number(number)
+            await store.save_kb(number)
     with _bound(TENANT_A):
-        await store.save_number(NUMBER_2)
-        listed = await store.list_numbers()
+        await store.save_kb(KB_2)
+        listed = await store.list_kbs()
         tenant_queries = list(numbers.selectors)
-        await store.scan_family("numbers")
+        await store.scan_family("kbs")
 
-    assert [number.number_id for number in listed] == [NUMBER_2.number_id]
+    assert [kb.kb_id for kb in listed] == [KB_2.kb_id]
     assert tenant_queries == [{TENANT_ID_FIELD: TENANT_A}]  # one page, this tenant's selector
     assert numbers.selectors[1:] == [{}, {}]  # the inbound scan pages the whole collection
 
 
 async def test_rows_carry_the_tenant_stamp(database: InMemoryDatabase, bridge: RepositoryPlatformStore) -> None:
     with _bound(TENANT_A):
-        await bridge.save_number(NUMBER_1)
-    documents = database.collections["platform_numbers"]
+        await bridge.save_kb(KB_1)
+    documents = database.collections["platform_kbs"]
     assert [document["tenant_id"] for document in documents.values()] == [TENANT_A]
-    assert documents["n1"]["payload"]["number"] == NUMBER_1.number
+    assert documents["n1"]["payload"]["name"] == KB_1.name
 
 
 async def test_unbound_tenant_fails_closed(bridge: RepositoryPlatformStore) -> None:
     with pytest.raises(TenantNotBoundError):
-        await bridge.save_number(NUMBER_1)
+        await bridge.save_kb(KB_1)
     with pytest.raises(TenantNotBoundError):
-        await bridge.list_numbers()
+        await bridge.list_kbs()
 
 
 # -- auth families delegate to the greenfield store ----------------------------------------

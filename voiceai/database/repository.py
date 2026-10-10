@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from voiceai.common.constants import MAX_PAGE_SIZE, MIN_PAGE
 from voiceai.common.datetime_utils import utc_now
 from voiceai.common.errors import NotFoundError
@@ -56,6 +58,21 @@ class BaseRepository(Protocol[TModel]):
 
     async def get(self, item_id: str) -> TModel | None:
         """Return the active document with this id, or ``None`` when there is none."""
+        ...
+
+    async def raw_documents(self) -> Sequence[dict[str, Any]]:
+        """Return every active stored document, untyped and unvalidated.
+
+        The migration escape hatch: ``list_where``/``walk_pages`` validate every row
+        against the model type, so a row written *before* its collection was adopted by
+        a module (the legacy ``{payload: ...}`` envelope, say) is invisible to them. A
+        module migrating an existing collection reads through here and converts the shapes
+        it understands itself, rather than the shared repository learning every legacy
+        envelope in the database.
+
+        Async on every backend because the driver backend must read from the server;
+        the in-memory one answers without I/O rather than the protocol varying.
+        """
         ...
 
     async def list(self, params: PaginationParams) -> Page[TModel]:
@@ -332,9 +349,28 @@ class InMemoryRepository(Generic[TModel]):
 
         Typed as a ``Sequence`` rather than a ``list``: inside this class body the name
         ``list`` refers to the repository's own listing method, not to the builtin.
+
+        A row that does not validate as the model type is **skipped, not raised**, so one
+        unreadable row cannot take down every listing that walks the collection. Modules
+        that must still see those rows read them through :meth:`raw_documents`.
         """
-        models = (self._model_type.model_validate(document) for document in self._documents().values())
-        return [model for model in models if model.is_active]
+        models: list[TModel] = []
+        for document in self._documents().values():
+            try:
+                model = self._model_type.model_validate(document)
+            except ValidationError:
+                continue
+            if model.is_active:
+                models.append(model)
+        return models
+
+    async def raw_documents(self) -> Sequence[dict[str, Any]]:
+        """Return every active stored document, untyped and unvalidated (migration path).
+
+        Typed as ``Sequence`` for the same reason as ``_active_models``: inside this class
+        body ``list`` is the repository's own listing method, not the builtin.
+        """
+        return [dict(doc) for doc in self._documents().values() if doc.get("is_active", True)]
 
 
 class MotorRepository(Generic[TModel]):
@@ -419,7 +455,7 @@ class MotorRepository(Generic[TModel]):
         return stored
 
     async def get(self, item_id: str) -> TModel | None:
-        """Read one document by id.
+        """Read a document by id.
 
         Args:
             item_id: Identifier assigned at insert time.
@@ -432,6 +468,13 @@ class MotorRepository(Generic[TModel]):
             return None
         model = self._to_model(document)
         return model if model.is_active else None
+
+    async def raw_documents(self) -> Sequence[dict[str, Any]]:
+        """Return every active stored document, untyped and unvalidated (migration path)."""
+        documents: list[dict[str, Any]] = []
+        async for document in self._collection.find({IS_ACTIVE_FIELD: True}):
+            documents.append(dict(document))
+        return documents
 
     async def list(self, params: PaginationParams) -> Page[TModel]:
         """Read one page of active documents, oldest first.

@@ -12,7 +12,7 @@ import pytest
 
 from voiceai.common.constants import DEFAULT_TENANT_ID
 from voiceai.common.tenancy import TenantContext, bind_tenant
-from voiceai.core.container import VoiceAIContainer, build_container, create_wallet_repository
+from voiceai.core.container import VoiceAIContainer, _build_numbers_repository, build_container, create_wallet_repository
 from voiceai.core.environment import Environment
 from voiceai.platform.models import User as PlatformUser
 from voiceai.tooling.backfill_upstash_to_atlas import (
@@ -191,7 +191,10 @@ async def test_apply_copies_durable_rows_once_and_never_overwrites(
     assert (numbers.seen, numbers.copied, numbers.skipped) == (2, 2, 0)
     with _bound():
         store = container.platform_store()
-        assert sorted(row.number_id for row in await store.list_numbers()) == ["n1", "n2"]
+        # spec 0074: numbers moved to its own module, so the backfilled rows are
+        # read through the numbers repository rather than the platform store.
+        numbers_repo = _build_numbers_repository(container.db_client())
+        assert sorted(row.number for row in await numbers_repo.list_all()) == ["+15550000001", "+15550000002"]
         assert (await store.get_webhook("w1")) is not None
         assert (await store.get_execution("e1")) is not None
         assert (await store.get_organization()).name == "Legacy Org"
@@ -215,9 +218,10 @@ async def test_apply_copies_durable_rows_once_and_never_overwrites(
 async def test_apply_stamps_the_requested_tenant(container: VoiceAIContainer, tmp_path: Path) -> None:
     await apply(_seeded_source(), container, tenant_id="acme", prompts_dir=tmp_path)
     with bind_tenant(TenantContext(tenant_id="acme", request_id="t")):
-        assert len(await container.platform_store().list_numbers()) == 2
+        numbers_repo = _build_numbers_repository(container.db_client())
+        assert len(await numbers_repo.list_all()) == 2
     with _bound():
-        assert await container.platform_store().list_numbers() == []
+        assert await _build_numbers_repository(container.db_client()).list_all() == []
 
 
 # -- CLI --------------------------------------------------------------------------------

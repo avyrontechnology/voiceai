@@ -172,42 +172,6 @@ class BatchListResponse(BaseModel):
     batches: List[Batch]
 
 
-class CreatePhoneNumberRequest(BaseModel):
-    number: str = Field(..., min_length=1)
-    provider: PhoneNumberProvider = "simulated"
-    country: str = Field("IN", min_length=1)
-    # Optional Talko owner — lets Otoba be single-entry: once set here,
-    # Talko auto-uses it on DB-miss without its own DID row.
-    talko_partner_id: Optional[int] = None
-    talko_vendor_config_id: Optional[str] = None
-
-
-class AssignNumberRequest(BaseModel):
-    agent_id: str = Field(..., min_length=1)
-    # Optional Talko owner (same single-entry purpose). When provided,
-    # overwrites; when omitted, existing values are kept.
-    talko_partner_id: Optional[int] = None
-    talko_vendor_config_id: Optional[str] = None
-
-
-class PhoneNumber(BaseModel):
-    number_id: str
-    number: str
-    provider: PhoneNumberProvider = "simulated"
-    country: str = "IN"
-    assigned_agent_id: Optional[str] = None
-    status: str = "active"
-    # Talko owner for dynamic inbound: Talko falls back to the engine on
-    # DB-miss and uses these without needing its own DID row.
-    talko_partner_id: Optional[int] = None
-    talko_vendor_config_id: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class PhoneNumberListResponse(BaseModel):
-    numbers: List[PhoneNumber]
-
-
 class KBSource(BaseModel):
     type: KBSourceType
     ref: str = Field(..., min_length=1, description="URL, file key, or inline text.")

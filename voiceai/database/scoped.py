@@ -36,6 +36,7 @@ from voiceai.database.constants import (
     DETAIL_COLLECTION,
     DETAIL_ITEM_ID,
     DOCUMENT_NOT_FOUND_MESSAGE,
+    IS_ACTIVE_FIELD,
     TENANT_ID_FIELD,
     Collections,
 )
@@ -98,6 +99,20 @@ class TenantScopedRepository(Generic[TModel]):
         if model is None or model.tenant_id != self._tenant_id:
             return None
         return model
+
+    async def raw_documents(self) -> Sequence[dict[str, Any]]:
+        """Return this tenant's raw rows, untyped, applying the same re-check.
+
+        Delegates to the inner repository and then re-checks ownership and the active
+        flag per row, exactly as ``list_where`` does — the untyped path is a migration
+        escape hatch, not a way around tenant isolation (spec 0020, M1b).
+        """
+        rows = await self._inner.raw_documents()
+        return [
+            row
+            for row in rows
+            if row.get(TENANT_ID_FIELD) == self._tenant_id and row.get(IS_ACTIVE_FIELD, True)
+        ]
 
     async def list(self, params: PaginationParams) -> Page[TModel]:
         """Page over this tenant's active documents, oldest first.

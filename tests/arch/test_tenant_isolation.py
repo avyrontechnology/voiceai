@@ -43,6 +43,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/auth/models/team.py",  # spec 0040: identity program
         "voiceai/modules/auth/models/membership.py",  # spec 0040: identity program
         "voiceai/modules/auth/controller.py",  # spec 0040: identity CRUD routes
+        "voiceai/modules/numbers/tests/test_numbers_repository.py",  # spec 0074: tenant-isolation pin
         "voiceai/modules/auth/ports.py",  # spec 0040: identity store tail
         "voiceai/modules/auth/repository.py",  # spec 0040: identity store tail
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping

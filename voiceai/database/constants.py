@@ -56,6 +56,9 @@ class Collections(str, Enum):
     #: module collection (`executions` already holds `PlacedCall`).
     PLATFORM_EXECUTIONS = "platform_executions"
     PLATFORM_BATCHES = "platform_batches"
+    #: The numbers family. Owned by `voiceai/modules/numbers` since spec 0074 —
+    #: the name is deliberately unchanged so live rows are not orphaned by a
+    #: rename, which is why the member keeps its `PLATFORM_` prefix.
     PLATFORM_NUMBERS = "platform_numbers"
     PLATFORM_KBS = "platform_kbs"
     PLATFORM_TOOLS = "platform_tools"

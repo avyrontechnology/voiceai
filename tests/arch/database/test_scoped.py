@@ -50,6 +50,9 @@ class _FakeRepository:
         model = self._documents.get(item_id)
         return model if model is not None and model.is_active else None
 
+    async def raw_documents(self) -> Sequence[dict[str, Any]]:
+        return [model.model_dump() for model in self._documents.values() if model.is_active]
+
     async def list(self, params: PaginationParams) -> Any:
         raise AssertionError("scoped list must not delegate to the global listing")
 
@@ -271,3 +274,26 @@ async def test_walk_pages_stops_on_an_empty_page_from_a_leaking_backend() -> Non
 
     assert rows == []
     assert len(inner.list_where_calls) == 1
+
+
+class TestRawDocumentsStayTenantBound:
+    """The untyped migration path must not become a way around isolation (spec 0074)."""
+
+    async def test_only_this_tenants_rows_are_returned(self) -> None:
+        """`raw_documents` applies the same ownership re-check `list_where` does."""
+        inner = _FakeRepository()
+        a = await inner.insert(_Row(id="a1", tenant_id="tenant-a"))
+        await inner.insert(_Row(id="b1", tenant_id="tenant-b"))
+        view = TenantScopedRepository(inner, "tenant-a", Collections.USERS)
+
+        rows = await view.raw_documents()
+
+        assert [row["id"] for row in rows] == [a.id]
+
+    async def test_a_leaking_backend_cannot_expose_a_foreign_row(self) -> None:
+        """Even if the backend hands back a foreign row, the view filters it out."""
+        inner = _FakeRepository()
+        await inner.insert(_Row(id="b1", tenant_id="tenant-b"))
+        view = TenantScopedRepository(inner, "tenant-a", Collections.USERS)
+
+        assert await view.raw_documents() == []

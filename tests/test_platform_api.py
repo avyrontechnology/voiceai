@@ -237,21 +237,23 @@ async def test_phone_number_crud_and_assignment(client):
         "/api/v1/phone-numbers", json={"number": "+911234567890", "provider": "simulated", "country": "IN"}
     )
     assert create.status_code == 201
-    number_id = create.json()["number_id"]
+    # spec 0074: the family moved to its module, which answers with the shared
+    # success envelope like every other module route.
+    number_id = create.json()["data"]["number_id"]
 
     assign = await client.post(f"/api/v1/phone-numbers/{number_id}/assign", json={"agent_id": "agent-1"})
     assert assign.status_code == 200
-    assert assign.json()["assigned_agent_id"] == "agent-1"
+    assert assign.json()["data"]["assigned_agent_id"] == "agent-1"
 
     listed = await client.get("/api/v1/phone-numbers")
-    assert len(listed.json()["numbers"]) == 1
+    assert len(listed.json()["data"]["numbers"]) == 1
 
     unassign = await client.post(f"/api/v1/phone-numbers/{number_id}/unassign")
-    assert unassign.json()["assigned_agent_id"] is None
+    assert unassign.json()["data"]["assigned_agent_id"] is None
 
     delete = await client.delete(f"/api/v1/phone-numbers/{number_id}")
     assert delete.status_code == 200
-    assert (await client.get("/api/v1/phone-numbers")).json() == {"numbers": []}
+    assert (await client.get("/api/v1/phone-numbers")).json()["data"] == {"numbers": []}
 
 
 async def test_phone_number_rejects_bad_provider(client):
@@ -272,15 +274,15 @@ async def test_phone_number_resolve_returns_owner(client):
         },
     )
     assert create.status_code == 201
-    number_id = create.json()["number_id"]
+    number_id = create.json()["data"]["number_id"]
 
     assign = await client.post(f"/api/v1/phone-numbers/{number_id}/assign", json={"agent_id": "agent-9"})
     assert assign.status_code == 200
 
     resolve = await client.get("/api/v1/phone-numbers/resolve", params={"number": "917965263087"})
     assert resolve.status_code == 200
-    assert resolve.json()["agent_id"] == "agent-9"
-    assert resolve.json()["talko_partner_id"] == 2
+    assert resolve.json()["data"]["agent_id"] == "agent-9"
+    assert resolve.json()["data"]["talko_partner_id"] == 2
 
     missing = await client.get("/api/v1/phone-numbers/resolve", params={"number": "+919999999999"})
     assert missing.status_code == 404

@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.platform.models import (
-    AssignNumberRequest,
     AttachKBRequest,
     AddMemberRequest,
     ApiKey,
@@ -30,7 +29,6 @@ from voiceai.platform.models import (
     CreateGraphRequest,
     CreateIntegrationRequest,
     CreateKBRequest,
-    CreatePhoneNumberRequest,
     CreateSubAccountRequest,
     CreateToolRequest,
     CreateVoiceRequest,
@@ -63,8 +61,6 @@ from voiceai.platform.models import (
     LedgerListResponse,
     Member,
     Organization,
-    PhoneNumber,
-    PhoneNumberListResponse,
     ResetResponse,
     SimulateCallRequest,
     SubAccount,
@@ -386,93 +382,6 @@ async def delete_batch(batch_id: str, store: MemoryStore = Depends(get_store),
         raise _not_found("Batch", batch_id)
     batch.status = BatchStatus.STOPPED
     await store.save_batch(batch)
-    return DeletedResponse()
-
-
-# --- phone numbers ---------------------------------------------------------------
-
-numbers_router = APIRouter(prefix="/phone-numbers", tags=["Phone Numbers"])
-
-
-@numbers_router.post("", response_model=PhoneNumber, status_code=201)
-async def create_number(payload: CreatePhoneNumberRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> PhoneNumber:
-    number = PhoneNumber(
-        number_id=new_id("num"), number=payload.number, provider=payload.provider, country=payload.country,
-        talko_partner_id=payload.talko_partner_id, talko_vendor_config_id=payload.talko_vendor_config_id,
-    )
-    await store.save_number(number)
-    return number
-
-
-@numbers_router.get("", response_model=PhoneNumberListResponse)
-async def list_numbers(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> PhoneNumberListResponse:
-    return PhoneNumberListResponse(numbers=await store.list_numbers())
-
-
-@numbers_router.get("/resolve")
-async def resolve_number(
-    number: str = Query(..., min_length=1, description="Dialed DID in any format (+9179…, 9179…, spaces/dashes)"),
-    store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> JSONResponse:
-    """Resolve a DID to its assigned agent (Talko inbound lookup).
-
-    Single-entry dynamic inbound: Otoba is source of truth for agent +
-    Talko owner. Talko falls back here on DB-miss and auto-uses
-    talko_partner_id/vendor_config_id without its own DID row.
-    Normalizes +/spaces/dashes and 10-vs-12-digit variants the same way
-    Talko does. 404 when unassigned — Talko then rejects fail-closed.
-    """
-    record = await store.get_number_by_digits(number)
-    if record is None or not record.assigned_agent_id:
-        raise HTTPException(status_code=404, detail="Phone number {} not assigned".format(number))
-    content = {"agent_id": record.assigned_agent_id}
-    if record.talko_partner_id is not None:
-        content["talko_partner_id"] = record.talko_partner_id
-    if record.talko_vendor_config_id:
-        content["talko_vendor_config_id"] = record.talko_vendor_config_id
-    return JSONResponse(content=content)
-
-
-@numbers_router.post("/{number_id}/assign", response_model=PhoneNumber)
-async def assign_number(
-    number_id: str, payload: AssignNumberRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> PhoneNumber:
-    number = await store.get_number(number_id)
-    if number is None:
-        raise _not_found("Phone number", number_id)
-    number.assigned_agent_id = payload.agent_id
-    if payload.talko_partner_id is not None:
-        number.talko_partner_id = payload.talko_partner_id
-    if payload.talko_vendor_config_id is not None:
-        number.talko_vendor_config_id = payload.talko_vendor_config_id
-    await store.save_number(number)
-    return number
-
-
-@numbers_router.post("/{number_id}/unassign", response_model=PhoneNumber)
-async def unassign_number(number_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> PhoneNumber:
-    number = await store.get_number(number_id)
-    if number is None:
-        raise _not_found("Phone number", number_id)
-    number.assigned_agent_id = None
-    await store.save_number(number)
-    return number
-
-
-@numbers_router.delete("/{number_id}", response_model=DeletedResponse)
-async def delete_number(number_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DeletedResponse:
-    if not await store.delete_number(number_id):
-        raise _not_found("Phone number", number_id)
     return DeletedResponse()
 
 
@@ -1323,7 +1232,8 @@ def single_app_routers() -> list[APIRouter]:
         simulate_router,
         executions_router,
         batches_router,
-        numbers_router,
+        # numbers_router retired in spec 0074 — `voiceai/modules/numbers` owns the
+        # family now, and module routers mount first (first match wins).
         kbs_router,
         webhooks_router,
         inbound_router,

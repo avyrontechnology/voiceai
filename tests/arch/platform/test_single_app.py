@@ -70,19 +70,22 @@ async def test_numbers_round_trip_lands_in_the_bridge_collection(
 ) -> None:
     created = await owner.post(f"{API}/phone-numbers", json={"number": "+15550001111", "provider": "twilio"})
     assert created.status_code == 201, created.text
-    number_id = created.json()["number_id"]
+    # spec 0074: the family moved to its module, which answers with the shared
+    # success envelope like every other module route.
+    number_id = created.json()["data"]["number_id"]
 
     listed = await owner.get(f"{API}/phone-numbers")
-    assert [row["number_id"] for row in listed.json()["numbers"]] == [number_id]
+    assert [row["number_id"] for row in listed.json()["data"]["numbers"]] == [number_id]
 
     documents = cast(InMemoryDatabase, container.db_client()).collections["platform_numbers"]
     me = (await owner.get(f"{API}/auth/me")).json()["data"]
     tenant = me["user"].get("tenant_id") or me["user"]["org_id"]
     assert documents[number_id]["tenant_id"] == tenant
-    assert documents[number_id]["payload"]["number"] == "+15550001111"
+    # Typed document, no longer the legacy `{payload: {...}}` envelope.
+    assert documents[number_id]["number"] == "+15550001111"
 
     assert (await owner.delete(f"{API}/phone-numbers/{number_id}")).status_code == 200
-    assert (await owner.get(f"{API}/phone-numbers")).json()["numbers"] == []
+    assert (await owner.get(f"{API}/phone-numbers")).json()["data"]["numbers"] == []
     assert (await owner.delete(f"{API}/phone-numbers/{number_id}")).status_code == 404
 
 
@@ -118,7 +121,7 @@ async def test_api_keys_live_in_the_auth_store_and_authenticate_bearer_calls(
     bearer = {"authorization": f"Bearer {secret}"}
     seen = await anonymous.get(f"{API}/phone-numbers", headers=bearer)
     assert seen.status_code == 200, seen.text
-    assert [row["number"] for row in seen.json()["numbers"]] == ["+15550003333"]  # same tenant as the owner
+    assert [row["number"] for row in seen.json()["data"]["numbers"]] == ["+15550003333"]  # same tenant as the owner
     assert (
         await anonymous.get(f"{API}/phone-numbers", headers={"authorization": "Bearer sk_live_nope"})
     ).status_code == 401

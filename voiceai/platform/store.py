@@ -22,7 +22,6 @@ from voiceai.platform.models import (
     KnowledgeBase,
     LedgerEntry,
     Organization,
-    PhoneNumber,
     SessionRecord,
     SubAccount,
     Tool,
@@ -40,28 +39,10 @@ from voiceai.platform.models import (
 logger = configure_logger(__name__)
 
 
-def normalize_phone_digits(raw: str) -> str:
-    """Normalize a phone number to engine-lookup digits (no '+', spaces, dashes).
-
-    Mirrors Talko's ``normalize_phone_number(..., with_plus=False)`` so both
-    sides agree: ``+9179…``, ``9179…``, ``91 79-…`` and 10-digit variants all
-    map to the same ``91XXXXXXXXXX`` key. Non-Indian/short inputs fall back
-    to digits-only.
-    """
-    import re
-
-    if not raw:
-        return ""
-    digits = re.sub(r"\D", "", raw.strip())
-    if not digits:
-        return ""
-    if digits.startswith("91") and len(digits) == 12:
-        return digits
-    if len(digits) == 11 and digits.startswith("0"):
-        return "91" + digits[1:]
-    if len(digits) == 10:
-        return "91" + digits
-    return digits
+# legacy-shim(spec-0074): the normalizer now lives in the numbers module, which
+# owns the Talko contract. Re-exported so remaining legacy imports keep working
+# until the platform store retires; delete with it.
+from voiceai.modules.numbers.static_methods import normalize_phone_digits as normalize_phone_digits  # noqa: E402
 
 #: Singleton document names (wallet + organization settings), shared by every backend.
 SINGLETON_WALLET = "wallet"
@@ -187,51 +168,6 @@ class MemoryStore:
             items = [b for b in items if b.agent_id == agent_id]
         items.sort(key=lambda b: b.created_at, reverse=True)
         return items
-
-    # -- phone numbers -------------------------------------------------------------
-
-    async def save_number(self, number: PhoneNumber) -> None:
-        await self._put("numbers", number.number_id, number.model_dump(mode="json"))
-
-    async def get_number(self, number_id: str) -> Optional[PhoneNumber]:
-        raw = await self._get("numbers", number_id)
-        return PhoneNumber(**raw) if raw else None
-
-    async def list_numbers(self) -> List[PhoneNumber]:
-        return [PhoneNumber(**raw) for raw in await self._all("numbers")]
-
-    async def get_number_by_digits(self, number: str) -> Optional[PhoneNumber]:
-        """Lookup by dialed digits (Talko only knows the DID, not number_id).
-
-        Normalizes both the query and stored numbers so +/spaces/dashes and
-        10-vs-12-digit variants match. Returns None on no match; the caller
-        (resolve endpoint) 404s on missing assignment.
-        """
-        needle = normalize_phone_digits(number or "")
-        if not needle:
-            return None
-        for raw in await self._all("numbers"):
-            try:
-                candidate = PhoneNumber(**raw)
-            except Exception:
-                continue
-            if normalize_phone_digits(candidate.number or "") == needle:
-                return candidate
-        # Last-10 fallback for legacy rows stored without country prefix.
-        if len(needle) >= 10:
-            last10 = needle[-10:]
-            for raw in await self._all("numbers"):
-                try:
-                    candidate = PhoneNumber(**raw)
-                except Exception:
-                    continue
-                stored = normalize_phone_digits(candidate.number or "")
-                if stored and stored[-10:] == last10 and len(stored) >= 10:
-                    return candidate
-        return None
-
-    async def delete_number(self, number_id: str) -> bool:
-        return await self._delete("numbers", number_id)
 
     # -- knowledge bases -------------------------------------------------------------
 

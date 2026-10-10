@@ -353,11 +353,58 @@ def _build_wallet_service(db_client: Any) -> Any:
     return WalletService(create_wallet_repository(db_client))
 
 
-def _build_inbound_store(platform_store: Any) -> Any:
-    """Adapt the platform store to the voice inbound lookup seam (spec 0047 seam, spec 0048 wiring)."""
-    from voiceai.modules.voice.adapters.inbound_store import PlatformInboundStore
+def _build_numbers_repository(db_client: Any) -> Any:
+    """Build the numbers repository over the tenant's scoped view (spec 0074).
 
-    return PlatformInboundStore(platform_store)
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `PhoneNumberRepository` bound to the request's tenant.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.numbers.models import PhoneNumber
+    from voiceai.modules.numbers.repository import PhoneNumberRepository
+
+    return PhoneNumberRepository(_scoped_collection(db_client, Collections.PLATFORM_NUMBERS, PhoneNumber))
+
+
+def _build_numbers_service(db_client: Any) -> Any:
+    """Build the phone numbers service over the tenant's scoped view (spec 0074).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `PhoneNumbersService` bound to the request's tenant.
+    """
+    from voiceai.modules.numbers.service import PhoneNumbersService
+
+    return PhoneNumbersService(_build_numbers_repository(db_client))
+
+
+def _build_inbound_store(db_client: Any, platform_store: Any) -> Any:
+    """Adapt the numbers module to the voice inbound lookup seam (spec 0047 seam, rewired by 0074).
+
+    The assignment lookup reads the numbers collection **unscoped**, and that is load-bearing:
+    an inbound carrier webhook is unauthenticated and arrives before any tenant is known, so
+    the DID→agent lookup must see every tenant's numbers. A per-request scoped repository here
+    would resolve only the tenant bound at that moment and silently drop the rest of the
+    world's inbound calls (spec 0020, M1b).
+
+    The inbound config still comes from the platform store — the `inbound` family retires with
+    its own spec.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.modules.numbers.models import PhoneNumber
+    from voiceai.modules.numbers.repository import PhoneNumberRepository
+    from voiceai.modules.voice.adapters.inbound_store import NumbersInboundStore
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    numbers = PhoneNumberRepository(factory(db_client, Collections.PLATFORM_NUMBERS, PhoneNumber))
+    return NumbersInboundStore(numbers, platform_store)
 
 
 def _build_catalog_service(db_client: Any) -> Any:
@@ -637,6 +684,69 @@ def _build_privacy_service(db_client: Any) -> Any:
     )
 
 
+def _build_retention_service(db_client: Any, environment: Any) -> Any:
+    """Build the retention service with env-TTLd purge targets (spec 0073).
+
+    System-wide by construction: retention is a platform duty, not a tenant's,
+    so the targets walk the *unscoped* repositories and never read the ambient
+    tenant. That is what makes this provider a `Singleton` — a
+    `_scoped_collection` here would pin the first request's tenant forever
+    (spec 0020, M1b). A test pins that the registry omits `CONSENT_RECORDS`:
+    consent is a legal record and is never retention-purged (spec 0071).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        environment: Process configuration (per-collection TTLs).
+
+    Returns:
+        A `RetentionService`.
+    """
+    from datetime import datetime, timedelta
+
+    from voiceai.common.datetime_utils import UTC
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository, walk_pages
+    from voiceai.modules.chat.models import ChatSession
+    from voiceai.modules.privacy.models import PrivacyAuditRecord
+    from voiceai.modules.privacy.retention import RetentionService
+    from voiceai.modules.tools.models import ToolExecutionLog
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+
+    def _expired(updated_at: datetime, threshold: datetime) -> bool:
+        """Report whether `updated_at` predates `threshold`; naive reads are UTC."""
+        aware = updated_at.replace(tzinfo=UTC) if updated_at.tzinfo is None else updated_at
+        return aware < threshold
+
+    def _target(collection: Any, model: Any, ttl_s: int) -> tuple[int, Any]:
+        """Register one collection: build its repository once, return (ttl, erase)."""
+        repo = factory(db_client, collection, model)
+
+        async def _erase(cutoff: datetime) -> int:
+            """Soft-erase every active row whose last write predates the TTL."""
+            threshold = cutoff - timedelta(seconds=ttl_s)
+            erased = 0
+            async for row in walk_pages(repo):
+                if _expired(row.updated_at, threshold) and await repo.soft_delete(row.id or ""):
+                    erased += 1
+            return erased
+
+        return ttl_s, _erase
+
+    return RetentionService(
+        {
+            "privacy_audit_log": _target(
+                Collections.PRIVACY_AUDIT_LOG, PrivacyAuditRecord, environment.retention_privacy_audit_s
+            ),
+            "chat_sessions": _target(Collections.CHAT_SESSIONS, ChatSession, environment.retention_chat_sessions_s),
+            "tool_execution_logs": _target(
+                Collections.TOOL_EXECUTION_LOGS, ToolExecutionLog, environment.retention_tool_execution_logs_s
+            ),
+        }
+    )
+
+
 def _build_mcp_server_router(tools_service: Any, tool_executor: Any) -> Any:
     """Build the MCP server envelope router over tenant-wired services (spec 0057).
 
@@ -865,7 +975,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Spec 0048: the frozen platform routers persist through the greenfield repositories.
     platform_store = providers.Singleton(create_platform_store, db_client, auth_store)
     # Spec 0047 seam: the inbound webhook resolves called numbers through the same store.
-    inbound_store = providers.Factory(_build_inbound_store, platform_store)
+    inbound_store = providers.Factory(_build_inbound_store, db_client, platform_store)
 
     # Auth Module
     auth_service = providers.Factory(_build_auth_service, auth_store, environment)
@@ -914,6 +1024,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Spec 0071 privacy lane: per-request (Factory — the scoped consent view
     # pins the ambient tenant at construction, same hazard as tools_service).
     privacy_service = providers.Factory(_build_privacy_service, db_client)
+    retention_service = providers.Singleton(_build_retention_service, db_client, environment)
 
     agent_service = providers.Factory(
         _build_agent_service,
@@ -943,6 +1054,11 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Voices Module: per-request tenant view (spec 0025). Factory, never
     # Singleton — same pinning hazard as the other scoped views.
     voices_service = providers.Factory(_build_voices_service, db_client, agent_definitions, catalog_service)
+
+    # Numbers module (spec 0074): per-request tenant view, like every scoped
+    # service — Factory, never Singleton (a singleton would pin the first
+    # request's tenant).
+    numbers_service = providers.Factory(_build_numbers_service, db_client=db_client)
 
 
 async def aclose_container(container: VoiceAIContainer) -> None:
@@ -993,6 +1109,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.voice.controller",
             "voiceai.modules.wallet.controller",
             "voiceai.modules.privacy.controller",
+            "voiceai.modules.numbers.controller",
         ]
     )
 

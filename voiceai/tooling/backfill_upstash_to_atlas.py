@@ -81,6 +81,10 @@ AGENT_SCAN_PATTERN: Final[str] = "*"
 #: Legacy families the platform bridge takes verbatim (``platform_<family>`` collections).
 PLATFORM_FAMILIES: Final[tuple[str, ...]] = tuple(FAMILY_COLLECTIONS)
 
+#: Families that left the platform bucket for a real module (spec 0074). Their
+#: rows are written typed, not as a `{payload: ...}` envelope.
+MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers",)
+
 #: (Redis glob pattern, human description). Every family the platform ever wrote.
 FAMILIES: Final[tuple[tuple[str, str], ...]] = (
     (f"{LEGACY_KEY_PREFIX}:users:*", "legacy user rows (durable → auth store)"),
@@ -234,14 +238,19 @@ class AtlasTargets:
         container: The composed container for the target deployment.
     """
 
-    def __init__(self, container: Any) -> None:  # why: the container is the composition root
+    def __init__(self, container: Any, tenant_id: str = DEFAULT_TENANT_ID) -> None:  # why: the container is the composition root
         self._auth = container.auth_store()
         self._platform = container.platform_store()
         self._definitions = container.agent_definitions()
         self._prompts = container.agent_session_store()
-        from voiceai.core.container import create_wallet_repository
+        self._tenant_id = tenant_id
+        from voiceai.core.container import _build_numbers_repository, create_wallet_repository
 
         self._wallet = create_wallet_repository(container.db_client())
+        # spec 0074: numbers is a module collection now, restored through its own
+        # repository. The backfill runs as an operator CLI, so the ambient tenant
+        # is bound around each write rather than per request.
+        self._numbers_source = container.db_client()
 
     async def existing_auth_ids(self, collection: str) -> set[str]:
         """Natural keys already present in Atlas for one auth family."""
@@ -269,6 +278,19 @@ class AtlasTargets:
         """Write one legacy platform row into its bridge collection unless it exists."""
         written: bool = await self._platform.restore(family, item_id, payload)
         return written
+
+    async def restore_number(self, item_id: str, payload: dict[str, Any]) -> bool:
+        """Write one legacy phone-number row typed, unless it exists (spec 0074).
+
+        The numbers family is a module collection now, so it must not be written
+        through the platform envelope: the module reads typed documents, and a
+        `{payload: ...}` row would be invisible to it.
+        """
+        from voiceai.core.container import _build_numbers_repository
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+
+        with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
+            return await _build_numbers_repository(self._numbers_source).restore(item_id, payload)
 
     async def restore_organization(self, payload: dict[str, Any]) -> bool:
         """Seed the organization settings singleton unless one exists."""
@@ -356,7 +378,12 @@ async def _apply_platform(redis: RedisSource, targets: AtlasTargets, reports: li
                 report.quarantined += 1
                 logger.warning("quarantined %s row %s", family, key)
                 continue
-            if await targets.restore_platform(family, item_id, payload):
+            restored = (
+                await targets.restore_number(item_id, payload)
+                if family in MODULE_FAMILIES
+                else await targets.restore_platform(family, item_id, payload)
+            )
+            if restored:
                 report.copied += 1
             else:
                 report.skipped += 1
@@ -460,7 +487,7 @@ async def apply(
     """
     reports: list[FamilyReport] = []
     with bind_tenant(TenantContext(tenant_id=tenant_id, request_id=_REQUEST_ID)):
-        targets = AtlasTargets(container)
+        targets = AtlasTargets(container, tenant_id=tenant_id)
         await _apply_auth(redis, targets, reports)
         await _apply_platform(redis, targets, reports)
         await _apply_singletons(redis, targets, reports)
