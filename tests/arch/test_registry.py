@@ -14,6 +14,7 @@ from voiceai.modules import (
     catalog,
     chat,
     health,
+    integrations,
     knowledge,
     numbers,
     privacy,
@@ -26,7 +27,7 @@ from voiceai.modules import (
 
 
 def test_registry_lists_exactly_the_registered_modules() -> None:
-    """Core mounts what this tuple says: health, agents, voice (spec 0004 B0), auth (spec 0005 C5), wallet, catalog (spec 0022), voices (spec 0025), tools (spec 0029), chat (spec 0038), privacy (spec 0071), numbers (spec 0074), knowledge (spec 0075), webhooks (spec 0076)."""
+    """Core mounts what this tuple says: health, agents, voice (spec 0004 B0), auth (spec 0005 C5), wallet, catalog (spec 0022), voices (spec 0025), tools (spec 0029), chat (spec 0038), privacy (spec 0071), numbers (spec 0074), knowledge (spec 0075), webhooks (spec 0076), integrations (spec 0077)."""
     assert ALL_MODULES == (
         health.MODULE,
         agents.MODULE,
@@ -41,6 +42,7 @@ def test_registry_lists_exactly_the_registered_modules() -> None:
         numbers.MODULE,
         knowledge.MODULE,
         webhooks.MODULE,
+        integrations.MODULE,
     )
     assert all(isinstance(module, ModuleDef) for module in ALL_MODULES)
 

@@ -181,6 +181,12 @@ REMOVED_BY_SPEC: dict[str, str] = {
     "Webhook": "spec 0076 — moved to voiceai.modules.webhooks.models",
     "WebhookListResponse": "spec 0076 — the webhooks module's list response (WebhookListResponse); the wire shape ('webhooks') is unchanged",
     "CreateWebhookRequest": "spec 0076 — CreateWebhookRequest in voiceai.modules.webhooks.schemas",
+    "Integration": "spec 0077 — moved to voiceai.modules.integrations.models",
+    "IntegrationListResponse": "spec 0077 — the integrations module's list response; wire shape unchanged",
+    "CreateIntegrationRequest": "spec 0077 — CreateIntegrationRequest in voiceai.modules.integrations.schemas",
+    "UpdateIntegrationRequest": "spec 0077 — UpdateIntegrationRequest in voiceai.modules.integrations.schemas",
+    "mask_secrets": "spec 0077 — moved to voiceai.modules.integrations.static_methods (the module\'s masking contract)",
+    "MASKED_SECRET": "spec 0077 — moved to voiceai.modules.integrations.constants",
     "AssignNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
 }
 
@@ -217,6 +223,13 @@ def test_removed_names_are_importable_from_their_new_home() -> None:
     assert webhook_models.Webhook.__name__ == "Webhook"
     assert webhook_schemas.WebhookListResponse.__name__ == "WebhookListResponse"
     assert webhook_schemas.CreateWebhookRequest.__name__ == "CreateWebhookRequest"
+    from voiceai.modules.integrations import models as integration_models
+    from voiceai.modules.integrations import schemas as integration_schemas
+
+    assert integration_models.Integration.__name__ == "Integration"
+    assert integration_schemas.IntegrationListResponse.__name__ == "IntegrationListResponse"
+    assert integration_schemas.CreateIntegrationRequest.__name__ == "CreateIntegrationRequest"
+    assert integration_schemas.UpdateIntegrationRequest.__name__ == "UpdateIntegrationRequest"
     assert numbers_schemas.CreateNumberRequest.__name__ == "CreateNumberRequest"
     assert numbers_schemas.AssignNumberRequest.__name__ == "AssignNumberRequest"
 

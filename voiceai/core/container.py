@@ -443,6 +443,36 @@ def _build_webhooks_service(db_client: Any) -> Any:
     return WebhooksService(_build_webhooks_repository(db_client))
 
 
+def _build_integrations_repository(db_client: Any) -> Any:
+    """Build the integrations repository over the tenant's scoped view (spec 0077).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        An `IntegrationRepository` bound to the request's tenant.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.integrations.models import Integration
+    from voiceai.modules.integrations.repository import IntegrationRepository
+
+    return IntegrationRepository(_scoped_collection(db_client, Collections.PLATFORM_INTEGRATIONS, Integration))
+
+
+def _build_integrations_service(db_client: Any) -> Any:
+    """Build the integrations service over the tenant's scoped view (spec 0077).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        An `IntegrationsService` bound to the request's tenant.
+    """
+    from voiceai.modules.integrations.service import IntegrationsService
+
+    return IntegrationsService(_build_integrations_repository(db_client))
+
+
 def _build_inbound_store(db_client: Any, platform_store: Any) -> Any:
     """Adapt the numbers module to the voice inbound lookup seam (spec 0047 seam, rewired by 0074).
 
@@ -1126,6 +1156,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Webhooks module (spec 0076): per-request tenant view, like every scoped service.
     webhooks_service = providers.Factory(_build_webhooks_service, db_client=db_client)
 
+    # Integrations module (spec 0077): per-request tenant view, like every
+    # scoped service. Holds credentials; the service is what masks them.
+    integrations_service = providers.Factory(_build_integrations_service, db_client=db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -1178,6 +1212,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.numbers.controller",
             "voiceai.modules.knowledge.controller",
             "voiceai.modules.webhooks.controller",
+            "voiceai.modules.integrations.controller",
         ]
     )
 

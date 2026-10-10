@@ -402,54 +402,6 @@ class SubAccountListResponse(BaseModel):
     sub_accounts: List[SubAccount]
 
 
-class Integration(BaseModel):
-    integration_id: str
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
-    name: str
-    config: Dict[str, Any] = Field(default_factory=dict)
-    enabled: bool = True
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-    def masked(self) -> "Integration":
-        """Copy safe for API responses: secret values replaced, store untouched."""
-        copy = self.model_copy(deep=True)
-        copy.config = mask_secrets(self.config)
-        return copy
-
-
-class CreateIntegrationRequest(BaseModel):
-    kind: Literal["twilio", "plivo", "exotel", "vobiz", "talko", "calcom", "n8n", "zapier", "sheets", "sip", "truecaller"]
-    name: str = Field(..., min_length=1)
-    config: Dict[str, Any] = Field(default_factory=dict)
-    enabled: bool = True
-
-
-class UpdateIntegrationRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1)
-    config: Optional[Dict[str, Any]] = None
-    enabled: Optional[bool] = None
-
-
-class IntegrationListResponse(BaseModel):
-    integrations: List[Integration]
-
-
-MASKED_SECRET = "••••••••"
-_SECRET_HINTS = ("key", "secret", "token", "password")
-
-
-def mask_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Mask secret-looking values for API responses. Raw values stay in the store."""
-    masked: Dict[str, Any] = {}
-    for field, value in config.items():
-        if isinstance(value, str) and any(hint in field.lower() for hint in _SECRET_HINTS):
-            masked[field] = MASKED_SECRET
-        else:
-            masked[field] = value
-    return masked
-
-
 class InboundConfig(BaseModel):
     agent_id: str
     assigned_number_id: Optional[str] = None

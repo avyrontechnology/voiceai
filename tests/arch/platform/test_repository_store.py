@@ -26,12 +26,11 @@ from voiceai.platform.models import (
     GraphDoc,
     GraphVersion,
     InboundConfig,
-    Integration,
+    Tool,
     LedgerEntry,
     Organization,
     SessionRecord,
     SubAccount,
-    Tool,
     User,
     VectorStoreConfig,
     VoiceEntry,
@@ -76,10 +75,10 @@ async def _run(store: MemoryStore, scenario: Scenario, tenant_id: str = TENANT_A
 # -- scenarios: the same script runs against MemoryStore and the bridge ----------------------
 
 # Models are built once so both stores see identical default timestamps.
-INT_1 = Integration(integration_id="n1", kind="twilio", name="first", created_at=T0, updated_at=T0)
-INT_1B = Integration(integration_id="n1", kind="twilio", name="first-replaced", created_at=T0, updated_at=T0)
-INT_2 = Integration(integration_id="n2", kind="plivo", name="second", created_at=T0, updated_at=T0)
-INTEGRATION_1 = Integration(integration_id="w1", kind="twilio", name="example", created_at=T0, updated_at=T0)
+TOOL_1 = Tool(tool_id="n1", name="first", kind="transfer", created_at=T0)
+TOOL_1B = Tool(tool_id="n1", name="first-replaced", kind="transfer", created_at=T0)
+TOOL_2 = Tool(tool_id="n2", name="second", kind="calendar", created_at=T0)
+TOOL_EXTRA_1 = Tool(tool_id="w1", name="example", kind="transfer", created_at=T0)
 TOOL_A = Tool(tool_id="t1", name="a", kind="custom", agent_id="agent-1")
 TOOL_B = Tool(tool_id="t2", name="b", kind="custom", agent_id="agent-2")
 VOICE_A = VoiceEntry(voice_id="v1", name="a", provider="p", provider_voice_id="pv", agent_id="agent-1")
@@ -112,15 +111,15 @@ RUN_OUT = WorkflowRun(run_id="r2", workflow_id="wf1")
 INBOUND_1 = InboundConfig(agent_id="agent-1", greeting="hi", updated_at=T0)
 VECTOR_1 = VectorStoreConfig(provider="mongodb", collection_name="c")
 SUB_1 = SubAccount(sub_id="s1", name="sub")
-INTEGRATION_1 = Integration(integration_id="i1", kind="calcom", name="hub")
+TOOL_CALCOM_1 = Tool(tool_id="i1", name="hub", kind="transfer")
 ORG_1 = Organization(name="Otoba", updated_at=T0)
 WALLET_1 = Wallet(balance_credits=42, updated_at=T0)
 LEDGER_ROWS = [
     LedgerEntry(entry_id=f"l{index}", type="topup" if index % 2 else "debit", amount_credits=index, created_at=T0)
     for index in range(1, 7)
 ]
-MANY_INTEGRATIONS = [
-    Integration(integration_id=f"many-{index}", kind="twilio", name=f"int-{index}", created_at=T0, updated_at=T0)
+MANY_TOOLS = [
+    Tool(tool_id=f"many-{index}", name=f"tool-{index}", kind="transfer", created_at=T0)
     for index in range(ROWS_PAST_ONE_PAGE)
 ]
 MANY_LEDGER_ROWS = [
@@ -132,32 +131,32 @@ MANY_LEDGER_ROWS = [
 
 
 async def _numbers_crud(store: MemoryStore) -> list[Any]:
-    await store.save_integration(INT_1)
-    await store.save_integration(INT_2)
-    await store.save_integration(INT_1B)  # same id: replace
+    await store.save_tool(TOOL_1)
+    await store.save_tool(TOOL_2)
+    await store.save_tool(TOOL_1B)  # same id: replace
     return [
-        await store.get_integration("n1"),
-        await store.list_integrations(),
-        await store.delete_integration("n2"),
-        await store.delete_integration("n2"),  # already gone
-        await store.get_integration("n2"),
-        await store.list_integrations(),
-        await store.get_integration("missing"),
+        await store.get_tool("n1"),
+        await store.list_tools(),
+        await store.delete_tool("n2"),
+        await store.delete_tool("n2"),  # already gone
+        await store.get_tool("n2"),
+        await store.list_tools(),
+        await store.get_tool("missing"),
     ]
 
 
 async def _kbs_webhooks(store: MemoryStore) -> list[Any]:
-    await store.save_integration(INT_1)
-    await store.save_integration(INTEGRATION_1)
+    await store.save_tool(TOOL_1)
+    await store.save_tool(TOOL_EXTRA_1)
     return [
-        await store.get_integration("kb1"),
-        await store.list_integrations(),
-        await store.delete_integration("kb1"),
-        await store.list_integrations(),
-        await store.get_integration("w1"),
-        await store.list_integrations(),
-        await store.delete_integration("w1"),
-        await store.list_integrations(),
+        await store.get_tool("kb1"),
+        await store.list_tools(),
+        await store.delete_tool("kb1"),
+        await store.list_tools(),
+        await store.get_tool("w1"),
+        await store.list_tools(),
+        await store.delete_tool("w1"),
+        await store.list_tools(),
     ]
 
 
@@ -239,7 +238,7 @@ async def _inbound_vector_subs_integrations(store: MemoryStore) -> list[Any]:
     await store.save_inbound(INBOUND_1)
     await store.save_vector_config("agent-1", VECTOR_1)
     await store.save_sub_account(SUB_1)
-    await store.save_integration(INTEGRATION_1)
+    await store.save_tool(TOOL_EXTRA_1)
     return [
         await store.get_inbound("agent-1"),
         await store.get_inbound("agent-2"),
@@ -249,10 +248,10 @@ async def _inbound_vector_subs_integrations(store: MemoryStore) -> list[Any]:
         await store.list_sub_accounts(),
         await store.delete_sub_account("s1"),
         await store.list_sub_accounts(),
-        await store.get_integration("i1"),
-        await store.list_integrations(),
-        await store.delete_integration("i1"),
-        await store.list_integrations(),
+        await store.get_tool("i1"),
+        await store.list_tools(),
+        await store.delete_tool("i1"),
+        await store.list_tools(),
     ]
 
 
@@ -274,8 +273,8 @@ async def _organization_wallet_ledger(store: MemoryStore) -> list[Any]:
 
 
 async def _reset_platform(store: MemoryStore) -> list[Any]:
-    await store.save_integration(INT_1)
-    await store.save_integration(INT_1)
+    await store.save_tool(TOOL_1)
+    await store.save_tool(TOOL_1)
     await store.save_execution(EXEC_OLD)
     await store.save_wallet(WALLET_1)
     await store.save_organization(ORG_1)
@@ -283,8 +282,8 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
     cleared = await store.reset_platform()
     return [
         cleared,
-        await store.list_integrations(),
-        await store.list_integrations(),
+        await store.list_tools(),
+        await store.list_tools(),
         await store.list_executions(),
         await store.get_wallet(),
         await store.list_ledger(),
@@ -293,16 +292,16 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
 
 
 async def _past_one_page(store: MemoryStore) -> list[Any]:
-    for number in MANY_INTEGRATIONS:
-        await store.save_integration(number)
+    for number in MANY_TOOLS:
+        await store.save_tool(number)
     for entry in MANY_LEDGER_ROWS:
         await store.add_ledger_entry(entry)
     return [
-        await store.list_integrations(),  # every row, not the first page
+        await store.list_tools(),  # every row, not the first page
         await store.list_ledger(limit=5),  # newest five sit past the first page
         await store.list_ledger(limit=3, entry_type="debit"),
         await store.reset_platform(),  # clears rows past the first page too
-        await store.list_integrations(),
+        await store.list_tools(),
         await store.list_ledger(),
     ]
 
@@ -332,10 +331,10 @@ async def test_bridge_matches_memory_store(bridge: RepositoryPlatformStore, name
 async def test_memory_store_still_serves_legacy_callers() -> None:
     """The async-primitive split keeps MemoryStore's own behaviour (legacy suites rely on it)."""
     store = MemoryStore()
-    await store.save_integration(INT_1)
+    await store.save_tool(TOOL_1)
     assert await store.count_users() == 0
-    assert [integration.integration_id for integration in await store.list_integrations()] == [INT_1.integration_id]
-    assert (await store.reset_platform())["integrations"] == 1
+    assert [tool.tool_id for tool in await store.list_tools()] == [TOOL_1.tool_id]
+    assert (await store.reset_platform())["tools"] == 1
 
 
 # -- tenant isolation ---------------------------------------------------------------------
@@ -343,35 +342,35 @@ async def test_memory_store_still_serves_legacy_callers() -> None:
 
 async def test_rows_are_invisible_to_other_tenants(bridge: RepositoryPlatformStore) -> None:
     with _bound(TENANT_A):
-        await bridge.save_integration(INT_1)
+        await bridge.save_tool(TOOL_1)
         await bridge.save_organization(ORG_1)
         first_read = await bridge.get_wallet()
         assert (await bridge.get_wallet()) == first_read  # default materialised once, then stable
     with _bound(TENANT_B):
-        assert await bridge.list_integrations() == []
-        assert await bridge.get_integration("n1") is None
-        assert await bridge.delete_integration("n1") is False
+        assert await bridge.list_tools() == []
+        assert await bridge.get_tool("n1") is None
+        assert await bridge.delete_tool("n1") is False
         assert (await bridge.get_organization()).name != ORG_1.name
-        assert (await bridge.reset_platform())["integrations"] == 0
+        assert (await bridge.reset_platform())["tools"] == 0
     with _bound(TENANT_A):
-        assert (await bridge.get_integration("n1")) is not None
+        assert (await bridge.get_tool("n1")) is not None
         assert (await bridge.get_organization()).name == ORG_1.name
 
 
 async def test_listing_walks_every_own_row_past_one_page(bridge: RepositoryPlatformStore) -> None:
     """130 rows for one tenant all list, in order; another tenant's rows never do (spec 0050)."""
     with _bound(TENANT_A):
-        for number in MANY_INTEGRATIONS:
-            await bridge.save_integration(number)
+        for number in MANY_TOOLS:
+            await bridge.save_tool(number)
     with _bound(TENANT_B):
         for index in range(FOREIGN_ROWS):
-            await bridge.save_integration(Integration(integration_id=f"foreign-{index}", kind="twilio", name=f"foreign-{index}", created_at=T0, updated_at=T0))
-        foreign = [integration.integration_id for integration in await bridge.list_integrations()]
+            await bridge.save_tool(Tool(tool_id=f"foreign-{index}", name=f"foreign-{index}", kind="transfer", created_at=T0))
+        foreign = [tool.tool_id for tool in await bridge.list_tools()]
     with _bound(TENANT_A):
-        own = [integration.integration_id for integration in await bridge.list_integrations()]
-        everything = await bridge.scan_family("integrations")  # the tenant-blind inbound read
+        own = [tool.tool_id for tool in await bridge.list_tools()]
+        everything = await bridge.scan_family("tools")  # the tenant-blind inbound read
 
-    assert own == [integration.integration_id for integration in MANY_INTEGRATIONS]
+    assert own == [tool.tool_id for tool in MANY_TOOLS]
     assert foreign == [f"foreign-{index}" for index in range(FOREIGN_ROWS)]
     assert len(everything) == ROWS_PAST_ONE_PAGE + FOREIGN_ROWS
 
@@ -390,39 +389,39 @@ class _RecordingRepository(InMemoryRepository[PlatformRow]):
 
 async def test_tenant_listing_pages_only_that_tenant(database: InMemoryDatabase, auth_store: MongoAuthStore) -> None:
     """A tenant listing is tenant-paged at the driver: a neighbour's volume costs it no query."""
-    numbers = _RecordingRepository(database, Collections.PLATFORM_INTEGRATIONS)
+    numbers = _RecordingRepository(database, Collections.PLATFORM_TOOLS)
     repositories: dict[Collections, BaseRepository[PlatformRow]] = {
         collection: InMemoryRepository(database, collection, PlatformRow) for collection in PLATFORM_COLLECTIONS
     }
-    repositories[Collections.PLATFORM_INTEGRATIONS] = numbers
+    repositories[Collections.PLATFORM_TOOLS] = numbers
     store = RepositoryPlatformStore(auth_store, repositories)
     with _bound(TENANT_B):
-        for number in MANY_INTEGRATIONS:
-            await store.save_integration(number)
+        for number in MANY_TOOLS:
+            await store.save_tool(number)
     with _bound(TENANT_A):
-        await store.save_integration(INT_2)
-        listed = await store.list_integrations()
+        await store.save_tool(TOOL_2)
+        listed = await store.list_tools()
         tenant_queries = list(numbers.selectors)
-        await store.scan_family("integrations")
+        await store.scan_family("tools")
 
-    assert [integration.integration_id for integration in listed] == [INT_2.integration_id]
+    assert [tool.tool_id for tool in listed] == [TOOL_2.tool_id]
     assert tenant_queries == [{TENANT_ID_FIELD: TENANT_A}]  # one page, this tenant's selector
     assert numbers.selectors[1:] == [{}, {}]  # the inbound scan pages the whole collection
 
 
 async def test_rows_carry_the_tenant_stamp(database: InMemoryDatabase, bridge: RepositoryPlatformStore) -> None:
     with _bound(TENANT_A):
-        await bridge.save_integration(INT_1)
-    documents = database.collections["platform_integrations"]
+        await bridge.save_tool(TOOL_1)
+    documents = database.collections["platform_tools"]
     assert [document["tenant_id"] for document in documents.values()] == [TENANT_A]
-    assert documents["n1"]["payload"]["name"] == INT_1.name
+    assert documents["n1"]["payload"]["name"] == TOOL_1.name
 
 
 async def test_unbound_tenant_fails_closed(bridge: RepositoryPlatformStore) -> None:
     with pytest.raises(TenantNotBoundError):
-        await bridge.save_integration(INT_1)
+        await bridge.save_tool(TOOL_1)
     with pytest.raises(TenantNotBoundError):
-        await bridge.list_integrations()
+        await bridge.list_tools()
 
 
 # -- auth families delegate to the greenfield store ----------------------------------------

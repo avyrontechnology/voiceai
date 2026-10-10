@@ -17,7 +17,6 @@ from voiceai.platform.models import (
     GraphDoc,
     GraphVersion,
     InboundConfig,
-    Integration,
     Invite,
     LedgerEntry,
     Organization,
@@ -237,19 +236,6 @@ class MemoryStore:
         return await self._delete("subaccounts", sub_id)
 
     # -- integrations ---------------------------------------------------------------------
-
-    async def save_integration(self, integration: Integration) -> None:
-        await self._put("integrations", integration.integration_id, integration.model_dump(mode="json"))
-
-    async def get_integration(self, integration_id: str) -> Optional[Integration]:
-        raw = await self._get("integrations", integration_id)
-        return Integration(**raw) if raw else None
-
-    async def list_integrations(self) -> List[Integration]:
-        return [Integration(**raw) for raw in await self._all("integrations")]
-
-    async def delete_integration(self, integration_id: str) -> bool:
-        return await self._delete("integrations", integration_id)
 
     # -- graphs ---------------------------------------------------------------------
 

@@ -26,7 +26,6 @@ from voiceai.platform.models import (
     CreateApiKeyRequest,
     CreateApiKeyResponse,
     CreateGraphRequest,
-    CreateIntegrationRequest,
     CreateSubAccountRequest,
     CreateToolRequest,
     CreateVoiceRequest,
@@ -42,14 +41,11 @@ from voiceai.platform.models import (
     GraphVersion,
     GraphVersionListResponse,
     InboundConfig,
-    Integration,
-    IntegrationListResponse,
     LatencyBucket,
     LatencyStats,
     TestRunRequest,
     UpdateGraphRequest,
     UpdateInboundRequest,
-    UpdateIntegrationRequest,
     UpdateOrganizationRequest,
     UpdateWorkflowRequest,
     LedgerEntry,
@@ -553,72 +549,6 @@ async def remove_member(sub_id: str, email: str, store: MemoryStore = Depends(ge
     sub.members = [m for m in sub.members if m.email.lower() != email.lower()]
     await store.save_sub_account(sub)
     return sub
-
-
-# --- integrations --------------------------------------------------------------------------
-
-integrations_router = APIRouter(prefix="/integrations", tags=["Integrations"])
-
-
-@integrations_router.post("", response_model=Integration, status_code=201)
-async def create_integration(payload: CreateIntegrationRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> Integration:
-    integration = Integration(
-        integration_id=new_id("int"),
-        kind=payload.kind,
-        name=payload.name,
-        config=dict(payload.config),
-        enabled=payload.enabled,
-    )
-    await store.save_integration(integration)
-    return integration.masked()
-
-
-@integrations_router.get("", response_model=IntegrationListResponse)
-async def list_integrations(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> IntegrationListResponse:
-    integrations = await store.list_integrations()
-    return IntegrationListResponse(integrations=[integration.masked() for integration in integrations])
-
-
-@integrations_router.get("/{integration_id}", response_model=Integration)
-async def get_integration(integration_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> Integration:
-    integration = await store.get_integration(integration_id)
-    if integration is None:
-        raise _not_found("Integration", integration_id)
-    return integration.masked()
-
-
-@integrations_router.put("/{integration_id}", response_model=Integration)
-async def update_integration(
-    integration_id: str, payload: UpdateIntegrationRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> Integration:
-    integration = await store.get_integration(integration_id)
-    if integration is None:
-        raise _not_found("Integration", integration_id)
-    if payload.name is not None:
-        integration.name = payload.name
-    if payload.config is not None:
-        integration.config = {**integration.config, **payload.config}
-    if payload.enabled is not None:
-        integration.enabled = payload.enabled
-    integration.updated_at = utcnow()
-    await store.save_integration(integration)
-    return integration.masked()
-
-
-@integrations_router.delete("/{integration_id}", response_model=DeletedResponse)
-async def delete_integration(integration_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DeletedResponse:
-    if not await store.delete_integration(integration_id):
-        raise _not_found("Integration", integration_id)
-    return DeletedResponse()
 
 
 # --- graphs --------------------------------------------------------------------------
@@ -1133,12 +1063,11 @@ def single_app_routers() -> list[APIRouter]:
         simulate_router,
         executions_router,
         batches_router,
-        # retired: webhooks (0076), kbs (0075), numbers (0074) — `voiceai/modules/numbers` owns the
+        # retired: integrations (0077), webhooks (0076), kbs (0075), numbers (0074) — `voiceai/modules/numbers` owns the
         # family now, and module routers mount first (first match wins).
         inbound_router,
         agents_router,
         subs_router,
-        integrations_router,
         graphs_router,
         workflows_router,
         runs_router,
