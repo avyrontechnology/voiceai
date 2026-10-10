@@ -6,11 +6,14 @@ independent of whatever real modules exist in the registry.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
+
+from dependency_injector import providers
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -269,6 +272,31 @@ class TestLifespan:
                 raise RuntimeError("startup interrupted")
         assert getattr(fake_redis, "closed") is True
 
+    async def test_lifespan_starts_the_retention_loop(
+        self,
+        arch_environment: Environment,
+        dummy_module: ModuleDef,
+    ) -> None:
+        """The retention pass is scheduled on the registry at boot (spec 0073)."""
+        built = create_app(env=arch_environment)
+
+        async with built.router.lifespan_context(built):
+            tasks = [t.get_name() for t in asyncio.all_tasks() if t.get_name() == "retention-loop"]
+            assert tasks, "the retention loop must be scheduled while the app is up"
+
+    async def test_shutdown_cancels_the_retention_loop(
+        self,
+        arch_environment: Environment,
+        dummy_module: ModuleDef,
+    ) -> None:
+        """Leaving the lifespan leaves no retention task behind (AGENTS.md §5)."""
+        built = create_app(env=arch_environment)
+
+        async with built.router.lifespan_context(built):
+            pass
+
+        assert not [t for t in asyncio.all_tasks() if t.get_name() == "retention-loop"]
+
 
 class TestCorsDefenseInDepth:
     """`_add_cors` re-validates the allowlist, closing pydantic's `model_copy` validation gap."""
@@ -277,3 +305,43 @@ class TestCorsDefenseInDepth:
         env = arch_environment.model_copy(update={"allowed_origins": ("*",)})
         with pytest.raises(ConfigurationError):
             create_app(env)
+
+
+class TestRetentionKillSwitch:
+    """`RETENTION_INTERVAL_S=0` disables the purge loop (spec 0073)."""
+
+    async def test_a_zero_interval_never_runs_a_pass(self, arch_environment: Environment) -> None:
+        """The off state is a real off, not a sleep(0) spin that erases on boot."""
+        env = arch_environment.model_copy(update={"retention_interval_s": 0})
+        built = create_app(env=env)
+        calls: list[str] = []
+        built.state.container.retention_service.override(
+            providers.Object(SimpleNamespace(run_cycle=_record(calls)))
+        )
+
+        async with built.router.lifespan_context(built):
+            await asyncio.sleep(0)
+
+        assert calls == []
+
+    async def test_a_positive_interval_runs_a_pass(self, arch_environment: Environment) -> None:
+        """A configured interval does purge — the switch is not a no-op."""
+        env = arch_environment.model_copy(update={"retention_interval_s": 60})
+        built = create_app(env=env)
+        calls: list[str] = []
+        built.state.container.retention_service.override(
+            providers.Object(SimpleNamespace(run_cycle=_record(calls)))
+        )
+
+        async with built.router.lifespan_context(built):
+            await asyncio.sleep(0)
+
+        assert calls == ["cycle"]
+
+
+def _record(sink: list[str]):
+    async def run_cycle() -> dict[str, int]:
+        sink.append("cycle")
+        return {}
+
+    return run_cycle

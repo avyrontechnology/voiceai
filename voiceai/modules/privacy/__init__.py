@@ -1,10 +1,11 @@
-"""Privacy module: GDPR consent records (spec 0071)."""
+"""Privacy module: GDPR consent records (spec 0071) + retention (spec 0073)."""
 
 from __future__ import annotations
 
 from voiceai.modules import ModuleDef
 from voiceai.modules.privacy.constants import MODULE_NAME
 from voiceai.modules.privacy.controller import router
+from voiceai.modules.privacy.retention import RetentionService
 from voiceai.modules.privacy.service import PrivacyService
 
 MODULE: ModuleDef = ModuleDef(
@@ -16,4 +17,4 @@ MODULE: ModuleDef = ModuleDef(
     max_lines=3000,
 )
 
-__all__ = ["MODULE", "PrivacyService"]
+__all__ = ["MODULE", "PrivacyService", "RetentionService"]

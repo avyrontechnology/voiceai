@@ -59,6 +59,33 @@ class TestProviderLifetimes:
         with pytest.raises(AttributeError):
             getattr(container, "nope")()
 
+    def test_retention_is_a_singleton(self, arch_environment: Environment) -> None:
+        container = build_container(arch_environment)
+
+        assert container.retention_service() is container.retention_service()
+
+    def test_retention_builds_without_a_bound_tenant(self, arch_environment: Environment) -> None:
+        """Retention is system-wide: it must not read the ambient tenant (spec 0073).
+
+        A `_scoped_collection` here would raise outside a request binding and,
+        once inside one, pin that tenant forever — leaving every other tenant's
+        expired rows in place. Resolving with no binding is the guard.
+        """
+        container = build_container(arch_environment)
+
+        service = container.retention_service()
+
+        assert service is not None
+
+    def test_retention_resolves_inside_a_tenant_binding(self, arch_environment: Environment) -> None:
+        """It also builds mid-request without inheriting that tenant's scope."""
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+
+        container = build_container(arch_environment)
+
+        with bind_tenant(TenantContext(tenant_id="tenant-a", request_id="req-1")):
+            assert container.retention_service() is container.retention_service()
+
 
 class TestAcloseContainer:
     """Shutdown releases what was built, and only what was built."""

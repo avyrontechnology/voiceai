@@ -7,6 +7,7 @@ routers mounted, error envelopes out, container closed on shutdown. There is no 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final
@@ -179,6 +180,40 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
 
+async def _retention_loop(container: VoiceAIContainer) -> None:
+    """Run the retention cycle on `retention_interval_s` until cancelled (spec 0073).
+
+    One pass at boot, then every interval. `RETENTION_INTERVAL_S=0` disables the
+    loop entirely — it is the deployment's kill switch, and the safer default,
+    because an unwanted pass erases rows. Per-collection TTLs are a separate knob
+    and are not consulted here.
+
+    `CancelledError` always propagates (AGENTS.md §5): shutdown cancels this task,
+    and swallowing it would leave `TaskRegistry.aclose()` waiting on a task that
+    never finishes.
+
+    Args:
+        container: The container whose retention singleton drives the passes.
+    """
+    interval = container.environment().retention_interval_s
+    loop_logger = get_logger("core.retention")
+    if interval <= 0:
+        loop_logger.info("retention loop disabled (RETENTION_INTERVAL_S=%s)", interval)
+        return
+    while True:
+        try:
+            results = await container.retention_service().run_cycle()
+            loop_logger.info(
+                "retention cycle complete erased=%s",
+                ",".join(f"{name}:{count}" for name, count in results.items()) or "none",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a bad pass must not kill the loop
+            loop_logger.error("retention cycle failed error=%s", exc.__class__.__name__)
+        await asyncio.sleep(interval)
+
+
 def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
     """Build the lifespan handler: seed globals on startup, release on shutdown.
 
@@ -209,6 +244,12 @@ def _build_lifespan(container: VoiceAIContainer) -> Lifespan[FastAPI]:
                 await container.tools_service().ensure_seeded()
         except Exception as exc:  # noqa: BLE001 - tools must never block boot
             boot_logger.warning("tools seeding skipped: %s", type(exc).__name__)
+        # Retention (spec 0073): a daily system-wide purge pass. It is
+        # deliberately NOT tenant-bound: the purge targets read unscoped
+        # repositories on purpose, so a binding would only misrepresent the
+        # scope. TaskRegistry.aclose() (below) cancels it on shutdown — the
+        # task is retained, never left dangling (AGENTS.md §5).
+        container.task_registry().start(_retention_loop(container), name="retention-loop")
         try:
             yield
         finally:

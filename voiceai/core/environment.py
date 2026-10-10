@@ -169,6 +169,21 @@ class Environment(BaseModel):
     #: provider-login dark (token-paste/DCR still work). Never logged raw.
     public_base_url: str = ""
 
+    #: Retention TTLs in seconds (spec 0073, GDPR Art. 5(1)(e) storage
+    #: limitation): rows older than the TTL are soft-erased by the retention
+    #: cycle. `0` disables that collection's purge. Consent records are never
+    #: purged (legal record, spec 0071) — they are absent from this registry.
+    retention_privacy_audit_s: int = 2592000
+    retention_chat_sessions_s: int = 31536000
+    retention_tool_execution_logs_s: int = 31536000
+    #: Retention cycle interval in seconds (spec 0073): how often the lifespan loop
+    #: runs one purge pass. ``RETENTION_INTERVAL_S`` in the environment. **0 (the
+    #: default) disables the loop entirely** — the deployment's kill switch. It is
+    #: the default because an unwanted pass erases rows, and turning retention on
+    #: is one env var away; the reverse mistake is not recoverable. Per-collection
+    #: TTLs above are a separate knob and are not consulted while this is 0.
+    retention_interval_s: int = 0
+
     @field_validator(_FIELD_ALLOWED_ORIGINS)
     @classmethod
     def _validated_origins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
