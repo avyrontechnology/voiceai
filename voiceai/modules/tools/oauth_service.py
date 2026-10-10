@@ -21,7 +21,7 @@ import html
 import json
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Any, Final, Protocol
 from urllib.parse import urlencode
 
@@ -161,6 +161,11 @@ class OAuthService:
         public_base_url: Deployment origin pinning the callback URL (empty
             keeps login dark — paste/DCR still work).
         http_factory: Token-endpoint client seam (tests inject MockTransport).
+        sync_tools_for: Post-login tool sync port, `(tenant_id, provider)`
+            (the callback runs anonymous under the SYSTEM ambient, but the
+            sealed credential belongs to the state record's tenant — the
+            port builds that tenant's views explicitly). `None` skips the
+            sync; the login still seals.
     """
 
     def __init__(
@@ -170,12 +175,14 @@ class OAuthService:
         redis: RedisStatePort | None,
         public_base_url: str,
         http_factory: Callable[[], httpx.AsyncClient] | None = None,
+        sync_tools_for: Callable[[str, str], Coroutine[Any, Any, dict[str, Any]]] | None = None,
     ) -> None:
         self._repos_for = repos_for
         self._vault = vault
         self._redis = redis
         self._public_base_url = public_base_url
         self._http_factory = http_factory
+        self._sync_tools_for = sync_tools_for
 
     def _require_redis(self, what: str) -> RedisStatePort:
         """Return the state backend or fail closed (login needs Redis).
@@ -238,7 +245,9 @@ class OAuthService:
             )
         config = live.auth_config if isinstance(live.auth_config, dict) else {}
         try:
-            material = json.loads(self._vault.decrypt(live.encrypted_data, key_version=live.key_version).decode("utf-8"))
+            material = json.loads(
+                self._vault.decrypt(live.encrypted_data, key_version=live.key_version).decode("utf-8")
+            )
         except Exception as exc:
             raise InvalidToolError(
                 "Stored registration cannot be opened — reconnect it.",
@@ -415,6 +424,16 @@ class OAuthService:
             material=material,
         )
         logger.info("oauth login completed for provider")
+        if self._sync_tools_for is not None:
+            # The access token just sealed, so discovery can run now. A sync
+            # failure never fails the login — the token stays sealed either
+            # way, and the caller refetches tools to see what landed.
+            try:
+                synced = await self._sync_tools_for(tenant_id, provider)
+                landed = synced.get("created", 0) + synced.get("updated", 0)
+                logger.info("oauth login auto-synced tools for provider: %d", landed)
+            except Exception:
+                logger.warning("oauth login sync failed for provider (token sealed anyway)")
         return provider
 
     async def refresh_credential(self, *, tenant_id: str, credential_id: str) -> PartnerCredential:

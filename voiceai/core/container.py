@@ -700,6 +700,107 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any, va
     return ToolExecutor(ToolsRepository(tools_view), LogsRepository(logs_view), auth)
 
 
+def _vault_views_for(db_client: Any, tenant_id: str) -> Any:
+    """Compose the three vault collections under one explicit tenant view.
+
+    Hoisted so both the per-request integration service (ambient tenant)
+    and the login sync port (state-record tenant) build identical views —
+    the anonymous callback cannot use ambient binding (middleware binds
+    SYSTEM there), so the port passes the tenant explicitly instead.
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        tenant_id: Owner tenant for the three scoped views.
+
+    Returns:
+        A `VaultRepository` bound to `tenant_id`.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+    from voiceai.modules.tools.repository import VaultRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    return VaultRepository(
+        credentials=TenantScopedRepository(
+            factory(db_client, Collections.PARTNER_CREDENTIALS, PartnerCredential),
+            tenant_id,
+            Collections.PARTNER_CREDENTIALS,
+        ),
+        integrations=TenantScopedRepository(
+            factory(db_client, Collections.PARTNER_INTEGRATIONS, PartnerIntegration),
+            tenant_id,
+            Collections.PARTNER_INTEGRATIONS,
+        ),
+        templates=TenantScopedRepository(
+            factory(db_client, Collections.INTEGRATION_TEMPLATES, IntegrationTemplate),
+            tenant_id,
+            Collections.INTEGRATION_TEMPLATES,
+        ),
+    )
+
+
+def _tools_repo_for(db_client: Any, tenant_id: str) -> Any:
+    """Build the tool registry view for one explicit tenant.
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        tenant_id: Owner tenant for the scoped tools view.
+
+    Returns:
+        A `ToolsRepository` bound to `tenant_id`.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.models import ToolDefinition
+    from voiceai.modules.tools.repository import ToolsRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    return ToolsRepository(
+        TenantScopedRepository(
+            factory(db_client, Collections.TOOLS, ToolDefinition),
+            tenant_id,
+            Collections.TOOLS,
+        )
+    )
+
+
+def _sync_tools_for(db_client: Any, vault: Any) -> Any:
+    """Port: sync one provider's tools under an explicit tenant.
+
+    The OAuth callback runs anonymous (SYSTEM ambient), but the credential
+    it just sealed belongs to the state record's tenant — so the sync it
+    triggers cannot use the per-request service (ambient-bound). This port
+    builds an identical service bound to the given tenant instead. `dcr`
+    stays `None`: sync never registers.
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        vault: The process `CredentialVault` (envelope encryption).
+
+    Returns:
+        An async `(tenant_id, provider) -> sync counters` callable.
+    """
+    from voiceai.common.tenancy import SYSTEM_TENANT_ID
+    from voiceai.modules.tools.integration_service import IntegrationService
+
+    async def run(tenant_id: str, provider: str) -> dict[str, Any]:
+        service = IntegrationService(
+            system=_vault_views_for(db_client, SYSTEM_TENANT_ID),
+            tenant=_vault_views_for(db_client, tenant_id),
+            vault=vault,
+            dcr=None,
+            tools=_tools_repo_for(db_client, tenant_id),
+        )
+        return await service.sync_tools(provider)
+
+    return run
+
+
 def _build_integration_service(db_client: Any, vault: Any, environment: Any) -> Any:
     """Build the vault-state service over system + tenant views (spec 0058).
 
@@ -718,56 +819,21 @@ def _build_integration_service(db_client: Any, vault: Any, environment: Any) -> 
         An `IntegrationService` with a stateless `DcrService` attached.
     """
     from voiceai.common.tenancy import SYSTEM_TENANT_ID, current_tenant
-    from voiceai.core.db import InMemoryDatabase
-    from voiceai.database.constants import Collections
-    from voiceai.database.repository import InMemoryRepository, MotorRepository
-    from voiceai.database.scoped import TenantScopedRepository
     from voiceai.modules.tools.dcr_service import DcrService
     from voiceai.modules.tools.integration_service import IntegrationService
-    from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
-    from voiceai.modules.tools.repository import ToolsRepository, VaultRepository
-    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
-
-    def _views(tenant_id: str) -> VaultRepository:
-        """Compose the three vault collections under one tenant view."""
-        return VaultRepository(
-            credentials=TenantScopedRepository(
-                factory(db_client, Collections.PARTNER_CREDENTIALS, PartnerCredential),
-                tenant_id,
-                Collections.PARTNER_CREDENTIALS,
-            ),
-            integrations=TenantScopedRepository(
-                factory(db_client, Collections.PARTNER_INTEGRATIONS, PartnerIntegration),
-                tenant_id,
-                Collections.PARTNER_INTEGRATIONS,
-            ),
-            templates=TenantScopedRepository(
-                factory(db_client, Collections.INTEGRATION_TEMPLATES, IntegrationTemplate),
-                tenant_id,
-                Collections.INTEGRATION_TEMPLATES,
-            ),
-        )
 
     from voiceai.common.constants import API_PREFIX
     from voiceai.modules.tools import constants as tools_constants
 
     base_url = str(getattr(environment, "public_base_url", "") or "").rstrip("/")
-    redirect_uris = (
-        [f"{base_url}{API_PREFIX}{tools_constants.OAUTH_CALLBACK_PATH}"] if base_url else None
-    )
+    redirect_uris = [f"{base_url}{API_PREFIX}{tools_constants.OAUTH_CALLBACK_PATH}"] if base_url else None
 
     return IntegrationService(
-        system=_views(SYSTEM_TENANT_ID),
-        tenant=_views(current_tenant().tenant_id),
+        system=_vault_views_for(db_client, SYSTEM_TENANT_ID),
+        tenant=_vault_views_for(db_client, current_tenant().tenant_id),
         vault=vault,
         dcr=DcrService(redirect_uris=redirect_uris),
-        tools=ToolsRepository(
-            TenantScopedRepository(
-                factory(db_client, Collections.TOOLS, ToolDefinition),
-                current_tenant().tenant_id,
-                Collections.TOOLS,
-            )
-        ),
+        tools=_tools_repo_for(db_client, current_tenant().tenant_id),
     )
 
 
@@ -822,6 +888,7 @@ def _build_oauth_service(db_client: Any, vault: Any, cache_client: Any, environm
         vault=vault,
         redis=cache_client,
         public_base_url=environment.public_base_url,
+        sync_tools_for=_sync_tools_for(db_client, vault),
     )
 
 

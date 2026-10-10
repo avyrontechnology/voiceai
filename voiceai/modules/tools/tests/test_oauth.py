@@ -273,6 +273,65 @@ async def test_callback_happy_path_seals_and_consumes_state(monkeypatch: pytest.
         await service.handle_callback(code="code-1", state=state)
 
 
+def _service_with_sync(db: InMemoryDatabase, store: _Redis, sync: object) -> OAuthService:
+    """OAuth service with a stubbed post-login sync port."""
+    transport = httpx.MockTransport(_token_handler({"access_token": "a1", "refresh_token": "r1"}))
+    return OAuthService(
+        repos_for=lambda tenant: _repos(db, tenant),
+        vault=CredentialVault("test-master-key"),
+        redis=store,
+        public_base_url="https://api.test",
+        http_factory=lambda: httpx.AsyncClient(transport=transport),
+        sync_tools_for=sync,  # type: ignore[arg-type]
+    )
+
+
+async def _authorize(service: OAuthService, store: _Redis, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run one authorize and return its state token."""
+    monkeypatch.setattr("voiceai.common.security.is_safe_outbound_url", lambda url, **_: True)
+    await service.build_authorize_url(
+        tenant_id=TENANT,
+        provider="github",
+        authorization_endpoint="https://i.test/a",
+        token_endpoint="https://i.test/t",
+        client_id="cid-1",
+        client_secret="shh",
+    )
+    return next(iter(store.values.keys())).split("oauth:state:")[1]
+
+
+async def test_callback_auto_syncs_under_state_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sealed token triggers discovery under the state record's tenant —
+    the caller never clicks sync."""
+    db = InMemoryDatabase()
+    store = _Redis()
+    calls: list[tuple[str, str]] = []
+
+    async def _sync(tenant_id: str, provider: str) -> dict:
+        calls.append((tenant_id, provider))
+        return {"created": 3, "updated": 0}
+
+    service = _service_with_sync(db, store, _sync)
+    state = await _authorize(service, store, monkeypatch)
+    assert await service.handle_callback(code="code-1", state=state) == "github"
+    assert calls == [(TENANT, "github")]
+
+
+async def test_callback_sync_failure_keeps_sealed_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed auto-sync never fails the login — the token stays sealed."""
+    db = InMemoryDatabase()
+    store = _Redis()
+
+    async def _boom(tenant_id: str, provider: str) -> dict:
+        raise InvalidToolError("MCP discovery failed for the server.")
+
+    service = _service_with_sync(db, store, _boom)
+    state = await _authorize(service, store, monkeypatch)
+    assert await service.handle_callback(code="code-1", state=state) == "github"
+    rows = await _repos(db, TENANT).find_credentials_by_provider("github")
+    assert len(rows) == 1
+
+
 async def test_callback_unknown_state_and_failed_exchange_store_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
