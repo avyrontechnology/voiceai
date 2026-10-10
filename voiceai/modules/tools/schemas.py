@@ -114,14 +114,20 @@ class DcrRegisterPayload(BaseModel):
 
 
 class AuthorizeUrlPayload(BaseModel):
-    """Body for `POST /oauth/authorize-url` — everything to mint a login."""
+    """Body for `POST /oauth/authorize-url` — what the login needs.
+
+    The one-click flow sends only `provider` (+ `scope`): endpoints and
+    client credentials resolve server-side from the vault DCR record, so
+    no human ever handles them. Explicit values still win when given
+    (manual setups without a DCR record).
+    """
 
     model_config = {"extra": "forbid"}
 
     provider: str = Field(..., min_length=1)
-    authorization_endpoint: str = Field(..., min_length=1)
-    token_endpoint: str = Field(..., min_length=1)
-    client_id: str = Field(..., min_length=1)
+    authorization_endpoint: str | None = Field(default=None)
+    token_endpoint: str | None = Field(default=None)
+    client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
     scope: str = Field(default="")
 

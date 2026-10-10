@@ -202,6 +202,54 @@ async def test_authorize_rejects_unsafe_endpoints(monkeypatch: pytest.MonkeyPatc
     assert store.values == {}
 
 
+async def _seed_dcr_row(db: InMemoryDatabase) -> None:
+    """Store a DCR-issued client row as Slice 1 leaves it (secret sealed,
+    endpoints in auth_config, no access token)."""
+    import json as _json
+
+    vault = CredentialVault("test-master-key")
+    envelope = vault.encrypt(_json.dumps({"client_secret": "dcr-shh"}).encode("utf-8"), key_version=1)
+    row = PartnerCredential(
+        provider="github",
+        credential_type="oauth2",
+        auth_config={
+            "client_id": "dcr-cid",
+            "issuer_url": "https://issuer.test",
+            "authorization_endpoint": "https://issuer.test/auth",
+            "token_endpoint": "https://issuer.test/token",
+        },
+        encrypted_data=envelope,
+        key_version=1,
+    )
+    await _repos(db, TENANT).save_credential(row)
+
+
+async def test_authorize_resolves_dcr_client_from_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider-only login resolves endpoints + credentials server-side —
+    the secret rides the state record, never the URL or the caller."""
+    monkeypatch.setattr("voiceai.common.security.is_safe_outbound_url", lambda url, **_: True)
+    db = InMemoryDatabase()
+    await _seed_dcr_row(db)
+    service, store = _service(db)
+    result = await service.build_authorize_url(tenant_id=TENANT, provider="github", scope="repo")
+    url = result["authorization_url"]
+    assert url.startswith("https://issuer.test/auth?")
+    assert "client_id=dcr-cid" in url
+    assert "dcr-shh" not in url
+    record = json.loads(next(iter(store.values.values())))
+    assert record["client_id"] == "dcr-cid" and record["client_secret"] == "dcr-shh"
+    assert record["token_endpoint"] == "https://issuer.test/token"
+
+
+async def test_authorize_without_dcr_record_is_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider-only login with no DCR record fails closed (400)."""
+    monkeypatch.setattr("voiceai.common.security.is_safe_outbound_url", lambda url, **_: True)
+    service, store = _service(InMemoryDatabase())
+    with pytest.raises(InvalidToolError):
+        await service.build_authorize_url(tenant_id=TENANT, provider="github", scope="repo")
+    assert store.values == {}
+
+
 async def test_callback_happy_path_seals_and_consumes_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Code exchange seals tokens; the state is single-use (replay 400s)."""
     monkeypatch.setattr("voiceai.common.security.is_safe_outbound_url", lambda url, **_: True)

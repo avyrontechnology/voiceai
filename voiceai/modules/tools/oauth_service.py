@@ -212,28 +212,87 @@ class OAuthService:
             )
         return self._public_base_url
 
+    async def _resolve_dcr_client(self, *, tenant_id: str, provider: str) -> dict[str, str]:
+        """Load the DCR-issued client for one provider from the vault.
+
+        Args:
+            tenant_id: Owner tenant (scoped read — foreign rows invisible).
+            provider: Partner name the DCR step stored the record under.
+
+        Returns:
+            `authorization_endpoint`, `token_endpoint`, `client_id` (from
+            the row `auth_config`) and `client_secret` (unsealed from the
+            row material — never logged, never returned to callers).
+
+        Raises:
+            InvalidToolError: When no oauth2 row exists, it cannot be
+                opened, or it is incomplete (HTTP 400, identifiers only).
+        """
+        repo = self._repos_for(tenant_id)
+        rows = await repo.find_credentials_by_provider(provider)
+        live = next((row for row in rows if row.credential_type == C.CREDENTIAL_TYPE_OAUTH2), None)
+        if live is None:
+            raise InvalidToolError(
+                "No registered OAuth client for this provider — register with DCR first.",
+                details={"provider": provider},
+            )
+        config = live.auth_config if isinstance(live.auth_config, dict) else {}
+        try:
+            material = json.loads(self._vault.decrypt(live.encrypted_data, key_version=live.key_version).decode("utf-8"))
+        except Exception as exc:
+            raise InvalidToolError(
+                "Stored registration cannot be opened — reconnect it.",
+                details={"provider": provider},
+            ) from exc
+        if not isinstance(material, dict):
+            raise InvalidToolError(
+                "Stored registration cannot be opened — reconnect it.",
+                details={"provider": provider},
+            )
+        resolved = {
+            "authorization_endpoint": config.get("authorization_endpoint", ""),
+            "token_endpoint": config.get("token_endpoint", ""),
+            "client_id": config.get("client_id", ""),
+            "client_secret": material.get("client_secret", ""),
+        }
+        if not all(isinstance(value, str) and value for value in resolved.values()):
+            raise InvalidToolError(
+                "Stored registration is incomplete — reconnect it.",
+                details={"provider": provider},
+            )
+        return resolved
+
     async def build_authorize_url(
         self,
         *,
         tenant_id: str,
         provider: str,
-        authorization_endpoint: str,
-        token_endpoint: str,
-        client_id: str,
+        authorization_endpoint: str | None = None,
+        token_endpoint: str | None = None,
+        client_id: str | None = None,
         client_secret: str | None = None,
         scope: str = "",
     ) -> dict[str, Any]:
         """Mint a login URL + handshake state for one provider (spec 0061).
 
+        Missing endpoints/credentials resolve server-side from the vault
+        DCR record — the caller only sends `provider` (+ `scope`), so no
+        human handles client secrets. Explicit values still win (manual
+        setups without a DCR record).
+
         Args:
             tenant_id: Acting tenant (stored server-side, never in the URL).
             provider: Partner name the credential will land under.
             authorization_endpoint: Provider login page (SSRF-checked).
+                Vault DCR record when omitted.
             token_endpoint: Provider token endpoint (SSRF-checked now, so a
-                bad endpoint fails here — not at callback time).
+                bad endpoint fails here — not at callback time). Vault DCR
+                record when omitted.
             client_id: OAuth client id (DCR-issued or operator-provisioned).
+                Vault DCR record when omitted.
             client_secret: Confidential-client secret (sealed into state,
-                single-use, TTL-bound — never logged).
+                single-use, TTL-bound — never logged). Vault DCR record
+                when omitted.
             scope: Space-separated scopes (passed through untouched).
 
         Returns:
@@ -241,13 +300,21 @@ class OAuthService:
             carries it inside the provider redirect).
 
         Raises:
-            InvalidToolError: When Redis/base-URL is dark or an endpoint
-                fails the safety pre-flight (HTTP 400, identifiers only).
+            InvalidToolError: When Redis/base-URL is dark, an endpoint
+                fails the safety pre-flight, or no DCR record exists to
+                resolve the missing values (HTTP 400, identifiers only).
         """
         from voiceai.common.security import is_safe_outbound_url
 
         redis = self._require_redis("authorize")
         self._require_base_url()
+        if not authorization_endpoint or not token_endpoint or not client_id:
+            resolved = await self._resolve_dcr_client(tenant_id=tenant_id, provider=provider)
+            authorization_endpoint = authorization_endpoint or resolved["authorization_endpoint"]
+            token_endpoint = token_endpoint or resolved["token_endpoint"]
+            client_id = client_id or resolved["client_id"]
+            if client_secret is None:
+                client_secret = resolved["client_secret"]
         for label, url in (("authorization_endpoint", authorization_endpoint), ("token_endpoint", token_endpoint)):
             safe = await asyncio.to_thread(is_safe_outbound_url, url)
             if not safe:
