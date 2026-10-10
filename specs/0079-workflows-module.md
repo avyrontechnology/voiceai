@@ -2,9 +2,9 @@
 
 ## Goal
 
-Move the workflows family — records **and** engine — into one module,
-extending `voiceai/modules/automation/` with workflow definitions, their version
-chain, workflow runs, and the `test-run` route.
+Move the workflows family — records **and** engine — into a new module,
+`voiceai/modules/workflows/`, with workflow definitions, their version chain,
+workflow runs, campaigns, and the routes that invoke them.
 
 Follows the one-unit rule established by spec 0078: **a family whose endpoints
 call its own engine moves as one unit.**
@@ -79,7 +79,7 @@ entirely rather than documenting it.
 All three become `BaseFields`. `id` replaces the legacy id field; the API keeps
 the legacy names.
 
-### Engine (`platform/workflows.py` → `modules/automation/workflow_engine.py`)
+### Engine (`platform/workflows.py` → `modules/workflows/engine.py`)
 
 Moved with **one deliberate change**: `run_workflow` / `run_campaign` take a
 store *port* instead of `MemoryStore`. The port is the narrow slice they already
@@ -124,10 +124,10 @@ live automation records.
 ## Architecture delta
 
 ```
-NEW  voiceai/modules/automation/workflow_engine.py — WorkflowDefinition,
-     validate_workflow, run_workflow, run_campaign, and the store port
-MOD  voiceai/modules/automation/{models,repository,service,controller,schemas}
+NEW  voiceai/modules/workflows/ — models, repository, engine, service,
+     controller, schemas, constants, errors and module docs
 MOD  voiceai/core/container.py   — workflow services + container.wire
+MOD  voiceai/modules/__init__.py — workflows registration
 MOD  voiceai/platform/router.py  — workflows/runs/campaigns routers removed
 DEL  voiceai/platform/{store,models}.py workflow + campaign methods
 DEL  voiceai/platform/workflows.py (317 lines)
@@ -163,6 +163,11 @@ parity tests plus the mid-run-stop test — not a flag.
 
 ## Deviations
 
+- The draft said to fold workflows into `modules/automation`. The architect pass
+  rejected that: automation has 1,841 Python lines against a 3,000-line budget,
+  and a faithful 16-route implementation would risk exceeding it while mixing
+  two unrelated automation domains in one module. A standalone workflows module
+  preserves Rule 1, the registry budget, and one responsibility per file.
 - Campaigns were planned as spec 0080 and are folded in here. The engine reads
   them, so they cannot move independently; leaving them behind would recreate the
   split brain spec 0078 documents.
