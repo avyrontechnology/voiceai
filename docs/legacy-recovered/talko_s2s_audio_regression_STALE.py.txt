@@ -1,0 +1,282 @@
+"""Talko S2S audio leg: encoding, ack-less progress, synthetic-sid greeting.
+
+Regression for the deployed Talko S2S failure (S2S agent, Tata Tele via
+talko-service relay):
+
+- Welcome audio streamed OUT (~28 pre/post mark pairs) but mark_tracking showed
+  total_sent=28, total_acked=0, total_missed=28 — the relay never echoes marks.
+- S2S ingest sent=231 batches to Gemini yet user_spoke=False,
+  user_speaking_ms=0, transcriber_duration=0 — the model never detected speech.
+- The model's text surfaced ~4s AFTER the call ended (turn stayed open until EOS).
+- stream_sid was synthetic ``talko-<hex>`` (minted by the rescue) with
+  call_sid=None — the relay never sent a real start.
+
+Root cause pinned here: the relay's event-less audio frames arrive via the
+rescue path as raw browser-style PCM16 @16k, but the talko leg is configured
+as MULAW @8k, so ``_s2s_audio_ingest_loop`` ran ``ulaw_to_pcm`` + an 8k->16k
+resample over PCM and fed the model garbage (continuous noise keeps Gemini's
+VAD from ever closing the turn).
+"""
+
+import asyncio
+import base64
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from voiceai.agent_manager.task_manager import TaskManager
+from voiceai.helpers.mark_event_meta_data import MarkEventMetaData
+from voiceai.helpers.utils import pcm_to_ulaw
+from voiceai.input_handlers.telephony_providers.talko import TalkoInputHandler
+from voiceai.output_handlers.telephony_providers.talko import TalkoOutputHandler
+from voiceai.s2s import events as s2s_events
+
+
+def _silence_pcm(samples=320):
+    return b"\x00\x00" * samples
+
+
+def _make_talko_tm(*, in_rate=16000, out_rate=24000):
+    tm = TaskManager.__new__(TaskManager)
+    tm.task_id = 0
+    tm.run_id = "exec-talko"
+    tm.turn_based_conversation = False
+    tm.is_web_based_call = False
+    tm.default_io = False
+    tm.conversation_ended = False
+    tm.should_record = False
+    tm.has_transfer = False
+    tm.hangup_triggered = False
+    tm._end_call_in_progress = False
+    tm.hangup_detail = None
+    tm.on_turn_usage = None
+    tm.on_provider_health = None
+    tm.dtmf_events = []
+    tm.conversation_start_init_ts = 0
+    tm.s2s_provider_name = "gemini_live"
+    tm.s2s_model = "gemini-3.1-flash-live-preview"
+    tm.buffered_output_queue = asyncio.Queue()
+    tm.audio_queue = asyncio.Queue()
+    tm.queues = {"dtmf": asyncio.Queue()}
+    tm.conversation_history = MagicMock()
+    tm.kwargs = {"api_tools": {"tools_params": {}}}
+    tm.task_config = {"tools_config": {"input": {"provider": "talko"}}}
+    tm._s2s_tool_tasks = set()
+    tm._s2s_hangup_after_response = False
+    tm._s2s_started_at = 0  # welcome gate already elapsed
+    tm._s2s_welcome_gate_ms = 0
+    tm._s2s_welcome_sent = True
+    tm._s2s_agent_speaking = False
+    tm._s2s_turn_seq = 0
+    tm._s2s_playout_until = 0.0
+    tm.stream_sid = None
+    tm.interruption_manager = MagicMock()
+    tm.last_transmitted_timestamp = 0
+    tm.time_since_last_spoken_human_word = 0
+    tm.asked_if_user_is_still_there = False
+    tm._language = "en"
+    tm.call_hangup_message_config = None
+
+    provider = SimpleNamespace(
+        input_sample_rate=in_rate,
+        output_sample_rate=out_rate,
+        send_audio=AsyncMock(),
+        send_dtmf=AsyncMock(),
+        send_function_result=AsyncMock(),
+        commit_function_results=AsyncMock(),
+        trigger_response=AsyncMock(),
+    )
+    output = SimpleNamespace(
+        handle=AsyncMock(), handle_interruption=AsyncMock(), get_provider=MagicMock(return_value="talko")
+    )
+    inp = SimpleNamespace(io_provider="talko", update_is_audio_being_played=MagicMock(), is_dtmf_active=False)
+    tm.tools = {"s2s": provider, "output": output, "input": inp}
+    tm.sampling_rate = 8000
+    tm._s2s_input = tm._s2s_input_format()
+    tm._s2s_output = tm._s2s_output_format()
+    return tm
+
+
+class _ScriptSocket:
+    def __init__(self, frames):
+        self._frames = list(frames)
+
+    async def receive_text(self):
+        if not self._frames:
+            from starlette.websockets import WebSocketDisconnect
+
+            raise WebSocketDisconnect(code=1000)
+        return self._frames.pop(0)
+
+
+def _talko_handler(frames):
+    q: asyncio.Queue = asyncio.Queue()
+    mark_meta = MagicMock()
+    mark_meta.fetch_data.return_value = None
+    handler = TalkoInputHandler(
+        queues={"transcriber": q},
+        websocket=_ScriptSocket(frames),
+        input_types={"audio": 0},
+        mark_event_meta_data=mark_meta,
+    )
+    return handler, q
+
+
+async def test_rescue_browser_audio_tags_pcm_encoding():
+    """Browser-style rescue frames are PCM16 @16k and must say so.
+
+    Without the tag the talko leg's MULAW default runs ulaw_to_pcm over PCM
+    and the model receives garbage (deployed: 231 batches, user_spoke=False).
+    """
+    pcm = _silence_pcm(1600)  # 100ms @16k
+    frames = [json.dumps({"type": "audio", "data": base64.b64encode(pcm).decode()})]
+    frames.append(json.dumps({"event": "stop"}))
+    handler, q = _talko_handler(frames)
+    await asyncio.wait_for(handler._listen(), timeout=5)
+
+    first = q.get_nowait()
+    assert first["data"] == pcm
+    assert first["meta_info"].get("encoding") == "pcm"
+    assert first["meta_info"].get("sample_rate") == 16000
+
+
+async def test_pcm_tagged_audio_bypasses_ulaw_decode():
+    """Per-packet PCM tagging reaches the model untouched at matching rates."""
+    tm = _make_talko_tm(in_rate=16000)
+    pcm = _silence_pcm(320)  # 20ms @16k
+    await tm.audio_queue.put({"data": pcm, "meta_info": {"encoding": "pcm", "sample_rate": 16000}})
+    await tm.audio_queue.put({"data": None, "meta_info": {"eos": True}})
+
+    await tm._s2s_audio_ingest_loop()
+
+    sent = tm.tools["s2s"].send_audio.await_args.args[0]
+    assert sent == pcm
+
+
+async def test_untagged_talko_audio_still_uses_mulaw_leg_default():
+    """Twilio-shaped mulaw media without a tag keeps the old decode path."""
+    tm = _make_talko_tm(in_rate=16000)
+    mulaw = pcm_to_ulaw(_silence_pcm(160))  # 20ms @8k mulaw
+    await tm.audio_queue.put({"data": mulaw, "meta_info": {}})
+    await tm.audio_queue.put({"data": None, "meta_info": {"eos": True}})
+
+    await tm._s2s_audio_ingest_loop()
+
+    sent = tm.tools["s2s"].send_audio.await_args.args[0]
+    # 160 mulaw bytes -> 160 PCM samples @8k -> 320 samples @16k -> 640 bytes
+    assert len(sent) == 640
+
+
+async def test_chunkless_talko_media_treated_as_inbound():
+    """Talko relay media without Twilio's chunk/track must still flow."""
+    payload = base64.b64encode(pcm_to_ulaw(_silence_pcm(160))).decode()
+    # The Twilio path batches 10 media frames per ingest, like the carrier.
+    frames = [json.dumps({"event": "media", "media": {"payload": payload, "timestamp": "20"}}) for _ in range(10)]
+    frames.append(json.dumps({"event": "stop"}))
+    handler, q = _talko_handler(frames)
+    await asyncio.wait_for(handler._listen(), timeout=5)
+
+    assert q.qsize() == 2  # 1 audio batch + EOS from stop
+
+
+async def test_explicit_outbound_media_still_ignored():
+    """An explicit outbound track is an echo, not caller audio."""
+    payload = base64.b64encode(pcm_to_ulaw(_silence_pcm(160))).decode()
+    media = {"payload": payload, "timestamp": "20", "track": "outbound"}
+    frames = [json.dumps({"event": "media", "media": media})]
+    frames.append(json.dumps({"event": "stop"}))
+    handler, q = _talko_handler(frames)
+    await asyncio.wait_for(handler._listen(), timeout=5)
+
+    assert q.qsize() == 1  # EOS only
+    assert q.get_nowait().get("meta_info", {}).get("eos") is True
+
+
+def test_s2s_meta_carries_stream_sid():
+    """The output handler falls back to the packet sid when its own is None.
+
+    S2S meta never carried one, so a greeting racing _s2s_await_stream_sid was
+    dropped as "Not sending" (caller hears nothing).
+    """
+    tm = _make_talko_tm()
+    tm.stream_sid = "talko-b8d8c3a4b97b"
+    assert tm._s2s_meta().get("stream_sid") == "talko-b8d8c3a4b97b"
+
+
+async def test_output_sends_with_meta_sid_when_handler_sid_missing():
+    """Talko output must send (not "Not sending") on a per-packet sid."""
+    ws = MagicMock()
+    ws.send_text = AsyncMock()
+    handler = TalkoOutputHandler(websocket=ws, mark_event_meta_data=MarkEventMetaData())
+    assert handler.stream_sid is None
+
+    packet = {
+        "data": pcm_to_ulaw(_silence_pcm(160)),
+        "meta_info": {"type": "audio", "format": "mulaw", "sequence_id": -1, "stream_sid": "talko-abc123"},
+    }
+    await handler.handle(packet)
+
+    assert ws.send_text.await_count >= 2  # media + trailing mark
+    assert handler.stream_sid == "talko-abc123"
+
+
+async def test_turn_end_clears_audio_playing_without_mark_ack():
+    """Ack-less relays (Talko: acked=0) must not latch audio-playing forever.
+
+    The flag is set per output packet and only a final-chunk mark ACK clears
+    it; with zero ACKs the completion watchdog stays gated and the call can
+    only end on a socket drop (deployed: code=1006 at ~35s).
+    """
+    tm = _make_talko_tm()
+
+    async def stream():
+        yield s2s_events.AudioDelta(data=_silence_pcm(480))
+        yield s2s_events.ResponseDone(transcript="hi", usage=None)
+
+    tm.tools["s2s"].receive_events = stream
+    with patch("voiceai.agent_manager.task_manager.convert_to_request_log"):
+        await tm._s2s_event_loop()
+
+    tm.tools["input"].update_is_audio_being_played.assert_called_with(False)
+
+
+async def test_sentinel_does_not_relatch_audio_playing():
+    """The end-of-stream sentinel is bookkeeping, not audible audio."""
+    tm = _make_talko_tm()
+
+    async def run_loop():
+        await tm._s2s_output_loop()
+
+    await tm.buffered_output_queue.put({"data": b"\x00", "meta_info": tm._s2s_meta()})
+    task = asyncio.create_task(run_loop())
+    await asyncio.sleep(0.1)
+    tm.conversation_ended = True
+    await asyncio.wait_for(task, timeout=5)
+
+    for call in tm.tools["input"].update_is_audio_being_played.call_args_list:
+        assert call.args != (True,)
+
+
+async def test_synthetic_sid_unblocks_s2s_stream_ready():
+    """A rescued (synthetic) sid still propagates and unblocks the greeting."""
+    tm = _make_talko_tm()
+    tm.stream_sid = None
+    tm.stream_sid_ts = None
+    tm.output_handler_set = True
+    tm._report_stream_connect = AsyncMock()
+    tm._s2s_stream_ready = asyncio.Event()
+    ready = asyncio.Event()
+    ready.set()
+    tm.tools = {
+        "input": MagicMock(
+            get_stream_sid=MagicMock(return_value="talko-b8d8c3a4b97b"),
+            stream_sid_ready=ready,
+            is_welcome_message_played=False,
+        ),
+        "output": MagicMock(set_stream_sid=AsyncMock()),
+    }
+
+    await tm._s2s_await_stream_sid()
+
+    tm.tools["output"].set_stream_sid.assert_awaited_once_with("talko-b8d8c3a4b97b")
+    assert tm._s2s_stream_ready.is_set()
