@@ -25,26 +25,19 @@ from voiceai.platform.models import (
     CreateCampaignRequest,
     CreateApiKeyRequest,
     CreateApiKeyResponse,
-    CreateGraphRequest,
     CreateSubAccountRequest,
     CreateToolRequest,
     CreateVoiceRequest,
     CreateWorkflowRequest,
     DeletedResponse,
-    DeployGraphRequest,
     Execution,
     ExecutionListResponse,
     ExecutionStats,
     ExecutionStatus,
-    GraphDoc,
-    GraphListResponse,
-    GraphVersion,
-    GraphVersionListResponse,
     InboundConfig,
     LatencyBucket,
     LatencyStats,
     TestRunRequest,
-    UpdateGraphRequest,
     UpdateInboundRequest,
     UpdateOrganizationRequest,
     UpdateWorkflowRequest,
@@ -91,14 +84,8 @@ from voiceai.platform.simulation import (
     run_batch,
     run_simulated_call,
 )
-from voiceai.platform.graphs import (
-    GraphDefinition,
-    ValidationResult,
-    DryRunResult,
-    dry_run,
-    graph_to_agent_payload,
-    validate_definition,
-)
+
+from voiceai.common.validation import ValidationResult
 from voiceai.platform.workflows import (
     WorkflowDefinition,
     run_campaign,
@@ -553,156 +540,6 @@ async def remove_member(sub_id: str, email: str, store: MemoryStore = Depends(ge
 
 # --- graphs --------------------------------------------------------------------------
 
-graphs_router = APIRouter(prefix="/graphs", tags=["Graphs"])
-
-
-async def _load_graph(store: MemoryStore, graph_id: str) -> GraphDoc:
-    graph = await store.get_graph(graph_id)
-    if graph is None:
-        raise _not_found("Graph", graph_id)
-    return graph
-
-
-def _parse_definition(raw: dict) -> GraphDefinition:
-    """Validate a stored graph definition, raising an opaque 422 on failure.
-
-    The 422 detail carries dotted locations plus pydantic error types only
-    (via `common.responses.public_validation_errors`) — never validator `msg`
-    text, which can embed input for some error types (spec 0052, error opacity).
-    """
-    from pydantic import ValidationError as PydanticValidationError
-
-    from voiceai.common.responses import public_validation_errors
-
-    try:
-        return GraphDefinition(**raw)
-    except PydanticValidationError as exc:
-        details = "; ".join(
-            f"{'.'.join(map(str, r['loc']))}: {r['type']}" for r in public_validation_errors(exc.errors())
-        )
-        raise HTTPException(status_code=422, detail=f"Invalid graph definition: {details}")
-
-
-async def _snapshot_version(store: MemoryStore, graph: GraphDoc, note: Optional[str] = None) -> None:
-    versions = await store.list_graph_versions(graph.graph_id)
-    await store.save_graph_version(
-        GraphVersion(
-            version_id=new_id("ver"),
-            graph_id=graph.graph_id,
-            version_number=len(versions) + 1,
-            name=graph.name,
-            definition=dict(graph.definition),
-            note=note,
-        )
-    )
-
-
-@graphs_router.post("", response_model=GraphDoc, status_code=201)
-async def create_graph(payload: CreateGraphRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> GraphDoc:
-    graph = GraphDoc(
-        graph_id=new_id("graph"), name=payload.name, agent_id=payload.agent_id, definition=dict(payload.definition)
-    )
-    await store.save_graph(graph)
-    await _snapshot_version(store, graph, note="created")
-    return graph
-
-
-@graphs_router.get("", response_model=GraphListResponse)
-async def list_graphs(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> GraphListResponse:
-    return GraphListResponse(graphs=await store.list_graphs())
-
-
-@graphs_router.get("/{graph_id}", response_model=GraphDoc)
-async def get_graph(graph_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> GraphDoc:
-    return await _load_graph(store, graph_id)
-
-
-@graphs_router.put("/{graph_id}", response_model=GraphDoc)
-async def update_graph(graph_id: str, payload: UpdateGraphRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> GraphDoc:
-    graph = await _load_graph(store, graph_id)
-    await _snapshot_version(store, graph, note="before update")
-    if payload.name is not None:
-        graph.name = payload.name
-    if payload.agent_id is not None:
-        graph.agent_id = payload.agent_id
-    if payload.definition is not None:
-        graph.definition = dict(payload.definition)
-    graph.updated_at = utcnow()
-    await store.save_graph(graph)
-    return graph
-
-
-@graphs_router.delete("/{graph_id}", response_model=DeletedResponse)
-async def delete_graph(graph_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DeletedResponse:
-    if not await store.delete_graph(graph_id):
-        raise _not_found("Graph", graph_id)
-    return DeletedResponse()
-
-
-@graphs_router.get("/{graph_id}/versions", response_model=GraphVersionListResponse)
-async def list_graph_versions(graph_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> GraphVersionListResponse:
-    await _load_graph(store, graph_id)
-    return GraphVersionListResponse(versions=await store.list_graph_versions(graph_id))
-
-
-@graphs_router.post("/{graph_id}/restore/{version_number}", response_model=GraphDoc)
-async def restore_graph_version(
-    graph_id: str, version_number: int, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> GraphDoc:
-    graph = await _load_graph(store, graph_id)
-    versions = await store.list_graph_versions(graph_id)
-    target = next((v for v in versions if v.version_number == version_number), None)
-    if target is None:
-        raise _not_found("Graph version", str(version_number))
-    await _snapshot_version(store, graph, note=f"before restore of v{version_number}")
-    graph.name = target.name
-    graph.definition = dict(target.definition)
-    graph.updated_at = utcnow()
-    await store.save_graph(graph)
-    return graph
-
-
-@graphs_router.post("/{graph_id}/validate", response_model=ValidationResult)
-async def validate_graph(graph_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> ValidationResult:
-    graph = await _load_graph(store, graph_id)
-    return validate_definition(_parse_definition(graph.definition))
-
-
-@graphs_router.post("/{graph_id}/dry-run", response_model=DryRunResult)
-async def dry_run_graph(graph_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DryRunResult:
-    graph = await _load_graph(store, graph_id)
-    return dry_run(_parse_definition(graph.definition))
-
-
-@graphs_router.post("/{graph_id}/deploy")
-async def deploy_graph(
-    graph_id: str, payload: DeployGraphRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("agents:write")),
-) -> JSONResponse:
-    graph = await _load_graph(store, graph_id)
-    definition = _parse_definition(graph.definition)
-    body = graph_to_agent_payload(graph.name, definition, payload.agent_name)
-    logger.info(f"Graph {graph_id} deployed as agent payload '{payload.agent_name}'")
-    return JSONResponse(content=body)
-
-
 # --- workflows --------------------------------------------------------------------------
 
 workflows_router = APIRouter(prefix="/workflows", tags=["Workflows"])
@@ -1063,12 +900,12 @@ def single_app_routers() -> list[APIRouter]:
         simulate_router,
         executions_router,
         batches_router,
-        # retired: integrations (0077), webhooks (0076), kbs (0075), numbers (0074) — `voiceai/modules/numbers` owns the
+        # retired: graphs (0078), integrations (0077), webhooks (0076), kbs (0075),
+        # numbers (0074) — `voiceai/modules/numbers` owns the
         # family now, and module routers mount first (first match wins).
         inbound_router,
         agents_router,
         subs_router,
-        graphs_router,
         workflows_router,
         runs_router,
         campaigns_router,

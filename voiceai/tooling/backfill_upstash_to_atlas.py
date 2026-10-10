@@ -83,7 +83,7 @@ PLATFORM_FAMILIES: Final[tuple[str, ...]] = tuple(FAMILY_COLLECTIONS)
 
 #: Families that left the platform bucket for a real module (spec 0074). Their
 #: rows are written typed, not as a `{payload: ...}` envelope.
-MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers", "kbs", "webhooks", "integrations")
+MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers", "kbs", "webhooks", "integrations", "graphs")
 
 #: (Redis glob pattern, human description). Every family the platform ever wrote.
 FAMILIES: Final[tuple[tuple[str, str], ...]] = (
@@ -237,6 +237,7 @@ _MODULE_RESTORES: Final[dict[str, Callable[[AtlasTargets, str, dict[str, Any]], 
     "kbs": lambda targets, item_id, payload: targets.restore_knowledge(item_id, payload),
     "webhooks": lambda targets, item_id, payload: targets.restore_webhook(item_id, payload),
     "integrations": lambda targets, item_id, payload: targets.restore_integration(item_id, payload),
+    "graphs": lambda targets, item_id, payload: targets.restore_graph(item_id, payload),
 }
 
 
@@ -340,6 +341,14 @@ class AtlasTargets:
 
         with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
             return await _build_integrations_repository(self._numbers_source).restore(item_id, payload)
+
+    async def restore_graph(self, item_id: str, payload: dict[str, Any]) -> bool:
+        """Write one legacy graph row typed, unless it exists (spec 0078)."""
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+        from voiceai.core.container import _build_graph_repository
+
+        with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
+            return await _build_graph_repository(self._numbers_source).restore(item_id, payload)
 
     async def restore_organization(self, payload: dict[str, Any]) -> bool:
         """Seed the organization settings singleton unless one exists."""

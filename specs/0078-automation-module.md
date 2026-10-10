@@ -145,6 +145,24 @@ campaign names a `workflow_id`, a version belongs to a workflow, a run belongs
 to a version, and the legacy router carries **68 cross-references** between
 these identifiers.
 
+## Burn-down
+
+- [x] `automation/constants.py`, `models.py`, `errors.py`
+- [x] `automation/engine.py` — the engine, verbatim from `platform/graphs.py`
+- [x] `automation/static_methods.py` (version numbering), `helpers.py`, `utils.py`
+- [x] `automation/repository.py`, `service.py` (incl. the shared definition parse)
+- [x] `automation/schemas.py` + `controller.py` — all **ten** routes
+- [x] `automation/exceptions.py` + `CONTRACT.md` / `README.md` / `RUNBOOK.md`
+- [x] `common/validation.py` — `ValidationResult`, shared with the workflow engine (Rule 2)
+- [x] container provider + `container.wire` + module registry
+- [x] `platform/{router,store,models}.py` + `platform/graphs.py` (deleted, 221 lines)
+- [x] backfill: `_MODULE_RESTORES` entry
+- [x] `test_route_inventory.py` (45 platform routes), `test_registry.py`,
+      `test_tenant_isolation.py`, auth shim `REMOVED_BY_SPEC` (11 names)
+- [x] `test_repository_store.py` fixture moved graphs → workflows
+- [x] tests: engine parity (15), service/storage/versioning/route-count (18)
+- [x] `make check` green (2331 passed) + `make sec` clean
+
 ## Deviations
 
 - The first estimate said ~9 models; the survey found ~25. Recorded rather than
@@ -155,3 +173,15 @@ these identifiers.
   reverted.** Recorded here rather than quietly rewritten, because "storage
   first" is the intuitive order and the failure only shows up once a graph is
   created through one route and read through another.
+- **`ValidationResult` moved to `common/validation.py`.** It was discovered
+  mid-implementation that `platform/workflows.py` imports it from
+  `platform/graphs.py` — the workflow engine importing a *graph* module for a
+  shape with nothing to do with graphs. Rule 2 (something two modules need
+  moves to common) applied, which also means the cross-family import does not
+  outlive this migration when workflows move in 0079.
+- **`NodeReport` stayed in the legacy models.** It is referenced by
+  `WorkflowRun` — a workflow engine type — so removing it with the graph
+  family would have broken workflows, which are still legacy (0079).
+- **`test_repository_store.py` moved graphs → workflows.** Fifth family to
+  serve as that file's fixture; workflows is the next still in the store with
+  a full CRUD shape.

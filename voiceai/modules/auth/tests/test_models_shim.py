@@ -187,6 +187,17 @@ REMOVED_BY_SPEC: dict[str, str] = {
     "UpdateIntegrationRequest": "spec 0077 — UpdateIntegrationRequest in voiceai.modules.integrations.schemas",
     "mask_secrets": "spec 0077 — moved to voiceai.modules.integrations.static_methods (the module\'s masking contract)",
     "MASKED_SECRET": "spec 0077 — moved to voiceai.modules.integrations.constants",
+    "GraphDoc": "spec 0078 — moved to voiceai.modules.automation.models",
+    "GraphVersion": "spec 0078 — moved to voiceai.modules.automation.models",
+    "GraphListResponse": "spec 0078 — the automation module's list response; wire shape unchanged",
+    "GraphVersionListResponse": "spec 0078 — the automation module's versions response",
+    "CreateGraphRequest": "spec 0078 — CreateGraphRequest in voiceai.modules.automation.schemas",
+    "UpdateGraphRequest": "spec 0078 — UpdateGraphRequest in voiceai.modules.automation.schemas",
+    "DeployGraphRequest": "spec 0078 — DeployGraphRequest in voiceai.modules.automation.schemas",
+    "GraphDefinition": "spec 0078 — moved to voiceai.modules.automation.engine (with graphs.py)",
+    "validate_definition": "spec 0078 — moved to voiceai.modules.automation.engine (with graphs.py)",
+    "dry_run": "spec 0078 — moved to voiceai.modules.automation.engine (with graphs.py)",
+    "graph_to_agent_payload": "spec 0078 — moved to voiceai.modules.automation.engine (with graphs.py)",
     "AssignNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
 }
 
@@ -230,6 +241,15 @@ def test_removed_names_are_importable_from_their_new_home() -> None:
     assert integration_schemas.IntegrationListResponse.__name__ == "IntegrationListResponse"
     assert integration_schemas.CreateIntegrationRequest.__name__ == "CreateIntegrationRequest"
     assert integration_schemas.UpdateIntegrationRequest.__name__ == "UpdateIntegrationRequest"
+    from voiceai.modules.automation import engine as automation_engine
+    from voiceai.modules.automation import schemas as automation_schemas
+
+    assert automation_engine.GraphDefinition.__name__ == "GraphDefinition"
+    assert automation_engine.validate_definition.__name__ == "validate_definition"
+    assert automation_engine.dry_run.__name__ == "dry_run"
+    assert automation_engine.graph_to_agent_payload.__name__ == "graph_to_agent_payload"
+    assert automation_schemas.CreateGraphRequest.__name__ == "CreateGraphRequest"
+    assert automation_schemas.DeployGraphRequest.__name__ == "DeployGraphRequest"
     assert numbers_schemas.CreateNumberRequest.__name__ == "CreateNumberRequest"
     assert numbers_schemas.AssignNumberRequest.__name__ == "AssignNumberRequest"
 

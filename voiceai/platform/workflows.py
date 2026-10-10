@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.platform.graphs import ValidationResult
+from voiceai.common.validation import ValidationResult
 from voiceai.platform.models import (
     ExecutionStatus,
     NodeReport,

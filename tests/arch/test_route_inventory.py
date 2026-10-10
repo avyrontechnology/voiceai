@@ -240,5 +240,7 @@ def test_shared_paths_belong_to_modules_and_the_rest_to_the_platform_router(sing
     assert owners[("GET", f"{API_PREFIX}/webhooks")] == "voiceai.modules.webhooks.controller"
     # spec 0077: the integrations family moved into its own module.
     assert owners[("GET", f"{API_PREFIX}/integrations")] == "voiceai.modules.integrations.controller"
+    # spec 0078: graphs moved whole — records AND engine — into their own module.
+    assert owners[("GET", f"{API_PREFIX}/graphs")] == "voiceai.modules.automation.controller"
     platform_owned = sum(1 for owner in owners.values() if owner == "voiceai.platform.router")
-    assert platform_owned == 55  # specs 0074-0077: phone-number, knowledge, webhook, integration routes left
+    assert platform_owned == 45  # specs 0074-0078: phone-number, knowledge, webhook, integration, graph routes left

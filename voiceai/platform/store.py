@@ -14,8 +14,6 @@ from voiceai.platform.models import (
     AuthEvent,
     Batch,
     Execution,
-    GraphDoc,
-    GraphVersion,
     InboundConfig,
     Invite,
     LedgerEntry,
@@ -238,28 +236,6 @@ class MemoryStore:
     # -- integrations ---------------------------------------------------------------------
 
     # -- graphs ---------------------------------------------------------------------
-
-    async def save_graph(self, graph: GraphDoc) -> None:
-        await self._put("graphs", graph.graph_id, graph.model_dump(mode="json"))
-
-    async def get_graph(self, graph_id: str) -> Optional[GraphDoc]:
-        raw = await self._get("graphs", graph_id)
-        return GraphDoc(**raw) if raw else None
-
-    async def list_graphs(self) -> List[GraphDoc]:
-        return [GraphDoc(**raw) for raw in await self._all("graphs")]
-
-    async def delete_graph(self, graph_id: str) -> bool:
-        return await self._delete("graphs", graph_id)
-
-    async def save_graph_version(self, version: GraphVersion) -> None:
-        await self._put("graph_versions", version.version_id, version.model_dump(mode="json"))
-
-    async def list_graph_versions(self, graph_id: str) -> List[GraphVersion]:
-        versions = [GraphVersion(**raw) for raw in await self._all("graph_versions")]
-        versions = [v for v in versions if v.graph_id == graph_id]
-        versions.sort(key=lambda v: v.version_number)
-        return versions
 
     # -- workflows ---------------------------------------------------------------------
 

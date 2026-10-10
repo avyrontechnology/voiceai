@@ -47,6 +47,7 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/knowledge/tests/test_knowledge_repository.py",  # spec 0075: tenant-isolation pin
         "voiceai/modules/webhooks/tests/test_webhooks_unit.py",  # spec 0076: tenant-scoped repository
         "voiceai/modules/integrations/tests/test_integrations_unit.py",  # spec 0077: tenant-isolation pin
+        "voiceai/modules/automation/tests/test_automation_unit.py",  # spec 0078: tenant-isolation pin
         "voiceai/modules/auth/ports.py",  # spec 0040: identity store tail
         "voiceai/modules/auth/repository.py",  # spec 0040: identity store tail
         "voiceai/modules/auth/service.py",  # spec 0020, M1b: credential → context mapping

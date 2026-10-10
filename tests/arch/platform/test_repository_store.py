@@ -23,8 +23,6 @@ from voiceai.platform.models import (
     Batch,
     Execution,
     ExecutionStatus,
-    GraphDoc,
-    GraphVersion,
     InboundConfig,
     Tool,
     LedgerEntry,
@@ -99,9 +97,9 @@ EXEC_OTHER = Execution(
 )
 BATCH_1 = Batch(batch_id="b1", agent_id="agent-1", name="first", created_at=T0)
 BATCH_2 = Batch(batch_id="b2", agent_id="agent-2", name="second", created_at=T0 + timedelta(minutes=1))
-GRAPH_1 = GraphDoc(graph_id="g1", name="graph")
-GRAPH_V2 = GraphVersion(version_id="gv2", graph_id="g1", version_number=2, name="two", created_at=T0)
-GRAPH_V1 = GraphVersion(version_id="gv1", graph_id="g1", version_number=1, name="one", created_at=T0)
+FLOW_1 = WorkflowDoc(workflow_id="g1", name="flow", created_at=T0, updated_at=T0)
+FLOW_V2 = WorkflowVersion(version_id="gv2", workflow_id="g1", version_number=2, name="two", created_at=T0)
+FLOW_V1 = WorkflowVersion(version_id="gv1", workflow_id="g1", version_number=1, name="one", created_at=T0)
 WORKFLOW_1 = WorkflowDoc(workflow_id="wf1", name="flow")
 WF_V2 = WorkflowVersion(version_id="wv2", workflow_id="wf1", version_number=2, name="two", created_at=T0)
 WF_V1 = WorkflowVersion(version_id="wv1", workflow_id="wf1", version_number=1, name="one", created_at=T0)
@@ -200,16 +198,16 @@ async def _batches(store: MemoryStore) -> list[Any]:
 
 
 async def _graphs_and_versions(store: MemoryStore) -> list[Any]:
-    await store.save_graph(GRAPH_1)
-    await store.save_graph_version(GRAPH_V2)
-    await store.save_graph_version(GRAPH_V1)  # sorted by version_number on read
+    await store.save_workflow(FLOW_1)
+    await store.save_workflow_version(FLOW_V2)
+    await store.save_workflow_version(FLOW_V1)  # sorted by version_number on read
     return [
-        await store.get_graph("g1"),
-        await store.list_graphs(),
-        await store.list_graph_versions("g1"),
-        await store.list_graph_versions("other"),
-        await store.delete_graph("g1"),
-        await store.list_graphs(),
+        await store.get_workflow("g1"),
+        await store.list_workflows(),
+        await store.list_workflow_versions("g1"),
+        await store.list_workflow_versions("other"),
+        await store.delete_workflow("g1"),
+        await store.list_workflows(),
     ]
 
 

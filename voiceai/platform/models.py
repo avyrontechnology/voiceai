@@ -473,49 +473,6 @@ class VectorStoreConfig(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class GraphDoc(BaseModel):
-    graph_id: str
-    name: str
-    agent_id: Optional[str] = None
-    definition: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-
-class GraphVersion(BaseModel):
-    version_id: str
-    graph_id: str
-    version_number: int
-    name: str
-    definition: Dict[str, Any] = Field(default_factory=dict)
-    note: Optional[str] = None
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class GraphListResponse(BaseModel):
-    graphs: List[GraphDoc]
-
-
-class GraphVersionListResponse(BaseModel):
-    versions: List[GraphVersion]
-
-
-class CreateGraphRequest(BaseModel):
-    name: str = Field(..., min_length=1)
-    agent_id: Optional[str] = None
-    definition: Dict[str, Any] = Field(default_factory=dict)
-
-
-class UpdateGraphRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1)
-    agent_id: Optional[str] = None
-    definition: Optional[Dict[str, Any]] = None
-
-
-class DeployGraphRequest(BaseModel):
-    agent_name: str = Field(..., min_length=1)
-
-
 class NodeReport(BaseModel):
     node_id: str
     type: str
