@@ -170,6 +170,11 @@ SHARED_IDENTITIES = (
 #: owns the removal. A deletion is only legal when it is listed here — an
 #: *unlisted* disappearance is still a regression.
 REMOVED_BY_SPEC: dict[str, str] = {
+    "Execution": "spec 0080 — moved to voiceai.modules.executions.models",
+    "ExecutionStats": "spec 0080 — moved to voiceai.modules.executions.models",
+    "ExecutionListResponse": "spec 0080 — the executions module's list response (ExecutionListResponse); the wire shape ('executions') is unchanged",
+    "LatencyStats": "spec 0080 — moved to voiceai.modules.executions.models",
+    "LatencyBucket": "spec 0080 — moved to voiceai.modules.executions.models",
     "PhoneNumber": "spec 0074 — moved to voiceai.modules.numbers.models",
     "PhoneNumberListResponse": "spec 0074 — the numbers module's list response (NumberListResponse); the wire shape ('numbers') is unchanged",
     "CreatePhoneNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",

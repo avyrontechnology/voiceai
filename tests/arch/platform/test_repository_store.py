@@ -18,11 +18,10 @@ from voiceai.core.environment import Environment
 from voiceai.database.constants import TENANT_ID_FIELD, Collections
 from voiceai.database.repository import BaseRepository, InMemoryRepository
 from voiceai.modules.auth.repository import MongoAuthStore
+from voiceai.modules.executions.models import Execution, ExecutionStatus
 from voiceai.platform.models import (
     ApiKey,
     Batch,
-    Execution,
-    ExecutionStatus,
     InboundConfig,
     Tool,
     LedgerEntry,
@@ -81,20 +80,9 @@ TOOL_A = Tool(tool_id="t1", name="a", kind="custom", agent_id="agent-1")
 TOOL_B = Tool(tool_id="t2", name="b", kind="custom", agent_id="agent-2")
 VOICE_A = VoiceEntry(voice_id="v1", name="a", provider="p", provider_voice_id="pv", agent_id="agent-1")
 VOICE_B = VoiceEntry(voice_id="v2", name="b", provider="p", provider_voice_id="pv", agent_id="agent-2")
-EXEC_OLD = Execution(
-    execution_id="e1", agent_id="agent-1", to_number="+1", status=ExecutionStatus("completed"), started_at=T0
-)
-EXEC_NEW = Execution(
-    execution_id="e2",
-    agent_id="agent-1",
-    batch_id="b1",
-    to_number="+2",
-    status=ExecutionStatus("failed"),
-    started_at=T0 + timedelta(minutes=1),
-)
-EXEC_OTHER = Execution(
-    execution_id="e3", agent_id="agent-2", to_number="+3", status=ExecutionStatus("completed"), started_at=T0
-)
+FLOW_OLD = WorkflowDoc(workflow_id="e1", name="old", created_at=T0, updated_at=T0)
+FLOW_NEW = WorkflowDoc(workflow_id="e2", name="new", created_at=T0 + timedelta(minutes=1), updated_at=T0)
+FLOW_OTHER = WorkflowDoc(workflow_id="e3", name="other", created_at=T0, updated_at=T0)
 BATCH_1 = Batch(batch_id="b1", agent_id="agent-1", name="first", created_at=T0)
 BATCH_2 = Batch(batch_id="b2", agent_id="agent-2", name="second", created_at=T0 + timedelta(minutes=1))
 FLOW_1 = WorkflowDoc(workflow_id="g1", name="flow", created_at=T0, updated_at=T0)
@@ -177,17 +165,12 @@ async def _tools_voices_by_agent(store: MemoryStore) -> list[Any]:
 
 
 async def _executions_filters(store: MemoryStore) -> list[Any]:
-    for execution in (EXEC_OLD, EXEC_NEW, EXEC_OTHER):
-        await store.save_execution(execution)
+    for flow in (FLOW_OLD, FLOW_NEW, FLOW_OTHER):
+        await store.save_workflow(flow)
     return [
-        await store.get_execution("e2"),
-        await store.list_executions(),  # newest first
-        await store.list_executions(agent_id="agent-1"),
-        await store.list_executions(batch_id="b1"),
-        await store.list_executions(status=ExecutionStatus("completed").value),
-        await store.list_executions(limit=1),
-        await store.list_executions(limit=1, offset=1),
-        await store.list_executions(offset=5),
+        await store.get_workflow("e2"),
+        await store.list_workflows(),  # insertion order
+        await store.get_workflow("missing"),
     ]
 
 
@@ -273,7 +256,7 @@ async def _organization_wallet_ledger(store: MemoryStore) -> list[Any]:
 async def _reset_platform(store: MemoryStore) -> list[Any]:
     await store.save_tool(TOOL_1)
     await store.save_tool(TOOL_1)
-    await store.save_execution(EXEC_OLD)
+    await store.save_workflow(FLOW_OLD)
     await store.save_wallet(WALLET_1)
     await store.save_organization(ORG_1)
     await store.add_ledger_entry(LEDGER_ROWS[0])
@@ -282,7 +265,7 @@ async def _reset_platform(store: MemoryStore) -> list[Any]:
         cleared,
         await store.list_tools(),
         await store.list_tools(),
-        await store.list_executions(),
+        await store.list_workflows(),
         await store.get_wallet(),
         await store.list_ledger(),
         await store.get_organization(),  # organization settings survive a reset

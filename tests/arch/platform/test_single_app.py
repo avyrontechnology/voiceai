@@ -96,9 +96,11 @@ async def test_simulated_call_records_an_execution(owner: AsyncClient) -> None:
     assert started.status_code == 202, started.text
     stats = await owner.get(f"{API}/executions/stats")
     assert stats.status_code == 200
-    assert stats.json()["total"] == 1
+    assert stats.json()["data"]["total"] == 1
     listed = await owner.get(f"{API}/executions")
-    assert [row["execution_id"] for row in listed.json()["executions"]] == [started.json()["execution_id"]]
+    assert [row["execution_id"] for row in listed.json()["data"]["executions"]] == [
+        started.json()["data"]["execution_id"]
+    ]
 
 
 async def test_organization_settings_persist(owner: AsyncClient) -> None:

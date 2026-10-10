@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 # direct importer, star surface and monkeypatch target keeps resolving. The `as`
 # spelling makes each binding an EXPLICIT re-export (no_implicit_reexport).
 from voiceai.common.constants import EMAIL_PATTERN as EMAIL_PATTERN
+# Re-exported so the platform's legacy model layer keeps one import site for the
+# shared helpers; explicit `as` keeps the strict no-implicit-re-export profile honest.
 from voiceai.common.datetime_utils import utc_now as utcnow
 from voiceai.common.ids import new_id as new_id
 from voiceai.modules.auth.models.apikey import ApiKey as ApiKey
@@ -68,37 +70,6 @@ class LatencyBreakdown(BaseModel):
     llm_ms: int = 0
     synthesizer_ms: int = 0
     e2e_ms: int = 0
-
-
-class Execution(BaseModel):
-    execution_id: str
-    agent_id: str
-    batch_id: Optional[str] = None
-    direction: Literal["outbound", "inbound"] = "outbound"
-    to_number: str
-    from_number: Optional[str] = None
-    status: ExecutionStatus = ExecutionStatus.QUEUED
-    variables: Dict[str, Any] = Field(default_factory=dict)
-    transcript: List[TranscriptTurn] = Field(default_factory=list)
-    summary: Optional[str] = None
-    extracted_data: Dict[str, Any] = Field(default_factory=dict)
-    latency: Optional[LatencyBreakdown] = None
-    hangup_code: Optional[str] = None
-    started_at: datetime = Field(default_factory=utcnow)
-    ended_at: Optional[datetime] = None
-    duration_s: float = 0
-
-
-class ExecutionListResponse(BaseModel):
-    executions: List[Execution]
-
-
-class ExecutionStats(BaseModel):
-    total: int = 0
-    by_status: Dict[str, int] = Field(default_factory=dict)
-    avg_e2e_ms: Optional[int] = None
-    total_duration_s: float = 0
-    completed_rate: float = 0
 
 
 class SimulateCallRequest(BaseModel):
@@ -272,8 +243,6 @@ class ApiKeyListResponse(BaseModel):
 
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(..., min_length=1)
-    scopes: List[str] = Field(default_factory=list)
-    expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
     scopes: List[str] = Field(default_factory=list)
     expires_in_days: Optional[int] = Field(None, ge=1, le=3650)
 
@@ -580,16 +549,3 @@ class CreateCampaignRequest(BaseModel):
     entries: List[CampaignEntry] = Field(..., min_length=1, max_length=1000)
 
 
-class LatencyBucket(BaseModel):
-    date: str
-    count: int
-    avg_e2e_ms: Optional[int] = None
-
-
-class LatencyStats(BaseModel):
-    count: int = 0
-    avg_e2e_ms: Optional[int] = None
-    p50_e2e_ms: Optional[int] = None
-    p95_e2e_ms: Optional[int] = None
-    by_stage: Dict[str, int] = Field(default_factory=dict)
-    buckets: List[LatencyBucket] = Field(default_factory=list)

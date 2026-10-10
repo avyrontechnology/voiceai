@@ -6,11 +6,12 @@ router into its module.
 """
 
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.common.datetime_utils import utc_now as utcnow
 from voiceai.platform.models import (
     AddMemberRequest,
     ApiKey,
@@ -30,13 +31,7 @@ from voiceai.platform.models import (
     CreateVoiceRequest,
     CreateWorkflowRequest,
     DeletedResponse,
-    Execution,
-    ExecutionListResponse,
-    ExecutionStats,
-    ExecutionStatus,
     InboundConfig,
-    LatencyBucket,
-    LatencyStats,
     TestRunRequest,
     UpdateInboundRequest,
     UpdateOrganizationRequest,
@@ -68,7 +63,6 @@ from voiceai.platform.models import (
     WorkflowVersion,
     WorkflowVersionListResponse,
     new_id,
-    utcnow,
 )
 from voiceai.platform.auth import (
     Principal,
@@ -86,6 +80,15 @@ from voiceai.platform.simulation import (
 )
 
 from voiceai.common.validation import ValidationResult
+from voiceai.modules.executions.schemas import ExecutionListResponse, ExecutionResponse
+from voiceai.modules.executions.models import (
+    Execution,
+    ExecutionStats,
+    ExecutionStatus,
+    LatencyBreakdown,
+    LatencyStats,
+    TranscriptTurn,
+)
 from voiceai.platform.workflows import (
     WorkflowDefinition,
     run_campaign,
@@ -104,6 +107,22 @@ def get_store(request: Request) -> MemoryStore:
     return platform_store_of(request.app)
 
 
+def get_executions(request: Request) -> Any:  # why: a duck-typed read port until batches migrates
+    """Resolve the executions module's service for this request (spec 0080).
+
+    The two batch routes that read executions now go through the module that
+    owns them, because the platform store no longer carries call records. The
+    service is tenant-scoped like every other, so a batch's executions are read
+    through the same tenant the batch itself is read through.
+    """
+    from voiceai.common.constants import CONTAINER_STATE_ATTR
+
+    container = getattr(request.app.state, CONTAINER_STATE_ATTR, None)
+    if container is None:  # why: the app always stages one; absent means unwired
+        raise HTTPException(status_code=503, detail="Container unavailable")
+    return container.executions_service()
+
+
 def _not_found(resource: str, resource_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{resource} {resource_id} not found")
 
@@ -113,132 +132,6 @@ def _not_found(resource: str, resource_id: str) -> HTTPException:
 calls_router = APIRouter(prefix="/calls", tags=["Calls"])
 # Spec 0048 (Slice B): the simulator rides its own router so the single app can mount
 # it without the legacy `/calls/place` twin (the voice module owns that path).
-simulate_router = APIRouter(prefix="/calls", tags=["Calls"])
-executions_router = APIRouter(prefix="/executions", tags=["Executions"])
-
-
-@simulate_router.post("/simulate", response_model=Execution, status_code=202)
-async def simulate_call(payload: SimulateCallRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:write")),
-) -> Execution:
-    """Start a simulated outbound call. delay_scale=0 completes inline."""
-    if payload.delay_scale == 0:
-        return await run_simulated_call(
-            store,
-            agent_id=payload.agent_id,
-            to_number=payload.to_number,
-            from_number=payload.from_number,
-            variables=payload.variables,
-            batch_id=payload.batch_id,
-            delay_scale=0,
-        )
-    execution = Execution(
-        execution_id=new_id("exec"),
-        agent_id=payload.agent_id,
-        batch_id=payload.batch_id,
-        to_number=payload.to_number,
-        from_number=payload.from_number,
-        variables=payload.variables,
-    )
-    await store.save_execution(execution)
-    asyncio.create_task(progress_simulated_call(store, execution.execution_id, payload.delay_scale))
-    return execution
-
-
-@executions_router.get("", response_model=ExecutionListResponse)
-async def list_executions(
-    agent_id: Optional[str] = None,
-    batch_id: Optional[str] = None,
-    status: Optional[ExecutionStatus] = None,
-    limit: int = 50,
-    offset: int = 0,
-    store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
-) -> ExecutionListResponse:
-    executions = await store.list_executions(
-        agent_id=agent_id, batch_id=batch_id, status=status.value if status else None, limit=limit, offset=offset
-    )
-    return ExecutionListResponse(executions=executions)
-
-
-@executions_router.get("/stats", response_model=ExecutionStats)
-async def get_execution_stats(
-    agent_id: Optional[str] = None, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
-) -> ExecutionStats:
-    executions = await store.list_executions(agent_id=agent_id, limit=10000)
-    by_status: dict[str, int] = {}
-    latencies: list[int] = []
-    total_duration = 0.0
-    for execution in executions:
-        by_status[execution.status.value] = by_status.get(execution.status.value, 0) + 1
-        if execution.latency is not None:
-            latencies.append(execution.latency.e2e_ms)
-        total_duration += execution.duration_s
-    completed = by_status.get(ExecutionStatus.COMPLETED.value, 0)
-    return ExecutionStats(
-        total=len(executions),
-        by_status=by_status,
-        avg_e2e_ms=round(sum(latencies) / len(latencies)) if latencies else None,
-        total_duration_s=round(total_duration, 2),
-        completed_rate=round(completed / len(executions), 3) if executions else 0,
-    )
-
-
-@executions_router.get("/{execution_id}", response_model=Execution)
-async def get_execution(execution_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
-) -> Execution:
-    execution = await store.get_execution(execution_id)
-    if execution is None:
-        raise _not_found("Execution", execution_id)
-    return execution
-
-
-@executions_router.get("/latency/summary", response_model=LatencyStats)
-async def get_latency_stats(
-    agent_id: Optional[str] = None, days: int = 30, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("calls:read")),
-) -> LatencyStats:
-    from datetime import datetime, timezone
-
-    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-    executions = await store.list_executions(agent_id=agent_id, limit=10000)
-    fresh = [e for e in executions if e.started_at.timestamp() >= cutoff and e.latency is not None]
-
-    e2e = sorted(e.latency.e2e_ms for e in fresh if e.latency)
-    stages: dict = {}
-    for stage in ("transcriber_ms", "llm_ms", "synthesizer_ms"):
-        values = [getattr(e.latency, stage) for e in fresh if e.latency]
-        if values:
-            stages[stage] = round(sum(values) / len(values))
-
-    buckets: dict = {}
-    for execution in fresh:
-        day = execution.started_at.date().isoformat()
-        bucket = buckets.setdefault(day, [])
-        if execution.latency:
-            bucket.append(execution.latency.e2e_ms)
-    ordered = [
-        LatencyBucket(
-            date=day,
-            count=len(values),
-            avg_e2e_ms=round(sum(values) / len(values)) if values else None,
-        )
-        for day, values in sorted(buckets.items())
-    ]
-    return LatencyStats(
-        count=len(fresh),
-        avg_e2e_ms=round(sum(e2e) / len(e2e)) if e2e else None,
-        p50_e2e_ms=_percentile(e2e, 50),
-        p95_e2e_ms=_percentile(e2e, 95),
-        by_stage=stages,
-        buckets=ordered,
-    )
-
-
-# --- batches --------------------------------------------------------------------
-
 batches_router = APIRouter(prefix="/batches", tags=["Batches"])
 
 
@@ -315,13 +208,14 @@ async def stop_batch(batch_id: str, store: MemoryStore = Depends(get_store),
 
 @batches_router.get("/{batch_id}/executions", response_model=ExecutionListResponse)
 async def get_batch_executions(batch_id: str, store: MemoryStore = Depends(get_store),
+    executions: Any = Depends(get_executions),
     _auth: Principal = Depends(require_scope("batches:read")),
-) -> ExecutionListResponse:
+) -> Any:
     batch = await store.get_batch(batch_id)
     if batch is None:
         raise _not_found("Batch", batch_id)
-    executions = await store.list_executions(batch_id=batch_id, limit=1000)
-    return ExecutionListResponse(executions=executions)
+    listed = [record for record in await executions.list_all() if record.batch_id == batch_id][:1000]
+    return ExecutionListResponse(executions=[ExecutionResponse.from_model(record) for record in listed])
 
 
 @batches_router.post("/{batch_id}/retry-failed", response_model=Batch, status_code=201)
@@ -897,8 +791,6 @@ def single_app_routers() -> list[APIRouter]:
         The frozen platform routers still without a module home.
     """
     return [
-        simulate_router,
-        executions_router,
         batches_router,
         # retired: graphs (0078), integrations (0077), webhooks (0076), kbs (0075),
         # numbers (0074) — `voiceai/modules/numbers` owns the

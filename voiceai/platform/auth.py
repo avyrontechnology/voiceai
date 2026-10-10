@@ -28,7 +28,8 @@ from fastapi import Depends, HTTPException, Request
 from voiceai.common.errors import ConfigurationError
 from voiceai.core.app_factory import platform_store_of
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.platform.models import new_id, utcnow
+from voiceai.common.datetime_utils import utc_now as utcnow
+from voiceai.platform.models import new_id
 
 if TYPE_CHECKING:
     from voiceai.platform.store import MemoryStore

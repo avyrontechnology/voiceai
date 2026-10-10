@@ -63,15 +63,15 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "GET /api/v1/catalog/providers",
         "GET /api/v1/catalog/voices",
         "GET /api/v1/chat/sessions",
-        "GET /api/v1/executions",
-        "GET /api/v1/executions/latency/summary",
-        "GET /api/v1/executions/stats",
-        "GET /api/v1/executions/{execution_id}",
         "GET /api/v1/graphs",
         "GET /api/v1/graphs/{graph_id}",
         "GET /api/v1/graphs/{graph_id}/versions",
         "GET /api/v1/health",
         "GET /api/v1/health/live",
+        "GET /api/v1/executions",
+        "GET /api/v1/executions/latency/summary",
+        "GET /api/v1/executions/stats",
+        "GET /api/v1/executions/{execution_id}",
         "GET /api/v1/health/ready",
         "GET /api/v1/inbound/{agent_id}",
         "GET /api/v1/integrations",
@@ -123,7 +123,6 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "POST /api/v1/batches/{batch_id}/start",
         "POST /api/v1/batches/{batch_id}/stop",
         "POST /api/v1/calls/place",
-        "POST /api/v1/calls/simulate",
         "POST /api/v1/chat/{agent_id}",
         "POST /api/v1/graphs",
         "POST /api/v1/graphs/{graph_id}/deploy",
@@ -137,6 +136,7 @@ PINNED_ROUTES: frozenset[str] = frozenset(
         "POST /api/v1/knowledgebases",
         "POST /api/v1/knowledgebases/{kb_id}/attach",
         "POST /api/v1/knowledgebases/{kb_id}/detach",
+        "POST /api/v1/calls/simulate",
         "POST /api/v1/mcp",
         "POST /api/v1/organization/reset",
         "POST /api/v1/oauth/authorize-url",
@@ -227,7 +227,10 @@ def test_no_method_and_path_is_registered_twice(single_app: FastAPI) -> None:
 def test_shared_paths_belong_to_modules_and_the_rest_to_the_platform_router(single_app: FastAPI) -> None:
     owners = {(method, path): owner for method, path, owner in _routes(single_app)}
     assert owners[("POST", f"{API_PREFIX}/calls/place")] == "voiceai.modules.voice.controller"
-    assert owners[("POST", f"{API_PREFIX}/calls/simulate")] == "voiceai.platform.router"
+    # spec 0080: the simulated-call runner moved with the executions family.
+    assert owners[("POST", f"{API_PREFIX}/calls/simulate")] == (
+        "voiceai.modules.executions.controller"
+    )
     assert owners[("GET", f"{API_PREFIX}/tools")].startswith("voiceai.modules.tools")
     assert owners[("GET", f"{API_PREFIX}/voices")].startswith("voiceai.modules.voices")
     assert owners[("GET", f"{API_PREFIX}/wallet")].startswith("voiceai.modules.wallet")
@@ -243,4 +246,6 @@ def test_shared_paths_belong_to_modules_and_the_rest_to_the_platform_router(sing
     # spec 0078: graphs moved whole — records AND engine — into their own module.
     assert owners[("GET", f"{API_PREFIX}/graphs")] == "voiceai.modules.automation.controller"
     platform_owned = sum(1 for owner in owners.values() if owner == "voiceai.platform.router")
-    assert platform_owned == 45  # specs 0074-0078: phone-number, knowledge, webhook, integration, graph routes left
+    # specs 0074-0080: number, knowledge, webhook, integration, graph and
+    # execution routes have all left the platform bucket.
+    assert platform_owned == 40

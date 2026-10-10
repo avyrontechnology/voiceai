@@ -29,6 +29,9 @@ call its own engine moves as one unit.**
 Unlike the graph engine, **this engine is not pure.** `run_workflow` and
 `run_campaign` take a `MemoryStore` and read/write through it:
 
+- `run_workflow` persists each run (`store.save_workflow_run`) and, on an
+  `agent` node, calls **`run_simulated_call(store, ...)`** — which belongs to the
+  **calls** family (`/calls`, still legacy), not to workflows.
 - `run_campaign` loads the campaign, loads its workflow, sets `status =
   RUNNING`, writes `stats`, then iterates entries calling `run_workflow` per
   entry — re-reading the campaign between entries so a **stop** is honoured
@@ -42,6 +45,26 @@ that no longer has the workflows — the same split brain that killed the graphs
 **Therefore campaigns move in this spec too**, not separately as originally
 planned. `run_campaign` cannot be split from the records it drives, and
 campaigns are what it drives.
+
+### The calls dependency, and what it means for ordering
+
+`run_workflow`'s `agent` node calls `run_simulated_call`, which is the calls
+family — `/calls`, still legacy. Two ways out:
+
+1. **Keep the store port wide enough to include what the engine uses**, including
+   `run_simulated_call`, and migrate calls separately afterwards. The engine
+   keeps a dependency on a legacy surface, but through a declared port rather
+   than an implicit import.
+2. **Migrate `/calls` first**, so the workflow engine can call the new
+   executions module instead of `platform.simulation`.
+
+Option 1 is what this spec does, and it is honest about the cost: the engine's
+port carries a `run_simulated_call` seam until the calls family migrates. That
+seam is the *same shape* of seam spec 0078 rejected — a module engine reaching
+into legacy — and it is acceptable here only because it is declared, narrow, and
+removed by a named follow-up, not left open-ended. **The alternative is doing
+`/calls` first**, which is a smaller, self-contained family and removes the seam
+entirely rather than documenting it.
 
 ## Scope
 

@@ -25,6 +25,7 @@ SOURCE_ROOTS = (
 #: that first need tenancy — never in advance.
 TENANT_ID_FLAGGED: frozenset[str] = frozenset(
     {
+        "voiceai/modules/executions/tests/test_executions_unit.py",  # spec 0080
         "voiceai/common/keys.py",
         "voiceai/common/tenancy.py",  # spec 0020, M1a: ambient context vocabulary
         "voiceai/core/app_factory.py",  # spec 0020, M1b: tenant middleware binding

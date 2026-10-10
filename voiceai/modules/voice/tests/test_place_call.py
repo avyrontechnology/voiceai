@@ -102,7 +102,9 @@ class _Definitions:
 
 
 def _service(
-    outbound: _FakeOutbound | None = None, definitions: _Definitions | None = None
+    outbound: _FakeOutbound | None = None,
+    definitions: _Definitions | None = None,
+    executions: _FakeExecutionsService | None = None,
 ) -> tuple[VoiceCallService, _FakeOutbound]:
     """Service wired to a real repository and a fake outbound port."""
     fake = outbound or _FakeOutbound()
@@ -113,6 +115,7 @@ def _service(
         place_repository=_repository(),
         outbound=fake,
         definitions=definitions or _Definitions(),
+        executions_service=executions or _FakeExecutionsService(),
     )
     return service, fake
 
@@ -218,36 +221,38 @@ async def test_place_call_explicit_beats_record() -> None:
     assert call["from_number"] == "911414000000"  # normalized to digits
 
 
-class _FakePlatformStore:
-    """Platform executions double: captures mirrored rows, optionally explodes."""
+class _FakeExecutionsService:
+    """Executions-module double: captures recorded rows, optionally explodes."""
 
     def __init__(self, fail: bool = False) -> None:
         self.saved: list[Any] = []
         self.fail = fail
 
-    async def save_execution(self, execution: Any) -> None:
+    async def record_placed(self, placed: Any) -> Any:
         if self.fail:
-            raise RuntimeError("platform store down")
-        self.saved.append(execution)
+            raise RuntimeError("executions module down")
+        from voiceai.modules.executions.repository import from_placed
+
+        record = from_placed(placed)
+        self.saved.append(record)
+        return record
 
 
-async def test_place_call_mirrors_row_to_platform_store() -> None:
-    """A placed dial lands in the platform executions family under its own id."""
-    service, _ = _service()
+async def test_place_call_records_through_the_executions_module() -> None:
+    """A placed dial lands in the executions family under its own id."""
+    executions = _FakeExecutionsService()
+    service, _ = _service(executions=executions)
     await _partner(service)
-    store = _FakePlatformStore()
     placed = await service.place_call(
         payload=PlaceCallRequest(
             agent_id="a", to_number="+919812345678", provider="talko", partner_id="2", delay_scale=0
         ),
-        platform_store=store,
     )
     assert placed.execution_id == "exec-trunk"
-    (mirrored,) = store.saved
-    assert mirrored.execution_id == "exec-trunk"
-    assert mirrored.agent_id == "a"
-    assert mirrored.direction == "outbound"
-    assert mirrored.status.value == "in_progress"
+    (recorded,) = executions.saved
+    assert recorded.id == "exec-trunk"
+    assert recorded.agent_id == "a"
+    assert recorded.status.value == "in_progress"
 
 
 async def test_place_call_mirror_failure_keeps_placement() -> None:
@@ -255,7 +260,6 @@ async def test_place_call_mirror_failure_keeps_placement() -> None:
     service, _ = _service()
     placed = await service.place_call(
         payload=PlaceCallRequest(agent_id="agent-1", to_number="+919812345678", delay_scale=0),
-        platform_store=_FakePlatformStore(fail=True),
     )
     assert placed.execution_id == "exec-sim"
 

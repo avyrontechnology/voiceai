@@ -318,6 +318,7 @@ def _build_voice_call_service(
         outbound=OutboundDialBridge(tasks=tasks),
         talko_service_base_url=environment.talko_service_base_url,
         definitions=definitions,
+        executions_service=_build_executions_service(db_client),
     )
 
 
@@ -504,6 +505,36 @@ def _build_graph_service(db_client: Any) -> Any:
     from voiceai.modules.automation.service import GraphService
 
     return GraphService(_build_graph_repository(db_client))
+
+
+def _build_executions_repository(db_client: Any) -> Any:
+    """Build the executions repository over the tenant's scoped view (spec 0080).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        An `ExecutionRepository` bound to the request's tenant.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.executions.models import Execution
+    from voiceai.modules.executions.repository import ExecutionRepository
+
+    return ExecutionRepository(_scoped_collection(db_client, Collections.PLATFORM_EXECUTIONS, Execution))
+
+
+def _build_executions_service(db_client: Any) -> Any:
+    """Build the executions service over the tenant's scoped view (spec 0080).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        An `ExecutionsService` bound to the request's tenant.
+    """
+    from voiceai.modules.executions.service import ExecutionsService
+
+    return ExecutionsService(_build_executions_repository(db_client))
 
 
 def _build_inbound_store(db_client: Any, platform_store: Any) -> Any:
@@ -1197,6 +1228,10 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # engine as well as the records — they move as one unit by design.
     graph_service = providers.Factory(_build_graph_service, db_client=db_client)
 
+    # Executions module (spec 0080): per-request tenant view. Holds call
+    # records and the simulated-call runner the workflow engine calls.
+    executions_service = providers.Factory(_build_executions_service, db_client=db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -1251,6 +1286,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.webhooks.controller",
             "voiceai.modules.integrations.controller",
             "voiceai.modules.automation.controller",
+            "voiceai.modules.executions.controller",
         ]
     )
 

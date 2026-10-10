@@ -24,7 +24,9 @@ from typing import Any, Dict, Optional
 import httpx
 
 from voiceai.helpers.logger_config import configure_logger
-from voiceai.platform.models import Execution, ExecutionStatus, new_id, utcnow
+from voiceai.modules.executions.models import Execution, ExecutionStatus
+from voiceai.common.datetime_utils import utc_now as utcnow  # legacy-shim(spec-0080)
+from voiceai.platform.models import new_id
 from voiceai.platform.store import MemoryStore
 
 logger = configure_logger(__name__)
@@ -48,7 +50,7 @@ async def dial_via_talko(
 ) -> Execution:
     """Dial one real call through the Talko trunk. Never raises for trunk errors."""
     execution = Execution(
-        execution_id=new_id("exec"),
+        id=new_id("exec"),
         agent_id=agent_id,
         batch_id=batch_id,
         to_number=to_number,

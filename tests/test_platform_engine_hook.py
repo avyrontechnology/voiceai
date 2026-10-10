@@ -4,6 +4,12 @@ from enum import Enum
 
 import pytest
 
+from voiceai.modules.executions.models import (
+    Execution,
+    ExecutionStatus,
+    LatencyBreakdown,
+    TranscriptTurn,
+)
 from voiceai.platform.engine_hook import (
     history_to_transcript,
     merge_extracted_data,
@@ -53,7 +59,7 @@ async def test_record_engine_execution_persists():
         to_number="+91111",
     )
     assert execution is not None
-    assert execution.execution_id == "run-1"
+    assert execution.id == "run-1"
     assert execution.status.value == "completed"
     assert len(execution.transcript) == 2
     assert execution.extracted_data == {"intent": "greeting"}

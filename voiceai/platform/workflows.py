@@ -14,13 +14,13 @@ from pydantic import BaseModel, Field
 
 from voiceai.helpers.logger_config import configure_logger
 from voiceai.common.validation import ValidationResult
+from voiceai.common.datetime_utils import utc_now as utcnow
+from voiceai.modules.executions.models import ExecutionStatus
 from voiceai.platform.models import (
-    ExecutionStatus,
     NodeReport,
     WorkflowCampaignStatus,
     WorkflowRun,
     new_id,
-    utcnow,
 )
 from voiceai.platform.simulation import run_simulated_call
 from voiceai.platform.store import MemoryStore
@@ -170,7 +170,7 @@ async def run_workflow(
         steps += 1
         config = current.config or {}
         if current.type == "start":
-            run.reports.append(NodeReport(node_id=current.id, type="start", at=utcnow().isoformat()))  # type: ignore[arg-type]
+            run.reports.append(NodeReport(node_id=current.id, type="start", at=utcnow().isoformat()))
         elif current.type == "agent":
             merged = {**variables, **(config.get("variables") or {})}
             execution = await run_simulated_call(
@@ -185,8 +185,8 @@ async def run_workflow(
                     node_id=current.id,
                     type="agent",
                     status="ok" if ok else "failed",
-                    detail={"execution_id": execution.execution_id, "call_status": execution.status.value},
-                    at=utcnow().isoformat(),  # type: ignore[arg-type]
+                    detail={"execution_id": execution.id, "call_status": execution.status.value},
+                    at=utcnow().isoformat(),
                 )
             )
         elif current.type == "extraction":
@@ -199,7 +199,7 @@ async def run_workflow(
                     type="extraction",
                     detail={"values": values, "method": "simulated"},
                     at=utcnow().isoformat(),
-                )  # type: ignore[arg-type]
+                )
             )
         elif current.type == "api":
             run.reports.append(
@@ -211,14 +211,14 @@ async def run_workflow(
                         "url": config.get("url"),
                         "note": "simulated — no request sent",
                     },
-                    at=utcnow().isoformat(),  # type: ignore[arg-type]
+                    at=utcnow().isoformat(),
                 )
             )
         elif current.type == "wait":
             seconds = min(float(config.get("seconds", 0)), MAX_WAIT_S)
             await asyncio.sleep(seconds * delay_scale)
             run.reports.append(
-                NodeReport(node_id=current.id, type="wait", detail={"waited_s": seconds}, at=utcnow().isoformat())  # type: ignore[arg-type]
+                NodeReport(node_id=current.id, type="wait", detail={"waited_s": seconds}, at=utcnow().isoformat())
             )
         elif current.type == "retry":
             used = attempts.get(current.id, 0) + 1
@@ -233,7 +233,7 @@ async def run_workflow(
                         node_id=current.id,
                         type="retry",
                         detail={"attempt": used, "target": target, "decision": "retry"},
-                        at=utcnow().isoformat(),  # type: ignore[arg-type]
+                        at=utcnow().isoformat(),
                     )
                 )
                 current = by_id[target]
@@ -243,7 +243,7 @@ async def run_workflow(
                     node_id=current.id,
                     type="retry",
                     detail={"attempt": used, "decision": "continue"},
-                    at=utcnow().isoformat(),  # type: ignore[arg-type]
+                    at=utcnow().isoformat(),
                 )
             )
         elif current.type == "whatsapp":
@@ -252,11 +252,11 @@ async def run_workflow(
                     node_id=current.id,
                     type="whatsapp",
                     detail={"to": config.get("to", to_number), "template": config.get("template"), "status": "logged"},
-                    at=utcnow().isoformat(),  # type: ignore[arg-type]
+                    at=utcnow().isoformat(),
                 )
             )
         elif current.type == "end":
-            run.reports.append(NodeReport(node_id=current.id, type="end", at=utcnow().isoformat()))  # type: ignore[arg-type]
+            run.reports.append(NodeReport(node_id=current.id, type="end", at=utcnow().isoformat()))
             current = None
             break
         current = _next_node(definition, current.id, last_ok)

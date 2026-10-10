@@ -44,6 +44,7 @@ from voiceai.modules import (  # noqa: E402
     automation,
     catalog,
     chat,
+    executions,
     health,
     integrations,
     knowledge,
@@ -73,6 +74,7 @@ ALL_MODULES: tuple[ModuleDef, ...] = (
     webhooks.MODULE,
     integrations.MODULE,
     automation.MODULE,
+    executions.MODULE,
 )
 
 __all__ = ["ALL_MODULES", "ModuleDef"]

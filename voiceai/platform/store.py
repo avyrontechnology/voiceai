@@ -9,11 +9,11 @@ quickstart in the same spec; its key layout survives only in the backfill tool.
 from typing import Any, Dict, List, Optional
 
 from voiceai.helpers.logger_config import configure_logger
+from voiceai.modules.executions.models import Execution
 from voiceai.platform.models import (
     ApiKey,
     AuthEvent,
     Batch,
-    Execution,
     InboundConfig,
     Invite,
     LedgerEntry,
@@ -124,7 +124,7 @@ class MemoryStore:
     # -- executions --------------------------------------------------------------
 
     async def save_execution(self, execution: Execution) -> None:
-        await self._put("executions", execution.execution_id, execution.model_dump(mode="json"))
+        await self._put("executions", execution.id or "", execution.model_dump(mode="json"))
 
     async def get_execution(self, execution_id: str) -> Optional[Execution]:
         raw = await self._get("executions", execution_id)

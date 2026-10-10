@@ -19,7 +19,7 @@ class _LegacyExecution:
     """Minimal legacy Execution shape the bridge reads."""
 
     def __init__(self, **fields: Any) -> None:
-        self.execution_id = fields.get("execution_id", "exec-1")
+        self.id = fields.get("execution_id", "exec-1")
         self.status = fields.get("status")
         self.summary = fields.get("summary")
         self.from_number = fields.get("from_number")

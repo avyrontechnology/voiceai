@@ -26,7 +26,7 @@ async def _simulate_call(client, **overrides):
     payload.update(overrides)
     resp = await client.post("/api/v1/calls/simulate", json=payload)
     assert resp.status_code == 202, resp.text
-    return resp.json()
+    return resp.json()["data"]
 
 
 # --- Executions & simulated calls -------------------------------------------------
@@ -35,7 +35,7 @@ async def _simulate_call(client, **overrides):
 async def test_list_executions_empty(client):
     resp = await client.get("/api/v1/executions")
     assert resp.status_code == 200
-    assert resp.json() == {"executions": []}
+    assert resp.json()["data"] == {"executions": []}
 
 
 async def test_simulated_call_completes_inline(client):
@@ -45,7 +45,7 @@ async def test_simulated_call_completes_inline(client):
 
     resp = await client.get(f"/api/v1/executions/{body['execution_id']}")
     assert resp.status_code == 200
-    execution = resp.json()
+    execution = resp.json()["data"]
     assert execution["status"] == "completed"
     assert len(execution["transcript"]) >= 2
     assert execution["latency"]["e2e_ms"] >= 0
@@ -55,7 +55,7 @@ async def test_simulated_call_completes_inline(client):
 async def test_simulated_call_carries_variables(client):
     body = await _simulate_call(client, variables={"customer_name": "Asha"})
     resp = await client.get(f"/api/v1/executions/{body['execution_id']}")
-    texts = " ".join(turn["text"] for turn in resp.json()["transcript"])
+    texts = " ".join(turn["text"] for turn in resp.json()["data"]["transcript"])
     assert "Asha" in texts
 
 
@@ -63,7 +63,7 @@ async def test_executions_filter_by_agent(client):
     await _simulate_call(client, agent_id="agent-1")
     await _simulate_call(client, agent_id="agent-2")
     resp = await client.get("/api/v1/executions", params={"agent_id": "agent-1"})
-    executions = resp.json()["executions"]
+    executions = resp.json()["data"]["executions"]
     assert len(executions) == 1
     assert executions[0]["agent_id"] == "agent-1"
 
@@ -84,7 +84,7 @@ async def test_simulate_call_requires_agent_and_number(client):
 async def test_execution_stats_empty(client):
     resp = await client.get("/api/v1/executions/stats")
     assert resp.status_code == 200
-    stats = resp.json()
+    stats = resp.json()["data"]
     assert stats["total"] == 0
     assert stats["by_status"] == {}
     assert stats["avg_e2e_ms"] is None
@@ -94,7 +94,7 @@ async def test_execution_stats_aggregates(client):
     await _simulate_call(client, agent_id="agent-1")
     await _simulate_call(client, agent_id="agent-1")
     resp = await client.get("/api/v1/executions/stats")
-    stats = resp.json()
+    stats = resp.json()["data"]
     assert stats["total"] == 2
     assert stats["by_status"]["completed"] == 2
     assert stats["avg_e2e_ms"] is not None
@@ -103,7 +103,7 @@ async def test_execution_stats_aggregates(client):
     assert stats["completed_rate"] == 1.0
 
     scoped = await client.get("/api/v1/executions/stats", params={"agent_id": "agent-2"})
-    assert scoped.json()["total"] == 0
+    assert scoped.json()["data"]["total"] == 0
 
 
 # --- Batches ----------------------------------------------------------------------

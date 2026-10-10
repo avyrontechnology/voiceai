@@ -123,6 +123,7 @@ class VoiceCallService:
         outbound: OutboundDialPort | None = None,
         talko_service_base_url: str = "",
         definitions: Any = None,  # why: AgentDefinitionPort; None keeps place-call uncomposed
+        executions_service: Any = None,  # why: spec 0080 — owns placed call records
     ) -> None:
         """Wire the service's collaborators (composition happens in ``register()``).
 
@@ -149,6 +150,7 @@ class VoiceCallService:
         self._outbound = outbound
         self._talko_service_base_url = talko_service_base_url
         self._definitions = definitions
+        self._executions_service = executions_service
 
     async def run_call(
         self,
@@ -244,9 +246,7 @@ class VoiceCallService:
         except Exception as hook_error:  # why: legacy contract — recording must never fail the call
             self._logger.warning(_LOG_EXECUTION_SKIPPED, hook_error)
 
-    async def place_call(
-        self, *, payload: PlaceCallRequest, platform_store: Any = None
-    ) -> PlacedCall:
+    async def place_call(self, *, payload: PlaceCallRequest) -> PlacedCall:
         """Place one outbound call: validate, resolve credentials, dial, persist (spec 0008).
 
         Credential precedence per field: explicit per-request value > partner DB
@@ -255,8 +255,6 @@ class VoiceCallService:
 
         Args:
             payload: The validated place-call request.
-            platform_store: The platform executions store for the detail-page
-                mirror (best-effort; `None` keeps the module-only write).
 
         Returns:
             The persisted placed-call view (`IN_PROGRESS` for accepted trunk
@@ -325,24 +323,25 @@ class VoiceCallService:
             variables=dict(payload.variables),
         )
         stored = await repo.save_execution(placed)
-        await self._mirror_placed_execution(platform_store, stored)
+        await self._mirror_placed_execution(stored)
         return stored
 
-    async def _mirror_placed_execution(self, platform_store: Any, placed: PlacedCall) -> None:
-        """Best-effort mirror of a placed row for the executions surface.
+    async def _mirror_placed_execution(self, placed: PlacedCall) -> None:
+        """Record the placed call with the executions module (spec 0080).
 
-        The executions HTTP routes read the platform `platform_executions`
-        collection while placed rows persist in the module `executions`
-        collection — without this mirror a placed dial 404s on its own
-        detail route. A mirror failure lands as the legacy skipped-record
-        warning: the dial already happened, so logging must never fail it.
+        Placed rows are call records, and the executions module owns that family
+        now. Writing anywhere else — the old platform-store mirror — left two
+        writers on one collection, so the executions routes could not see a dial
+        the voice module had just made. A mirror failure stays best-effort: the
+        dial already happened, so logging must never fail it.
+
+        Args:
+            placed: The persisted placed-call row.
         """
-        if platform_store is None:
+        if self._executions_service is None:
             return
         try:
-            from voiceai.modules.voice.adapters.outbound import record_placed_execution
-
-            await record_placed_execution(platform_store, placed=placed)
+            await self._executions_service.record_placed(placed)
         except Exception as hook_error:  # why: legacy contract — recording must never fail the call
             self._logger.warning(_LOG_EXECUTION_SKIPPED, hook_error)
 
