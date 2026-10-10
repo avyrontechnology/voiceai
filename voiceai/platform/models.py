@@ -194,26 +194,6 @@ class ToolListResponse(BaseModel):
     tools: List[Tool]
 
 
-class CreateWebhookRequest(BaseModel):
-    agent_id: Optional[str] = None
-    url: str = Field(..., min_length=1)
-    events: List[str] = Field(default_factory=list)
-    enabled: bool = True
-
-
-class Webhook(BaseModel):
-    webhook_id: str
-    agent_id: Optional[str] = None
-    url: str
-    events: List[str] = Field(default_factory=list)
-    enabled: bool = True
-    created_at: datetime = Field(default_factory=utcnow)
-
-
-class WebhookListResponse(BaseModel):
-    webhooks: List[Webhook]
-
-
 class Wallet(BaseModel):
     balance_credits: float = 0
     currency: str = "credits"

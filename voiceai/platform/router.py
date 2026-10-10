@@ -30,7 +30,6 @@ from voiceai.platform.models import (
     CreateSubAccountRequest,
     CreateToolRequest,
     CreateVoiceRequest,
-    CreateWebhookRequest,
     CreateWorkflowRequest,
     DeletedResponse,
     DeployGraphRequest,
@@ -70,8 +69,6 @@ from voiceai.platform.models import (
     VoiceEntry,
     VoiceListResponse,
     Wallet,
-    Webhook,
-    WebhookListResponse,
     WorkflowCampaign,
     WorkflowCampaignListResponse,
     WorkflowCampaignStatus,
@@ -416,43 +413,6 @@ async def delete_tool(tool_id: str, store: MemoryStore = Depends(get_store),
     if not await store.delete_tool(tool_id):
         raise _not_found("Tool", tool_id)
     return DeletedResponse()
-
-
-# --- webhooks --------------------------------------------------------------------------
-
-webhooks_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
-
-
-@webhooks_router.post("", response_model=Webhook, status_code=201)
-async def create_webhook(payload: CreateWebhookRequest, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> Webhook:
-    hook = Webhook(
-        webhook_id=new_id("wh"),
-        agent_id=payload.agent_id,
-        url=payload.url,
-        events=list(payload.events),
-        enabled=payload.enabled,
-    )
-    await store.save_webhook(hook)
-    return hook
-
-
-@webhooks_router.get("", response_model=WebhookListResponse)
-async def list_webhooks(store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:read")),
-) -> WebhookListResponse:
-    return WebhookListResponse(webhooks=await store.list_webhooks())
-
-
-@webhooks_router.delete("/{webhook_id}", response_model=DeletedResponse)
-async def delete_webhook(webhook_id: str, store: MemoryStore = Depends(get_store),
-    _auth: Principal = Depends(require_scope("platform:write")),
-) -> DeletedResponse:
-    if not await store.delete_webhook(webhook_id):
-        raise _not_found("Webhook", webhook_id)
-    return DeletedResponse()
-
 
 
 # --- inbound --------------------------------------------------------------------------
@@ -1173,9 +1133,8 @@ def single_app_routers() -> list[APIRouter]:
         simulate_router,
         executions_router,
         batches_router,
-        # kbs_router retired in spec 0075; numbers_router in spec 0074 — `voiceai/modules/numbers` owns the
+        # retired: webhooks (0076), kbs (0075), numbers (0074) — `voiceai/modules/numbers` owns the
         # family now, and module routers mount first (first match wins).
-        webhooks_router,
         inbound_router,
         agents_router,
         subs_router,

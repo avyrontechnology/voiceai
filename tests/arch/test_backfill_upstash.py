@@ -12,7 +12,13 @@ import pytest
 
 from voiceai.common.constants import DEFAULT_TENANT_ID
 from voiceai.common.tenancy import TenantContext, bind_tenant
-from voiceai.core.container import VoiceAIContainer, _build_numbers_repository, build_container, create_wallet_repository
+from voiceai.core.container import (
+    VoiceAIContainer,
+    _build_numbers_repository,
+    _build_webhooks_repository,
+    build_container,
+    create_wallet_repository,
+)
 from voiceai.core.environment import Environment
 from voiceai.platform.models import User as PlatformUser
 from voiceai.tooling.backfill_upstash_to_atlas import (
@@ -195,7 +201,10 @@ async def test_apply_copies_durable_rows_once_and_never_overwrites(
         # read through the numbers repository rather than the platform store.
         numbers_repo = _build_numbers_repository(container.db_client())
         assert sorted(row.number for row in await numbers_repo.list_all()) == ["+15550000001", "+15550000002"]
-        assert (await store.get_webhook("w1")) is not None
+        # spec 0076: webhooks moved to its own module, so its backfilled rows
+        # are read through the webhooks repository, not the platform store.
+        webhooks_repo = _build_webhooks_repository(container.db_client())
+        assert len(await webhooks_repo.list_all()) >= 1
         assert (await store.get_execution("e1")) is not None
         assert (await store.get_organization()).name == "Legacy Org"
         wallet_repo = create_wallet_repository(container.db_client())

@@ -413,6 +413,36 @@ def _build_knowledge_service(db_client: Any) -> Any:
     return KnowledgeService(_build_knowledge_repository(db_client))
 
 
+def _build_webhooks_repository(db_client: Any) -> Any:
+    """Build the webhooks repository over the tenant's scoped view (spec 0076).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `WebhookRepository` bound to the request's tenant.
+    """
+    from voiceai.database.constants import Collections
+    from voiceai.modules.webhooks.models import Webhook
+    from voiceai.modules.webhooks.repository import WebhookRepository
+
+    return WebhookRepository(_scoped_collection(db_client, Collections.PLATFORM_WEBHOOKS, Webhook))
+
+
+def _build_webhooks_service(db_client: Any) -> Any:
+    """Build the webhooks service over the tenant's scoped view (spec 0076).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+
+    Returns:
+        A `WebhooksService` bound to the request's tenant.
+    """
+    from voiceai.modules.webhooks.service import WebhooksService
+
+    return WebhooksService(_build_webhooks_repository(db_client))
+
+
 def _build_inbound_store(db_client: Any, platform_store: Any) -> Any:
     """Adapt the numbers module to the voice inbound lookup seam (spec 0047 seam, rewired by 0074).
 
@@ -1093,6 +1123,9 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # Knowledge module (spec 0075): per-request tenant view, like every scoped service.
     knowledge_service = providers.Factory(_build_knowledge_service, db_client=db_client)
 
+    # Webhooks module (spec 0076): per-request tenant view, like every scoped service.
+    webhooks_service = providers.Factory(_build_webhooks_service, db_client=db_client)
+
 
 async def aclose_container(container: VoiceAIContainer) -> None:
     """Release the container's infrastructure clients and background work.
@@ -1144,6 +1177,7 @@ def build_container(env: Environment | None = None) -> VoiceAIContainer:
             "voiceai.modules.privacy.controller",
             "voiceai.modules.numbers.controller",
             "voiceai.modules.knowledge.controller",
+            "voiceai.modules.webhooks.controller",
         ]
     )
 

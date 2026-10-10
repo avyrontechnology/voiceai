@@ -28,7 +28,6 @@ from voiceai.platform.models import (
     VectorStoreConfig,
     VoiceEntry,
     Wallet,
-    Webhook,
     WorkflowCampaign,
     WorkflowDoc,
     WorkflowRun,
@@ -189,19 +188,6 @@ class MemoryStore:
         return await self._delete("tools", tool_id)
 
     # -- webhooks ---------------------------------------------------------------------
-
-    async def save_webhook(self, hook: Webhook) -> None:
-        await self._put("webhooks", hook.webhook_id, hook.model_dump(mode="json"))
-
-    async def get_webhook(self, webhook_id: str) -> Optional[Webhook]:
-        raw = await self._get("webhooks", webhook_id)
-        return Webhook(**raw) if raw else None
-
-    async def list_webhooks(self) -> List[Webhook]:
-        return [Webhook(**raw) for raw in await self._all("webhooks")]
-
-    async def delete_webhook(self, webhook_id: str) -> bool:
-        return await self._delete("webhooks", webhook_id)
 
     # -- inbound ---------------------------------------------------------------------
 

@@ -178,6 +178,9 @@ REMOVED_BY_SPEC: dict[str, str] = {
     "KBListResponse": "spec 0075 — the knowledge module's list response (KnowledgeListResponse); the wire shape ('knowledgebases') is unchanged",
     "CreateKBRequest": "spec 0075 — CreateKnowledgeRequest in voiceai.modules.knowledge.schemas",
     "AttachKBRequest": "spec 0075 — AttachKnowledgeRequest in voiceai.modules.knowledge.schemas",
+    "Webhook": "spec 0076 — moved to voiceai.modules.webhooks.models",
+    "WebhookListResponse": "spec 0076 — the webhooks module's list response (WebhookListResponse); the wire shape ('webhooks') is unchanged",
+    "CreateWebhookRequest": "spec 0076 — CreateWebhookRequest in voiceai.modules.webhooks.schemas",
     "AssignNumberRequest": "spec 0074 — moved to voiceai.modules.numbers.schemas",
 }
 
@@ -208,6 +211,12 @@ def test_removed_names_are_importable_from_their_new_home() -> None:
     assert knowledge_schemas.KnowledgeListResponse.__name__ == "KnowledgeListResponse"
     assert knowledge_schemas.CreateKnowledgeRequest.__name__ == "CreateKnowledgeRequest"
     assert knowledge_schemas.AttachKnowledgeRequest.__name__ == "AttachKnowledgeRequest"
+    from voiceai.modules.webhooks import models as webhook_models
+    from voiceai.modules.webhooks import schemas as webhook_schemas
+
+    assert webhook_models.Webhook.__name__ == "Webhook"
+    assert webhook_schemas.WebhookListResponse.__name__ == "WebhookListResponse"
+    assert webhook_schemas.CreateWebhookRequest.__name__ == "CreateWebhookRequest"
     assert numbers_schemas.CreateNumberRequest.__name__ == "CreateNumberRequest"
     assert numbers_schemas.AssignNumberRequest.__name__ == "AssignNumberRequest"
 

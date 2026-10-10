@@ -27,7 +27,7 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -83,7 +83,7 @@ PLATFORM_FAMILIES: Final[tuple[str, ...]] = tuple(FAMILY_COLLECTIONS)
 
 #: Families that left the platform bucket for a real module (spec 0074). Their
 #: rows are written typed, not as a `{payload: ...}` envelope.
-MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers", "kbs")
+MODULE_FAMILIES: Final[tuple[str, ...]] = ("numbers", "kbs", "webhooks")
 
 #: (Redis glob pattern, human description). Every family the platform ever wrote.
 FAMILIES: Final[tuple[tuple[str, str], ...]] = (
@@ -228,6 +228,17 @@ async def census(redis: RedisSource) -> list[tuple[str, int]]:
     return counts
 
 
+#: Module-owned families and the restore path each one uses. Adding a family
+#: means adding a row here and a `restore_*` method on `AtlasTargets`; a family in
+#: `MODULE_FAMILIES` with no entry would silently fall back to the platform
+#: envelope, which its new module cannot read.
+_MODULE_RESTORES: Final[dict[str, Callable[[AtlasTargets, str, dict[str, Any]], Awaitable[bool]]]] = {
+    "numbers": lambda targets, item_id, payload: targets.restore_number(item_id, payload),
+    "kbs": lambda targets, item_id, payload: targets.restore_knowledge(item_id, payload),
+    "webhooks": lambda targets, item_id, payload: targets.restore_webhook(item_id, payload),
+}
+
+
 class AtlasTargets:
     """Write side of the backfill: the greenfield stores behind one container, one tenant.
 
@@ -303,6 +314,18 @@ class AtlasTargets:
 
         with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
             return await _build_knowledge_repository(self._numbers_source).restore(item_id, payload)
+
+    async def restore_webhook(self, item_id: str, payload: dict[str, Any]) -> bool:
+        """Write one legacy webhook row typed, unless it exists (spec 0076).
+
+        Same reason as `restore_number`: the family is a module collection now, so
+        a `{payload: ...}` row would be invisible to the module that owns it.
+        """
+        from voiceai.common.tenancy import TenantContext, bind_tenant
+        from voiceai.core.container import _build_webhooks_repository
+
+        with bind_tenant(TenantContext(tenant_id=self._tenant_id, request_id="backfill")):
+            return await _build_webhooks_repository(self._numbers_source).restore(item_id, payload)
 
     async def restore_organization(self, payload: dict[str, Any]) -> bool:
         """Seed the organization settings singleton unless one exists."""
@@ -390,11 +413,10 @@ async def _apply_platform(redis: RedisSource, targets: AtlasTargets, reports: li
                 report.quarantined += 1
                 logger.warning("quarantined %s row %s", family, key)
                 continue
+            restore = _MODULE_RESTORES.get(family)
             restored = (
-                await targets.restore_number(item_id, payload)
-                if family == "numbers"
-                else await targets.restore_knowledge(item_id, payload)
-                if family == "kbs"
+                await restore(targets, item_id, payload)
+                if restore is not None
                 else await targets.restore_platform(family, item_id, payload)
             )
             if restored:

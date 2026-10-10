@@ -51,6 +51,7 @@ from voiceai.modules import (  # noqa: E402
     voice,
     voices,
     wallet,
+    webhooks,
 )
 
 # Registration order is landing order; voice mounts an empty router until spec 0004 step B14.
@@ -67,6 +68,7 @@ ALL_MODULES: tuple[ModuleDef, ...] = (
     privacy.MODULE,
     numbers.MODULE,
     knowledge.MODULE,
+    webhooks.MODULE,
 )
 
 __all__ = ["ALL_MODULES", "ModuleDef"]
