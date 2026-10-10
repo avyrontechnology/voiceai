@@ -186,3 +186,11 @@ docs/*
 !docs/architecture/**
 GRAPH_AGENT_GUIDE.md
 .env.example
+
+# Archify run byproducts (regenerated on every `archify finalize`).
+# The *.candidate.json (the authored input) and *.delivery.json (the sha256
+# provenance receipt `archify check --require-provenance` reads) are NOT here —
+# without a delivery receipt the diagram's provenance verifies as `unknown`.
+docs/architecture/*.finalize.json
+docs/architecture/*.finalize-summary.json
+docs/architecture/*.browser-check.json
