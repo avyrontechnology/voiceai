@@ -194,7 +194,9 @@ async def test_dcr_register_seals_secret_and_returns_identifiers_only() -> None:
     assert row.auth_config["issuer_url"] == "https://issuer.test"
     assert row.auth_config["authorization_endpoint"] == "https://issuer.test/authorize"
     assert row.auth_config["token_endpoint"] == "https://issuer.test/token"
-    material = json.loads(CredentialVault("test-master-key").decrypt(row.encrypted_data, key_version=row.key_version).decode("utf-8"))
+    material = json.loads(
+        CredentialVault("test-master-key").decrypt(row.encrypted_data, key_version=row.key_version).decode("utf-8")
+    )
     assert material == {"client_secret": "shh"}
     assert "token" not in material
 
