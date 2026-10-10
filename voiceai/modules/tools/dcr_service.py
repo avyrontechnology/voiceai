@@ -11,6 +11,7 @@ fail-closed), and issued secrets go straight to the vault (never logged).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
@@ -55,11 +56,23 @@ class DcrService:
     Args:
         timeout_s: Per-request timeout budget.
         client_name: `client_name` sent at registration (operator-visible only).
+        redirect_uris: Callback URLs sent as RFC 7591 `redirect_uris` at
+            registration. Issuers that require it (Apollo: "Redirect URI
+            can't be blank") refuse the registration without it. `None`
+            keeps the old body (client_name + grant_types only) for
+            deployments where the public callback URL is unconfigured.
     """
 
-    def __init__(self, *, timeout_s: float = _DCR_TIMEOUT_S, client_name: str = _DCR_CLIENT_NAME) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_s: float = _DCR_TIMEOUT_S,
+        client_name: str = _DCR_CLIENT_NAME,
+        redirect_uris: Sequence[str] | None = None,
+    ) -> None:
         self._timeout_s = timeout_s
         self._client_name = client_name
+        self._redirect_uris = [u for u in (redirect_uris or []) if u]
         self._logger = get_logger(C.MODULE_NAME)
 
     async def _is_issuer_safe(self, issuer_url: str) -> bool:
@@ -154,9 +167,15 @@ class DcrService:
             )
         try:
             async with httpx.AsyncClient(timeout=self._timeout_s, follow_redirects=False) as client:
+                body: dict[str, Any] = {
+                    "client_name": self._client_name,
+                    "grant_types": ["authorization_code", "refresh_token"],
+                }
+                if self._redirect_uris:
+                    body["redirect_uris"] = list(self._redirect_uris)
                 response = await client.post(
                     registration_endpoint,
-                    json={"client_name": self._client_name, "grant_types": ["authorization_code", "refresh_token"]},
+                    json=body,
                     headers={"Content-Type": "application/json"},
                 )
         except httpx.HTTPError as exc:

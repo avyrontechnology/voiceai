@@ -91,3 +91,62 @@ async def test_dcr_undiscoverable_issuer_is_400(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(service, "discover", _none)
     with pytest.raises(ToolExecutionError):
         await service.register_client("https://issuer.example.com")
+
+
+def _registration_handler(seen: dict) -> object:
+    """Capture one registration POST and answer with an issued record."""
+    import json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content.decode()))
+        return httpx.Response(200, json={"client_id": "client-1", "client_secret": "secret-1"})
+
+    return handler
+
+
+_REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _mock_registration_client(seen: dict, **kwargs: object) -> httpx.AsyncClient:
+    """An `httpx.AsyncClient` that never touches the network (captures POST)."""
+    kwargs.pop("transport", None)
+    return _REAL_ASYNC_CLIENT(transport=httpx.MockTransport(_registration_handler(seen)), **kwargs)  # type: ignore[arg-type]
+
+
+async def test_dcr_sends_redirect_uris_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issuers that require RFC 7591 `redirect_uris` (Apollo: "Redirect URI
+    can't be blank") get it in the registration body when configured."""
+    seen: dict = {}
+    service = DcrService(redirect_uris=["https://app.example.com/api/v1/oauth/callback"])
+
+    async def _meta(_issuer: str) -> dict:
+        return {"registration_endpoint": "https://issuer.example.com/register"}
+
+    async def _safe(_issuer: str) -> bool:
+        return True
+
+    monkeypatch.setattr(service, "discover", _meta)
+    monkeypatch.setattr(service, "_is_issuer_safe", _safe)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _mock_registration_client(seen, **kwargs))
+    record = await service.register_client("https://issuer.example.com")
+    assert record.client_id == "client-1"
+    assert seen["redirect_uris"] == ["https://app.example.com/api/v1/oauth/callback"]
+    assert seen["client_name"] == "otobaai-tools"
+
+
+async def test_dcr_omits_redirect_uris_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a configured callback URL the body stays client_name-only."""
+    seen: dict = {}
+    service = DcrService()
+
+    async def _meta(_issuer: str) -> dict:
+        return {"registration_endpoint": "https://issuer.example.com/register"}
+
+    async def _safe(_issuer: str) -> bool:
+        return True
+
+    monkeypatch.setattr(service, "discover", _meta)
+    monkeypatch.setattr(service, "_is_issuer_safe", _safe)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _mock_registration_client(seen, **kwargs))
+    await service.register_client("https://issuer.example.com")
+    assert "redirect_uris" not in seen

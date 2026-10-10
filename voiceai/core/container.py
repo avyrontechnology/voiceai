@@ -700,7 +700,7 @@ def _build_tool_executor(db_client: Any, cache_client: Any, environment: Any, va
     return ToolExecutor(ToolsRepository(tools_view), LogsRepository(logs_view), auth)
 
 
-def _build_integration_service(db_client: Any, vault: Any) -> Any:
+def _build_integration_service(db_client: Any, vault: Any, environment: Any) -> Any:
     """Build the vault-state service over system + tenant views (spec 0058).
 
     Called per request (Factory): the tenant binds at construction through
@@ -710,6 +710,9 @@ def _build_integration_service(db_client: Any, vault: Any) -> Any:
     Args:
         db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
         vault: The process `CredentialVault` (envelope encryption).
+        environment: Process configuration (`public_base_url` pins the
+            callback URL sent as RFC 7591 `redirect_uris` at DCR; empty
+            keeps the old registration body).
 
     Returns:
         An `IntegrationService` with a stateless `DcrService` attached.
@@ -723,7 +726,6 @@ def _build_integration_service(db_client: Any, vault: Any) -> Any:
     from voiceai.modules.tools.integration_service import IntegrationService
     from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
     from voiceai.modules.tools.repository import ToolsRepository, VaultRepository
-
     factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
 
     def _views(tenant_id: str) -> VaultRepository:
@@ -746,11 +748,19 @@ def _build_integration_service(db_client: Any, vault: Any) -> Any:
             ),
         )
 
+    from voiceai.common.constants import API_PREFIX
+    from voiceai.modules.tools import constants as tools_constants
+
+    base_url = str(getattr(environment, "public_base_url", "") or "").rstrip("/")
+    redirect_uris = (
+        [f"{base_url}{API_PREFIX}{tools_constants.OAUTH_CALLBACK_PATH}"] if base_url else None
+    )
+
     return IntegrationService(
         system=_views(SYSTEM_TENANT_ID),
         tenant=_views(current_tenant().tenant_id),
         vault=vault,
-        dcr=DcrService(),
+        dcr=DcrService(redirect_uris=redirect_uris),
         tools=ToolsRepository(
             TenantScopedRepository(
                 factory(db_client, Collections.TOOLS, ToolDefinition),
@@ -1171,7 +1181,7 @@ class VoiceAIContainer(containers.DeclarativeContainer):
     # executor is per-request (Factory — same pinning hazard as tools_service).
     credential_vault = providers.Singleton(_build_credential_vault, environment)
     tool_executor = providers.Factory(_build_tool_executor, db_client, redis_cache, environment, credential_vault)
-    integration_service = providers.Factory(_build_integration_service, db_client, credential_vault)
+    integration_service = providers.Factory(_build_integration_service, db_client, credential_vault, environment)
     oauth_service = providers.Factory(_build_oauth_service, db_client, credential_vault, redis_cache, environment)
     mcp_server_router = providers.Factory(_build_mcp_server_router, tools_service, tool_executor)
 
