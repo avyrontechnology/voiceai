@@ -19,7 +19,7 @@ from voiceai.common.constants import (
 )
 from voiceai.common.errors import InvalidRequestError
 
-__all__ = ["IST", "UTC", "epoch_ms", "isoformat_z", "parse_iso", "to_ist", "utc_now"]
+__all__ = ["IST", "UTC", "ensure_aware_utc", "epoch_ms", "isoformat_z", "parse_iso", "to_ist", "utc_now"]
 
 UTC: Final[timezone] = timezone.utc
 #: India Standard Time as a fixed offset — no DST, so no zoneinfo/tzdata dependency is needed.
@@ -37,8 +37,12 @@ def utc_now() -> datetime:
     return datetime.now(tz=UTC)
 
 
-def _as_aware_utc(value: datetime) -> datetime:
+def ensure_aware_utc(value: datetime) -> datetime:
     """Return `value` as aware UTC, treating a naive input as UTC.
+
+    Stored rows mix naive (Mongo strips tzinfo) and aware timestamps, so any
+    comparison or sort must normalize first — comparing them directly raises
+    `TypeError: can't compare offset-naive and offset-aware datetimes`.
 
     Args:
         value: Aware or naive datetime.
@@ -49,6 +53,18 @@ def _as_aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    """Return `value` as aware UTC, treating a naive input as UTC.
+
+    Args:
+        value: Aware or naive datetime.
+
+    Returns:
+        The same instant, expressed in UTC.
+    """
+    return ensure_aware_utc(value)
 
 
 def isoformat_z(value: datetime) -> str:

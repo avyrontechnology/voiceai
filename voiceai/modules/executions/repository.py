@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from voiceai.common.datetime_utils import ensure_aware_utc
 from voiceai.database.repository import BaseRepository
 from voiceai.modules.executions.models import Execution, ExecutionStatus
 
@@ -83,7 +84,7 @@ class ExecutionRepository:
             if status is not None and record.status.value != status:
                 continue
             found.append(record)
-        found.sort(key=lambda item: item.started_at, reverse=True)
+        found.sort(key=lambda item: ensure_aware_utc(item.started_at), reverse=True)
         return found
 
     async def restore(self, item_id: str, payload: dict[str, Any]) -> bool:
@@ -118,9 +119,17 @@ def as_execution(row: Any) -> Execution | None:
     if isinstance(payload, dict):
         data = {**payload, "id": payload.get("execution_id", data.get("id"))}
     try:
-        return Execution(**data)
+        record = Execution(**data)
     except Exception:  # noqa: BLE001 - a row we cannot read is a miss, not a crash
         return None
+    # why: Mongo strips tzinfo on read while new rows are aware UTC; without
+    # this, any comparison/sort over mixed rows raises TypeError.
+    record.started_at = ensure_aware_utc(record.started_at)
+    if record.ended_at is not None:
+        record.ended_at = ensure_aware_utc(record.ended_at)
+    record.created_at = ensure_aware_utc(record.created_at)
+    record.updated_at = ensure_aware_utc(record.updated_at)
+    return record
 
 
 def from_placed(placed: Any) -> Execution:

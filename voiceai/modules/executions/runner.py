@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from voiceai.common.datetime_utils import utc_now
+from voiceai.common.datetime_utils import ensure_aware_utc, utc_now
 from voiceai.common.ids import new_id
 from voiceai.common.logger import get_logger
 from voiceai.modules.executions import constants as C
@@ -152,7 +152,8 @@ def finalize_execution(execution: Execution) -> Execution:
         execution.status = outcome
     execution.ended_at = utc_now()
     execution.duration_s = round(
-        (execution.ended_at - execution.started_at.replace(tzinfo=timezone.utc)).total_seconds(), 2
+        (ensure_aware_utc(execution.ended_at) - ensure_aware_utc(execution.started_at)).total_seconds(),
+        2,
     )
     return execution
 
@@ -363,7 +364,10 @@ async def record_engine_execution(
         if started_at is not None:
             execution.started_at = started_at
         end = execution.ended_at or utc_now()
-        execution.duration_s = round((end - execution.started_at).total_seconds(), 2)
+        execution.duration_s = round(
+            (ensure_aware_utc(end) - ensure_aware_utc(execution.started_at)).total_seconds(),
+            2,
+        )
         await store.save_execution(execution)
         logger.info(f"Logged engine execution {execution.id} for agent {agent_id}")
         return execution
