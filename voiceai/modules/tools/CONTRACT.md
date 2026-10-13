@@ -93,19 +93,37 @@ Auth: API-key bearer with `platform:read` (`mcp:invoke` lands with OAuth in
 S2). Pilot allowlist = registry visibility, NOT per-agent refs (per-agent
 binding lands with `actions:` in S2). Disabled flag answers 404.
 
-## Integrations (spec 0058)
+## Integrations (spec 0058, extended spec 0081 P2)
 
 Vault-state HTTP surface for the Integrations UI section. Secrets cross the
 wire exactly once (plaintext in the creating `POST` response as
 `secret_once` / `client_secret_once`); every read projects metadata only
-(`provider`, `credential_type`, `key_version`, `expires_at` — the
+(`provider`, `credential_type`, `key_version`, `expires_at` —
+`binding`/`status`/owner ids are identifiers and ride along; the
 `encrypted_data` field has no serializer, pinned by test).
+
+Owner scope (P2): every route below acts in the caller's `OwnerScope`
+(partner = ambient tenant, org/user = gated principal — never request
+fields). Reads merge global + own-partner templates (tenant wins ties) and
+list manage-path credentials/links (org admins see member metadata —
+revokes stay operable); writes stamp owner + binding + status. The binding
+is explicit on UI, API, DCR and OAuth alike (omitted = 422); org policy is
+the single enum (`user_choice|shared_with_override|enforce_shared`, absent
+row = neutral `user_choice`); resolution prefers `user_private` except
+under `enforce_shared`; reconnecting the same natural key restores suspended
+rows (no unsuspend endpoint by design).
+
+Error split (P2, frozen): omitted binding → 422 `binding-required`;
+policy-forbidden binding → 403 + guidance; empty template∩policy → 422
+`cannot-connect`; private without user → 400; link without org/live
+credential → 400; cross-org policy write → 403; foreign/unknown id → 404
+(no oracle).
 
 | Route | Scope | Answers |
 | --- | --- | --- |
-| `GET /api/v1/integration-templates` | `platform:read` | 200 `{"templates": [...]}` (system + tenant, tenant wins) |
-| `POST /api/v1/integration-templates` | `platform:write` | 201 row + `replaced` (tenant override; system rows stay curated) |
-| `DELETE /api/v1/integration-templates/{provider}` | `platform:write` | 200 deleted; 403 system row; 404 foreign/missing |
+| `GET /api/v1/integration-templates` | `platform:read` | 200 `{"templates": [...]}` (global + own-private, tenant wins) |
+| `POST /api/v1/integration-templates` | `platform:write` | 201 row (forced `partner_private` + owner stamp) + `replaced`; 400 bad shape/contract |
+| `DELETE /api/v1/integration-templates/{provider}` | `platform:write` | 200 deleted (audited `retire`); 403 system row; 404 foreign/missing |
 | `POST /api/v1/integration-templates/{provider}/sync-tools` | `platform:write` | 201 `{created, updated, skipped, tool_ids, problems}`; 400 no-credential/unsafe-base; 404 unknown |
 
 ## Transports (spec 0060: `http` generic-REST + `mcp` auto-discovery)
@@ -120,25 +138,33 @@ MCP discovery/execution ride bearer/oauth2-token/custom-header credentials
 The executor routes `meta.transport == "mcp"` rows through the MCP client
 (handshake + `tools/call`, one refresh + retry, failures as `success=False`
 values with `error_id` — same shape as HTTP).
-| `GET /api/v1/partner-credentials` | `platform:read` | 200 `{"credentials": [...]}` metadata only |
-| `POST /api/v1/partner-credentials` | `platform:write` | 201 metadata + `secret_once` + `replaced` (idempotent by provider) |
-| `DELETE /api/v1/partner-credentials/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
-| `GET /api/v1/partner-integrations[?agent_id=]` | `platform:read` | 200 `{"integrations": [...]}` |
-| `POST /api/v1/partner-integrations` | `platform:write` | 201 row; 400 without a live credential |
-| `DELETE /api/v1/partner-integrations/{id}` | `platform:write` | 200 deleted; 404 foreign/missing |
-| `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata + `client_id` (issued secret seals server-side, never surfaces); 400 undiscoverable/MANUAL |
+| `GET /api/v1/partner-credentials` | `platform:read` | 200 `{"credentials": [...]}` metadata only, in scope |
+| `POST /api/v1/partner-credentials` | `platform:write` | 201 metadata + `secret_once` + `replaced` (idempotent by provider+binding+org+user); 400 smuggled/private-no-user; 422 binding-required; 403 policy-forbids |
+| `DELETE /api/v1/partner-credentials/{id}` | `platform:write` | 200 revoked (audited); 404 foreign/missing |
+| `GET /api/v1/partner-integrations[?agent_id=]` | `platform:read` | 200 `{"integrations": [...]}` in scope (org + partner-wide manage) |
+| `POST /api/v1/partner-integrations` | `platform:write` | 201 row (org stamped from scope); 400 without org scope or live credential |
+| `DELETE /api/v1/partner-integrations/{id}` | `platform:write` | 200 unlinked (audited); 404 foreign/missing |
+| `POST /api/v1/integrations/dcr-register` | `platform:write` | 201 credential metadata (`pending` status) + `client_id` (issued secret seals server-side, never surfaces); 400 undiscoverable/MANUAL; 422 binding-required; 403 policy-forbids |
+| `GET /api/v1/org-policies/{org_id}` | `platform:read` | 200 policy; 404 missing or foreign (no oracle — not even existence leaks) |
+| `POST /api/v1/org-policies` | `platform:write` | 200 policy + `suspended: [...]` (flip report); the org rides the caller scope (cross-org writes unrepresentable over HTTP; direct service misuse answers 403) |
 
-## OAuth2 login (spec 0061: authorize → callback → refresh)
+## OAuth2 login (spec 0061: authorize → callback → refresh; spec 0081 P2: binding-threaded)
 
 Click-to-connect without pasting tokens. Login needs Redis (handshake
 state) + `PUBLIC_BASE_URL` (callback origin) — both dark fail closed.
-- `POST /api/v1/oauth/authorize-url` (`platform:write`) → 200
-  `{authorization_url, expires_in}`; SSRF-checked endpoints; PKCE S256 +
-  single-use TTL state (tenant pinned server-side).
+The binding + owner ride the server-side state record (never the URL or
+payload), so callback-sealed rows land scoped — no legacy rows ever again.
+States minted before the binding contract fail closed with restart-login
+(10-minute TTL bounds the window).
+- `POST /api/v1/oauth/authorize-url` (`platform:write`, `+binding`) → 200
+  `{authorization_url, expires_in}`; 422 binding-required (before any
+  state); SSRF-checked endpoints; PKCE S256 + single-use TTL state
+  (tenant pinned server-side).
 - `GET /api/v1/oauth/callback?code=&state=` (public, state-verified) →
   HTML popup page (`postMessage({type:"oauth:connected"})`, no secrets;
   injection-escaped) or the 400 error page. Code exchange seals
   `{token, refresh_token?, client_secret?}` as an oauth2 credential
-  (idempotent by provider).
+  (idempotent by provider+binding+org+user, status active).
 - `POST /api/v1/partner-credentials/{id}/refresh` (`platform:write`) →
-  200 metadata; 400 without refresh material; 404 foreign/missing.
+  200 metadata (strict execution-path visibility else 404); 400 without
+  refresh material or non-oauth2; 404 foreign/missing.

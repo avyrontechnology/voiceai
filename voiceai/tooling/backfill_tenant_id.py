@@ -101,6 +101,11 @@ DEFAULT_STAMPED_COLLECTIONS: Final[tuple[str, ...]] = (
     # harmless (spec-0038 precedent).
     "consent_records",
     "privacy_audit_log",
+    # Spec 0081 P1 enterprise lane: policy + governance-audit rows are
+    # stamped from the request tenant at write time (tenant-scoped views),
+    # no legacy rows — default rule never matches, harmless (same precedent).
+    "integration_org_policies",
+    "integration_audit_log",
 )
 
 #: Collections never tenant-stamped (global security infrastructure).

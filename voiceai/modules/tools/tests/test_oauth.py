@@ -27,7 +27,7 @@ from voiceai.database.scoped import TenantScopedRepository
 from voiceai.modules import tools as tools_module
 from voiceai.modules.auth import InvalidCredentialsError, Principal
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
-from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration
+from voiceai.modules.tools.models import IntegrationTemplate, OwnerScope, PartnerCredential, PartnerIntegration
 from voiceai.modules.tools.oauth_service import OAuthService
 from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
@@ -35,6 +35,9 @@ from voiceai.modules.tools.vault import CredentialVault
 BASE = "http://oauth.test"
 PREFIX = "/api/v1"
 TENANT = "acme"
+
+#: Caller scope (mirrors the controller principal: org = tenant, user u-1).
+_SCOPE = OwnerScope.from_owner(TENANT, TENANT, "u-1")
 
 
 class _Redis:
@@ -141,10 +144,12 @@ async def test_authorize_builds_pkce_url_and_stores_state(monkeypatch: pytest.Mo
     result = await service.build_authorize_url(
         tenant_id=TENANT,
         provider="github",
+        scope=_SCOPE,
+        binding="org_shared",
         authorization_endpoint="https://issuer.test/auth",
         token_endpoint="https://issuer.test/token",
         client_id="cid-1",
-        scope="repo",
+        scope_param="repo",
     )
     url = result["authorization_url"]
     assert "response_type=code" in url and "code_challenge_method=S256" in url
@@ -172,6 +177,8 @@ async def test_authorize_dark_without_redis_or_base_url() -> None:
         await dark_redis_noop.build_authorize_url(
             tenant_id=TENANT,
             provider="p",
+            scope=_SCOPE,
+            binding="org_shared",
             authorization_endpoint="https://i.test/a",
             token_endpoint="https://i.test/t",
             client_id="c",
@@ -181,6 +188,8 @@ async def test_authorize_dark_without_redis_or_base_url() -> None:
         await dark_base.build_authorize_url(
             tenant_id=TENANT,
             provider="p",
+            scope=_SCOPE,
+            binding="org_shared",
             authorization_endpoint="https://i.test/a",
             token_endpoint="https://i.test/t",
             client_id="c",
@@ -195,6 +204,8 @@ async def test_authorize_rejects_unsafe_endpoints(monkeypatch: pytest.MonkeyPatc
         await service.build_authorize_url(
             tenant_id=TENANT,
             provider="p",
+            scope=_SCOPE,
+            binding="org_shared",
             authorization_endpoint="http://169.254.169.254/a",
             token_endpoint="https://i.test/t",
             client_id="c",
@@ -231,7 +242,9 @@ async def test_authorize_resolves_dcr_client_from_vault(monkeypatch: pytest.Monk
     db = InMemoryDatabase()
     await _seed_dcr_row(db)
     service, store = _service(db)
-    result = await service.build_authorize_url(tenant_id=TENANT, provider="github", scope="repo")
+    result = await service.build_authorize_url(
+        tenant_id=TENANT, provider="github", scope=_SCOPE, binding="org_shared", scope_param="repo"
+    )
     url = result["authorization_url"]
     assert url.startswith("https://issuer.test/auth?")
     assert "client_id=dcr-cid" in url
@@ -246,7 +259,9 @@ async def test_authorize_without_dcr_record_is_400(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("voiceai.common.security.is_safe_outbound_url", lambda url, **_: True)
     service, store = _service(InMemoryDatabase())
     with pytest.raises(InvalidToolError):
-        await service.build_authorize_url(tenant_id=TENANT, provider="github", scope="repo")
+        await service.build_authorize_url(
+            tenant_id=TENANT, provider="github", scope=_SCOPE, binding="org_shared", scope_param="repo"
+        )
     assert store.values == {}
 
 
@@ -258,6 +273,8 @@ async def test_callback_happy_path_seals_and_consumes_state(monkeypatch: pytest.
     await service.build_authorize_url(
         tenant_id=TENANT,
         provider="github",
+        scope=_SCOPE,
+        binding="org_shared",
         authorization_endpoint="https://i.test/a",
         token_endpoint="https://i.test/t",
         client_id="cid-1",
@@ -292,6 +309,8 @@ async def _authorize(service: OAuthService, store: _Redis, monkeypatch: pytest.M
     await service.build_authorize_url(
         tenant_id=TENANT,
         provider="github",
+        scope=_SCOPE,
+        binding="org_shared",
         authorization_endpoint="https://i.test/a",
         token_endpoint="https://i.test/t",
         client_id="cid-1",
@@ -345,6 +364,8 @@ async def test_callback_unknown_state_and_failed_exchange_store_nothing(
     await service.build_authorize_url(
         tenant_id=TENANT,
         provider="github",
+        scope=_SCOPE,
+        binding="org_shared",
         authorization_endpoint="https://i.test/a",
         token_endpoint="https://i.test/t",
         client_id="cid-1",
@@ -373,10 +394,13 @@ async def test_refresh_rotates_and_preserves() -> None:
         auth_config={"client_id": "cid-1", "token_endpoint": "https://i.test/t"},
         encrypted_data=vault.encrypt(json.dumps(material).encode("utf-8"), key_version=1),
         key_version=1,
+        owner_org_id=TENANT,
+        binding="org_shared",
+        status="active",
     )
     saved = await _repos(db, TENANT).save_credential(row)
     assert saved.id is not None
-    resealed = await service.refresh_credential(tenant_id=TENANT, credential_id=saved.id)
+    resealed = await service.refresh_credential(tenant_id=TENANT, credential_id=saved.id, scope=_SCOPE)
     opened = json.loads(vault.decrypt(resealed.encrypted_data, key_version=1).decode("utf-8"))
     assert opened == {"token": "a2", "refresh_token": "r1", "client_secret": "shh"}
 
@@ -392,24 +416,41 @@ async def test_refresh_refuses_without_refresh_token_and_missing() -> None:
         auth_config={"client_id": "cid-1", "token_endpoint": "https://i.test/t"},
         encrypted_data=vault.encrypt(json.dumps({"token": "a1"}).encode("utf-8"), key_version=1),
         key_version=1,
+        owner_org_id=TENANT,
+        binding="org_shared",
+        status="active",
     )
     saved = await _repos(db, TENANT).save_credential(row)
     assert saved.id is not None
     with pytest.raises(InvalidToolError):
-        await service.refresh_credential(tenant_id=TENANT, credential_id=saved.id)
+        await service.refresh_credential(tenant_id=TENANT, credential_id=saved.id, scope=_SCOPE)
     with pytest.raises(ToolNotFoundError):
-        await service.refresh_credential(tenant_id=TENANT, credential_id="missing")
+        await service.refresh_credential(tenant_id=TENANT, credential_id="missing", scope=_SCOPE)
     key_row = PartnerCredential(
         provider="plain",
         credential_type="api_key",
         auth_config={},
         encrypted_data=vault.encrypt(json.dumps({"api_key": "k"}).encode("utf-8"), key_version=1),
         key_version=1,
+        owner_org_id=TENANT,
+        binding="org_shared",
+        status="active",
     )
     saved_key = await _repos(db, TENANT).save_credential(key_row)
     assert saved_key.id is not None
     with pytest.raises(InvalidToolError):
-        await service.refresh_credential(tenant_id=TENANT, credential_id=saved_key.id)
+        await service.refresh_credential(tenant_id=TENANT, credential_id=saved_key.id, scope=_SCOPE)
+    legacy = PartnerCredential(
+        provider="legacy",
+        credential_type="oauth2",
+        auth_config={"client_id": "cid-1", "token_endpoint": "https://i.test/t"},
+        encrypted_data=vault.encrypt(json.dumps({"token": "a1", "refresh_token": "r1"}).encode("utf-8"), key_version=1),
+        key_version=1,
+    )
+    saved_legacy = await _repos(db, TENANT).save_credential(legacy)
+    assert saved_legacy.id is not None
+    with pytest.raises(ToolNotFoundError):
+        await service.refresh_credential(tenant_id=TENANT, credential_id=saved_legacy.id, scope=_SCOPE)
 
 
 async def test_callback_page_escapes_provider() -> None:
@@ -458,6 +499,7 @@ async def test_controller_authorize_and_callback_flow(monkeypatch: pytest.Monkey
                 "authorization_endpoint": "https://issuer.test/auth",
                 "token_endpoint": "https://issuer.test/token",
                 "client_id": "cid-1",
+                "binding": "org_shared",
             },
         )
         assert authorize.status_code == 200
@@ -470,6 +512,7 @@ async def test_controller_authorize_and_callback_flow(monkeypatch: pytest.Monkey
                 "authorization_endpoint": "http://169.254.169.254/auth",
                 "token_endpoint": "https://issuer.test/token",
                 "client_id": "cid-1",
+                "binding": "org_shared",
             },
         )
         assert bad.status_code == 400
@@ -496,6 +539,7 @@ async def test_controller_anonymous_is_401() -> None:
                     "authorization_endpoint": "https://issuer.test/auth",
                     "token_endpoint": "https://issuer.test/token",
                     "client_id": "cid-1",
+                    "binding": "org_shared",
                 },
             )
         ).status_code == 401

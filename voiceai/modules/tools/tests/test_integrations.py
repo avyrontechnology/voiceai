@@ -26,9 +26,19 @@ from voiceai.modules.auth import InvalidCredentialsError, Principal
 from voiceai.modules.tools.auth_resolver import ToolAuthResolver
 from voiceai.modules.tools.dcr_service import ClientRecord
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
+from voiceai.modules.tools.audit_repository import AuditRepository
 from voiceai.modules.tools.helpers import wire_credential_meta
 from voiceai.modules.tools.integration_service import IntegrationService
-from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolExecutionLog
+from voiceai.modules.tools.models import (
+    IntegrationAuditLog,
+    IntegrationTemplate,
+    OrgPolicy,
+    OwnerScope,
+    PartnerCredential,
+    PartnerIntegration,
+    ToolExecutionLog,
+)
+from voiceai.modules.tools.org_policy_repository import OrgPolicyRepository
 from voiceai.modules.tools.repository import VaultRepository
 from voiceai.modules.tools.vault import CredentialVault
 
@@ -36,6 +46,9 @@ BASE = "http://integrations.test"
 PREFIX = "/api/v1"
 TENANT = "acme"
 OTHER = "other"
+
+#: Service-level caller scope (mirrors the controller principal: org = tenant, user u-1).
+_SCOPE = OwnerScope.from_owner(TENANT, TENANT, "u-1")
 
 
 class _Auth:
@@ -102,7 +115,7 @@ def _repos(db: InMemoryDatabase, tenant: str) -> VaultRepository:
 
 
 def _service(db: InMemoryDatabase, dcr: _Dcr | None = None) -> IntegrationService:
-    """Service over system + tenant views with a test-key vault."""
+    """Service over system + tenant views with a test-key vault (policies + audit wired)."""
     from voiceai.modules.tools.models import ToolDefinition
     from voiceai.modules.tools.repository import ToolsRepository
 
@@ -119,56 +132,78 @@ def _service(db: InMemoryDatabase, dcr: _Dcr | None = None) -> IntegrationServic
         vault=CredentialVault("test-master-key"),
         dcr=dcr,  # type: ignore[arg-type]
         tools=tools,
+        policies=OrgPolicyRepository(
+            TenantScopedRepository(
+                InMemoryRepository[OrgPolicy](db, Collections.INTEGRATION_ORG_POLICIES, OrgPolicy),
+                TENANT,
+                Collections.INTEGRATION_ORG_POLICIES,
+            )
+        ),
+        audit=AuditRepository(
+            TenantScopedRepository(
+                InMemoryRepository[IntegrationAuditLog](db, Collections.INTEGRATION_AUDIT_LOG, IntegrationAuditLog),
+                TENANT,
+                Collections.INTEGRATION_AUDIT_LOG,
+            )
+        ),
     )
 
 
 async def test_connect_lists_metadata_without_ciphertext() -> None:
     """Ciphertext never reaches the wire: projections carry identifiers only."""
     service = _service(InMemoryDatabase())
-    row, replaced = await service.connect_credential(provider="github", credential_type="api_key", secret="s3cr3t")
+    row, replaced = await service.connect_credential(
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="s3cr3t"
+    )
     assert replaced is False
     meta = wire_credential_meta(row)
     assert "encrypted_data" not in meta
     assert meta["provider"] == "github"
-    listed = await service.list_credentials()
+    listed = await service.list_credentials(_SCOPE)
     assert [wire_credential_meta(item) for item in listed] == [meta]
 
 
 async def test_connect_is_idempotent_by_provider() -> None:
     """Repeat connects replace instead of duplicating."""
     service = _service(InMemoryDatabase())
-    first, replaced_first = await service.connect_credential(provider="github", credential_type="api_key", secret="one")
+    first, replaced_first = await service.connect_credential(
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="one"
+    )
     second, replaced_second = await service.connect_credential(
-        provider="github", credential_type="api_key", secret="two"
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="two"
     )
     assert (replaced_first, replaced_second) == (False, True)
     assert first.id == second.id
-    assert len(await service.list_credentials()) == 1
+    assert len(await service.list_credentials(_SCOPE)) == 1
 
 
 async def test_link_requires_live_credential() -> None:
     """Links without a credential fail with identifiers only (HTTP 400)."""
     service = _service(InMemoryDatabase())
     with pytest.raises(InvalidToolError):
-        await service.link_integration(provider="github", agent_id="a-1", config={})
-    await service.connect_credential(provider="github", credential_type="api_key", secret="s")
-    linked = await service.link_integration(provider="github", agent_id="a-1", config={"scope": "repo"})
+        await service.link_integration(provider="github", agent_id="a-1", config={}, scope=_SCOPE)
+    await service.connect_credential(
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="s"
+    )
+    linked = await service.link_integration(provider="github", agent_id="a-1", config={"scope": "repo"}, scope=_SCOPE)
     assert linked.agent_id == "a-1"
-    assert [row.agent_id for row in await service.list_integrations(agent_id="a-1")] == ["a-1"]
+    assert [row.agent_id for row in await service.list_integrations(scope=_SCOPE, agent_id="a-1")] == ["a-1"]
 
 
 async def test_revoke_then_link_fails_and_missing_is_404() -> None:
     """Revoked credentials break new links; unknown ids read as 404."""
     service = _service(InMemoryDatabase())
-    row, _ = await service.connect_credential(provider="github", credential_type="api_key", secret="s")
+    row, _ = await service.connect_credential(
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="s"
+    )
     assert row.id is not None
-    await service.revoke_credential(row.id)
+    await service.revoke_credential(row.id, _SCOPE)
     with pytest.raises(InvalidToolError):
-        await service.link_integration(provider="github", agent_id="a-1", config={})
+        await service.link_integration(provider="github", agent_id="a-1", config={}, scope=_SCOPE)
     with pytest.raises(ToolNotFoundError):
-        await service.revoke_credential(row.id)
+        await service.revoke_credential(row.id, _SCOPE)
     with pytest.raises(ToolNotFoundError):
-        await service.unlink_integration("missing")
+        await service.unlink_integration("missing", _SCOPE)
 
 
 async def test_dcr_register_seals_secret_and_returns_identifiers_only() -> None:
@@ -187,7 +222,9 @@ async def test_dcr_register_seals_secret_and_returns_identifiers_only() -> None:
     )
     db = InMemoryDatabase()
     service = _service(db, _Dcr(record))
-    row = await service.dcr_register(issuer_url="https://issuer.test", provider="github")
+    row = await service.dcr_register(
+        issuer_url="https://issuer.test", provider="github", binding="org_shared", scope=_SCOPE
+    )
     assert row.provider == "github"
     assert row.encrypted_data != "shh"
     assert row.auth_config["client_id"] == "cid-1"
@@ -207,8 +244,10 @@ async def test_dcr_failure_propagates_without_storing() -> None:
 
     service = _service(InMemoryDatabase(), _Dcr(ToolExecutionError("Issuer requires manual client credentials.")))
     with pytest.raises(ToolExecutionError):
-        await service.dcr_register(issuer_url="https://issuer.test", provider="github")
-    assert await service.list_credentials() == []
+        await service.dcr_register(
+            issuer_url="https://issuer.test", provider="github", binding="org_shared", scope=_SCOPE
+        )
+    assert await service.list_credentials(_SCOPE) == []
 
 
 async def _client(role: str | None = "owner") -> AsyncClient:
@@ -239,7 +278,7 @@ async def test_controller_templates_and_credentials_flow() -> None:
     async with await _client() as client:
         connect = await client.post(
             f"{PREFIX}/partner-credentials",
-            json={"provider": "github", "credential_type": "api_key", "secret": "s3cr3t"},
+            json={"provider": "github", "credential_type": "api_key", "binding": "org_shared", "secret": "s3cr3t"},
         )
         assert connect.status_code == 201
         body = connect.json()["data"]
@@ -283,7 +322,7 @@ async def test_controller_dcr_register_flow() -> None:
     async with await _client() as client:
         response = await client.post(
             f"{PREFIX}/integrations/dcr-register",
-            json={"issuer_url": "https://issuer.test", "provider": "github"},
+            json={"issuer_url": "https://issuer.test", "provider": "github", "binding": "org_shared"},
         )
     assert response.status_code == 201
     body = response.json()["data"]
@@ -305,18 +344,28 @@ async def test_template_save_is_idempotent_and_delete_forbids_system() -> None:
     """Tenant overrides replace by provider; missing deletes 404."""
     service = _service(InMemoryDatabase())
     first, replaced_first = await service.save_template(
-        provider="github", credential_type="api_key", tools_template=[], oauth_config={}, client_config={}
+        provider="github",
+        credential_type="api_key",
+        scope=_SCOPE,
+        tools_template=[],
+        oauth_config={},
+        client_config={},
     )
     second, replaced_second = await service.save_template(
-        provider="github", credential_type="oauth2", tools_template=[], oauth_config={}, client_config={}
+        provider="github",
+        credential_type="oauth2",
+        scope=_SCOPE,
+        tools_template=[],
+        oauth_config={},
+        client_config={},
     )
     assert (replaced_first, replaced_second) == (False, True)
     assert first.provider == second.provider
-    assert [row.provider for row in await service.list_templates()] == ["github"]
-    await service.delete_template("github")
-    assert await service.list_templates() == []
+    assert [row.provider for row in await service.list_templates(_SCOPE)] == ["github"]
+    await service.delete_template("github", _SCOPE)
+    assert await service.list_templates(_SCOPE) == []
     with pytest.raises(ToolNotFoundError):
-        await service.delete_template("github")
+        await service.delete_template("github", _SCOPE)
 
 
 async def test_controller_template_crud_flow() -> None:
@@ -357,7 +406,12 @@ async def test_auth_matrix_resolves_every_type_end_to_end() -> None:
     ) -> tuple[dict[str, str], dict[str, str]]:
         provider = f"prov-{credential_type}-{ref_suffix}"
         row, _ = await service.connect_credential(
-            provider=provider, credential_type=credential_type, secret=secret, auth_config=auth_config
+            provider=provider,
+            credential_type=credential_type,
+            binding="org_shared",
+            scope=_SCOPE,
+            secret=secret,
+            auth_config=auth_config,
         )
         assert row.id is not None
         tool = _ToolDefinition(
@@ -391,10 +445,17 @@ async def test_auth_config_refusing_secrets_and_bad_custom_json() -> None:
     service = _service(InMemoryDatabase())
     with pytest.raises(InvalidToolError):
         await service.connect_credential(
-            provider="p", credential_type="api_key", secret="s", auth_config={"token": "smuggled"}
+            provider="p",
+            credential_type="api_key",
+            binding="org_shared",
+            scope=_SCOPE,
+            secret="s",
+            auth_config={"token": "smuggled"},
         )
     with pytest.raises(InvalidToolError):
-        await service.connect_credential(provider="p", credential_type="custom", secret="not-json")
+        await service.connect_credential(
+            provider="p", credential_type="custom", binding="org_shared", scope=_SCOPE, secret="not-json"
+        )
 
 
 async def test_sync_materializes_tools_and_respects_ownership() -> None:
@@ -406,6 +467,7 @@ async def test_sync_materializes_tools_and_respects_ownership() -> None:
     await service.save_template(
         provider="github",
         credential_type="api_key",
+        scope=_SCOPE,
         tools_template=[
             {
                 "name": "create_issue",
@@ -418,7 +480,9 @@ async def test_sync_materializes_tools_and_respects_ownership() -> None:
         oauth_config={},
         client_config={},
     )
-    await service.connect_credential(provider="github", credential_type="api_key", secret="s")
+    await service.connect_credential(
+        provider="github", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="s"
+    )
 
     first = await service.sync_tools("github")
     assert (first["created"], first["updated"]) == (1, 0)
@@ -442,6 +506,7 @@ async def test_sync_materializes_tools_and_respects_ownership() -> None:
     await service.save_template(
         provider="github",
         credential_type="api_key",
+        scope=_SCOPE,
         tools_template=[{"name": "hand"}],
         oauth_config={},
         client_config={},
@@ -455,7 +520,12 @@ async def test_sync_requires_credential_and_safe_base() -> None:
     """Non-none types without credentials fail; unsafe bases fail closed."""
     service = _service(InMemoryDatabase())
     await service.save_template(
-        provider="github", credential_type="api_key", tools_template=[], oauth_config={}, client_config={}
+        provider="github",
+        credential_type="api_key",
+        scope=_SCOPE,
+        tools_template=[],
+        oauth_config={},
+        client_config={},
     )
     with pytest.raises(InvalidToolError):
         await service.sync_tools("github")
@@ -465,6 +535,7 @@ async def test_sync_requires_credential_and_safe_base() -> None:
     await service.save_template(
         provider="local",
         credential_type="none",
+        scope=_SCOPE,
         tools_template=[{"name": "ping", "path": "/ping"}],
         oauth_config={},
         client_config={"base_url": "http://169.254.169.254"},
@@ -486,7 +557,7 @@ async def test_controller_sync_flow() -> None:
         )
         await client.post(
             f"{PREFIX}/partner-credentials",
-            json={"provider": "github", "credential_type": "api_key", "secret": "s"},
+            json={"provider": "github", "credential_type": "api_key", "binding": "org_shared", "secret": "s"},
         )
         sync = await client.post(f"{PREFIX}/integration-templates/github/sync-tools")
         assert sync.status_code == 201
@@ -538,12 +609,15 @@ async def test_sync_mcp_discovers_and_materializes(monkeypatch: pytest.MonkeyPat
     await service.save_template(
         provider="mcpbox",
         credential_type="bearer",
+        scope=_SCOPE,
         transport="mcp",
         tools_template=[{"name": "manual"}],
         oauth_config={},
         client_config={"base_url": "https://93.184.216.1/mcp"},
     )
-    await service.connect_credential(provider="mcpbox", credential_type="bearer", secret="tok")
+    await service.connect_credential(
+        provider="mcpbox", credential_type="bearer", binding="org_shared", scope=_SCOPE, secret="tok"
+    )
     result = await service.sync_tools("mcpbox")
     assert (result["created"], result["updated"]) == (1, 0)
     assert result["tool_ids"] == ["function:search"]
@@ -561,18 +635,22 @@ async def test_sync_mcp_rejects_unsupported_auth_and_missing_url() -> None:
     await service.save_template(
         provider="plain",
         credential_type="api_key",
+        scope=_SCOPE,
         transport="mcp",
         tools_template=[],
         oauth_config={},
         client_config={"base_url": "https://93.184.216.1/mcp"},
     )
-    await service.connect_credential(provider="plain", credential_type="api_key", secret="k")
+    await service.connect_credential(
+        provider="plain", credential_type="api_key", binding="org_shared", scope=_SCOPE, secret="k"
+    )
     with pytest.raises(InvalidToolError):
         await service.sync_tools("plain")
 
     await service.save_template(
         provider="nourl",
         credential_type="none",
+        scope=_SCOPE,
         transport="mcp",
         tools_template=[],
         oauth_config={},

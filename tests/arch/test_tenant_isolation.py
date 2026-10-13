@@ -88,6 +88,10 @@ TENANT_ID_FLAGGED: frozenset[str] = frozenset(
         "voiceai/modules/tools/controller.py",  # spec 0061: login tenant handoff
         "voiceai/modules/tools/tests/test_oauth.py",  # spec 0061: login tenancy pins
         "voiceai/modules/tools/helpers.py",  # spec 0058: template tenant badge projection
+        "voiceai/modules/tools/org_policy_repository.py",  # spec 0081, P1: owner-scope policy reads
+        "voiceai/modules/tools/tests/test_visibility_foundation.py",  # spec 0081, P1: owner-scope isolation pins
+        "voiceai/modules/tools/tests/test_binding_policy.py",  # spec 0081, P2: binding/policy behaviour pins
+        "voiceai/modules/tools/tests/test_policy_controller.py",  # spec 0081, P2: policy HTTP pins
         "voiceai/modules/voice/tests/test_outbound_bridge.py",  # spec 0026: tenant pass-through pin
         "voiceai/modules/voice/tests/test_place_call.py",  # spec 0021, M2: dial ownership pins
         "voiceai/modules/voices/models.py",  # spec 0025: tenant-scoped voice rows

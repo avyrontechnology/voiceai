@@ -55,6 +55,10 @@ SIZE_DEBT: dict[str, str] = {
     # spec-0058 integrator: tool/vault/MCP/DCR wiring builders grew the
     # container past 800; the core-wiring split shrinks it (specced next).
     "voiceai/core/container.py": "spec-0058",
+    # spec-0081 P2 integrator: connect/resolve/link/policy/flip grew the
+    # integration service past 800; the service split (sync/lifecycle/policy
+    # lanes) shrinks it (specced next, P3+).
+    "voiceai/modules/tools/integration_service.py": "spec-0081",
 }
 
 #: Kernel ceilings (blueprint target-tree budgets; measured well below today).

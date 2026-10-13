@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from voiceai.common.constants import HTTP_BAD_REQUEST, HTTP_FORBIDDEN, HTTP_NOT_FOUND
+from voiceai.common.constants import (
+    HTTP_BAD_REQUEST,
+    HTTP_FORBIDDEN,
+    HTTP_NOT_FOUND,
+    HTTP_UNPROCESSABLE_ENTITY,
+)
 from voiceai.common.errors import AppError, ErrorCode
 
 __all__ = [
+    "BindingRequiredError",
     "InvalidToolError",
+    "PolicyConflictError",
+    "SuspendedError",
     "ToolDeniedError",
     "ToolError",
     "ToolExecutionError",
@@ -66,6 +74,41 @@ class ToolDeniedError(ToolError):
 
     Out-of-scope execution is an authorization refusal, not a bad request:
     details carry the tool and agent identifiers only, never the arguments.
+    """
+
+    code: ClassVar[ErrorCode] = ErrorCode.FORBIDDEN
+    http_status: ClassVar[int] = HTTP_FORBIDDEN
+
+
+class BindingRequiredError(ToolError):
+    """A connect omitted its binding (HTTP 422, spec 0081).
+
+    The binding is explicit on UI and API alike (the radio pre-selects
+    nothing): details name the provider only, never secrets.
+    """
+
+    code: ClassVar[ErrorCode] = ErrorCode.INVALID_REQUEST
+    http_status: ClassVar[int] = HTTP_UNPROCESSABLE_ENTITY
+
+
+class PolicyConflictError(ToolError):
+    """No binding satisfies template and org policy at once (HTTP 422, spec 0081).
+
+    The effective set (`allowed ∩ policy`) came back empty — e.g. a
+    user_private-only template under `enforce_shared`: details carry the
+    provider and policy identifiers only.
+    """
+
+    code: ClassVar[ErrorCode] = ErrorCode.INVALID_REQUEST
+    http_status: ClassVar[int] = HTTP_UNPROCESSABLE_ENTITY
+
+
+class SuspendedError(ToolError):
+    """A call addressed a suspended row (HTTP 403, spec 0081).
+
+    Suspension is the reversible kill-switch (credential, template, partner):
+    new calls fail closed while in-flight runs complete. Details carry the
+    target identifiers only, plus the error_id stitching the log line.
     """
 
     code: ClassVar[ErrorCode] = ErrorCode.FORBIDDEN

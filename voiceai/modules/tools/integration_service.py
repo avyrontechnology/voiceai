@@ -1,4 +1,4 @@
-"""Vault-state orchestration: templates, credentials, links, DCR (spec 0058).
+"""Vault-state orchestration: templates, credentials, links, DCR, policies (specs 0058, 0081).
 
 `IntegrationService` is the tools module's second service (the registry keeps
 `ToolsService`): everything the Integrations UI needs that is not the tool
@@ -8,6 +8,13 @@ inbound on connect (encrypted immediately) and outbound once in the same
 call (`secret_once`); stored rows, logs, and list projections never carry
 plaintext — `helpers.wire_credential_meta` is the only serializer, and it
 cannot see `encrypted_data` by construction.
+
+Owner scope (spec 0081, P2): every method takes an explicit `OwnerScope`
+built by the controller from auth context (never client fields). The binding
+is explicit everywhere (connect, DCR, OAuth authorize); the org policy enum
+admits no invalid states; resolution is deterministic (`user_private` beats
+`org_shared`, `enforce_shared` wins over ownership); every decision appends
+an audit event (fail-open-tolerant — the decision stands regardless).
 """
 
 from __future__ import annotations
@@ -18,14 +25,37 @@ import logging
 from datetime import datetime
 from typing import Any, Final
 
+from pydantic import ValidationError
+
 from voiceai.common.errors import NotFoundError as _StoreNotFoundError
 from voiceai.common.logger import get_logger
 from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.audit_repository import AuditRepository
 from voiceai.modules.tools.dcr_service import DcrService
-from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
-from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
+from voiceai.modules.tools.errors import (
+    InvalidToolError,
+    ToolForbiddenError,
+    ToolNotFoundError,
+)
+from voiceai.modules.tools.exceptions import (
+    ensure_binding_permitted,
+    ensure_binding_present,
+    ensure_effective_allowed,
+    ensure_owner_scope,
+)
+from voiceai.modules.tools.helpers import validation_field_paths
+from voiceai.modules.tools.models import (
+    IntegrationAuditLog,
+    IntegrationTemplate,
+    OrgPolicy,
+    OwnerScope,
+    PartnerCredential,
+    PartnerIntegration,
+    ToolDefinition,
+)
+from voiceai.modules.tools.org_policy_repository import OrgPolicyRepository
 from voiceai.modules.tools.repository import ToolsRepository, VaultRepository
-from voiceai.modules.tools.static_methods import build_tool_id
+from voiceai.modules.tools.static_methods import build_tool_id, effective_binding_set
 from voiceai.modules.tools.vault import CredentialVault
 
 __all__ = ["IntegrationService"]
@@ -97,6 +127,12 @@ class IntegrationService:
         dcr: Outbound DCR client (stateless; `None` keeps register dark with a
             loud warning, mirroring the tools `agent_links=None` posture).
         tools: Tenant tool registry view receiving synced rows (spec 0059).
+        policies: Org-policy views bound to the ambient request tenant
+            (`None` keeps policy reads at the user_choice default — P2
+            wiring always provides it; the port in core leaves it dark).
+        audit: Governance-audit views bound to the ambient request tenant
+            (`None` skips appends with a debug line — decisions still
+            execute; the audit store itself stays fail-open).
     """
 
     def __init__(
@@ -107,27 +143,115 @@ class IntegrationService:
         dcr: DcrService | None = None,
         *,
         tools: ToolsRepository | None = None,
+        policies: OrgPolicyRepository | None = None,
+        audit: AuditRepository | None = None,
     ) -> None:
         self._system = system
         self._tenant = tenant
         self._vault = vault
         self._dcr = dcr
         self._tools = tools
+        self._policies = policies
+        self._audit = audit
 
-    async def list_templates(self) -> list[IntegrationTemplate]:
-        """List curated + own-tenant templates, tenant rows winning ties.
+    async def _audit_event(
+        self, *, action: str, target_kind: str, target_id: str, scope: OwnerScope, reason: str = ""
+    ) -> None:
+        """Append one governance event, or skip when unwired (spec 0081, P2).
+
+        Args:
+            action: Closed audit vocabulary (link/unlink joined with a P2 note).
+            target_kind: What was decided on (template, credential, link, org_policy).
+            target_id: The governed row id (identifiers only).
+            scope: The acting scope (mapped to plain actor strings here).
+            reason: Why (required for suspend / flip / promote decisions).
+        """
+        if self._audit is None:
+            logger.debug("audit unwired: skipping %s %s:%s", action, target_kind, target_id)
+            return
+        await self._audit.append(
+            IntegrationAuditLog(
+                actor={
+                    C.LOG_KEY_PARTNER: scope.partner_id,
+                    C.LOG_KEY_ORG: scope.org_id or "",
+                    C.LOG_KEY_USER: scope.user_id or "",
+                },
+                action=action,
+                target_kind=target_kind,
+                target_id=target_id,
+                reason=reason,
+            )
+        )
+
+    async def _policy_for(self, scope: OwnerScope) -> str:
+        """Return the binding policy governing one scope (spec 0081, P2).
+
+        Partner-wide scopes (`org_id=None`) and orgs without a stored row
+        both read as `user_choice` — the neutral semantics (every connect
+        explicit, resolution prefers private). No hard-coded default beyond
+        this documented neutral.
+
+        Args:
+            scope: Who asks.
+
+        Returns:
+            The org's `binding_policy`, or `user_choice` when none governs.
+        """
+        if self._policies is None or scope.org_id is None:
+            return C.POLICY_USER_CHOICE
+        row = await self._policies.get_policy(scope.org_id, scope)
+        if row is None:
+            return C.POLICY_USER_CHOICE
+        return row.binding_policy
+
+    async def _replace_same_quad(self, *, provider: str, binding: str, scope: OwnerScope) -> PartnerCredential | None:
+        """Find the live row with the same natural key for idempotent replace.
+
+        The natural key is (provider, binding, org, user): a repeat connect
+        reuses the id (replaced=True) while a different binding/org/user
+        mints a new row (never clobbered).
+
+        Args:
+            provider: Partner name.
+            binding: The requested binding (already validated).
+            scope: Who connects.
+
+        Returns:
+            The same-quad row, or `None` when this connect mints fresh.
+        """
+        for row in await self._tenant.list_credentials_for_scope(scope, for_execution=False):
+            if row.provider != provider or row.binding != binding or row.owner_org_id != scope.org_id:
+                continue
+            if binding == C.BINDING_USER_PRIVATE and row.owner_user_id != scope.user_id:
+                continue
+            if binding == C.BINDING_ORG_SHARED and row.owner_user_id is not None:
+                continue
+            return row
+        return None
+
+    async def list_templates(self, scope: OwnerScope) -> list[IntegrationTemplate]:
+        """List curated + own-partner templates visible in a scope (spec 0081, P2).
+
+        Global rows answer every scope; partner rows answer their owner only
+        (each view filters its own rows; tenant wins id ties). Cross-partner
+        rows never surface (no oracle).
+
+        Args:
+            scope: Who asks (partner boundary only — orgs share templates).
 
         Returns:
             Merged rows, system first (the tools-registry precedent).
         """
+        ensure_owner_scope(scope)
         merged: dict[str, IntegrationTemplate] = {}
         system_ids: set[str] = set()
-        for row in await self._system.list_templates():
+        for row in await self._system.list_templates_for_scope(scope):
             merged[row.provider] = row
             system_ids.add(row.provider)
-        for row in await self._tenant.list_templates():
+        for row in await self._tenant.list_templates_for_scope(scope):
             merged[row.provider] = row
         ordered = sorted(merged, key=lambda provider: (provider not in system_ids, provider))
+        logger.debug("templates listed: partner=%s returned=%s", scope.partner_id, len(ordered))
         return [merged[key] for key in ordered]
 
     async def save_template(
@@ -135,31 +259,41 @@ class IntegrationService:
         *,
         provider: str,
         credential_type: str,
+        scope: OwnerScope,
         transport: str = "http",
         tools_template: list[dict[str, Any]] | None = None,
         oauth_config: dict[str, Any] | None = None,
         client_config: dict[str, Any] | None = None,
+        allowed_bindings: list[str] | None = None,
+        suggested_binding: str | None = None,
     ) -> tuple[IntegrationTemplate, bool]:
-        """Create or replace this tenant's template for a provider.
+        """Create or replace this partner's private template (spec 0081, P2).
 
-        Tenant rows override curated system rows on read; system rows are
-        never touched here (curation happens in code review + seed).
+        Visibility is forced to `partner_private` with the caller as owner —
+        the payload cannot ask for global (admin globals stay seed/P6).
+        Version is 1 on create and preserved on replace (P3 owns versioning);
+        lifecycle stays draft with empty provenance (P3 owns transitions).
 
         Args:
             provider: Partner name (the natural key).
             credential_type: `none|api_key|bearer|basic|oauth2|custom`.
+            scope: Who writes (owner stamped from here, never the payload).
             transport: `http` (manual entries) or `mcp` (auto-discovery).
             tools_template: Curated tool shapes the provider offers.
             oauth_config: Discovery/registration options for DCR.
             client_config: Default MCP client options.
+            allowed_bindings: Binding contract (`None` = most-restrictive
+                default `[user_private]`).
+            suggested_binding: Hint inside the contract, or `None`.
 
         Returns:
             `(row, replaced)`: the persisted row and whether one existed.
 
         Raises:
-            InvalidToolError: When the credential shape or transport is
-                unknown (HTTP 400).
+            InvalidToolError: When the credential shape, transport, or
+                binding contract is unknown (HTTP 400, identifiers only).
         """
+        ensure_owner_scope(scope)
         if credential_type not in (
             C.CREDENTIAL_TYPE_NONE,
             C.CREDENTIAL_TYPE_API_KEY,
@@ -177,24 +311,41 @@ class IntegrationService:
                 f"Unknown transport {transport!r}.",
                 details={"provider": provider},
             )
-        existing = await self._tenant.get_template(provider)
-        row = IntegrationTemplate(
-            provider=provider,
-            credential_type=credential_type,
-            transport=transport,
-            tools_template=[dict(entry) for entry in (tools_template or [])],
-            oauth_config=dict(oauth_config or {}),
-            client_config=dict(client_config or {}),
-        )
+        existing = await self._tenant.get_template_in_scope(provider, scope)
+        bindings: dict[str, Any] = {}
+        if allowed_bindings is not None:
+            bindings["allowed_bindings"] = list(allowed_bindings)
+        try:
+            row = IntegrationTemplate(
+                provider=provider,
+                credential_type=credential_type,
+                transport=transport,
+                tools_template=[dict(entry) for entry in (tools_template or [])],
+                oauth_config=dict(oauth_config or {}),
+                client_config=dict(client_config or {}),
+                visibility=C.VISIBILITY_PARTNER_PRIVATE,
+                owner_partner_id=scope.partner_id,
+                suggested_binding=suggested_binding,
+                **bindings,
+            )
+        except ValidationError as exc:
+            raise InvalidToolError(
+                "Template binding contract is invalid.",
+                details={"provider": provider, C.DETAIL_KEY_FIELDS: validation_field_paths(exc)},
+                cause=exc,
+            ) from exc
+        if existing is not None:
+            row.version = existing.version  # P3 owns versioning — P2 preserves it on replace
         saved = await self._tenant.save_template(row)
         logger.info("integration template saved for provider")
         return saved, existing is not None
 
-    async def delete_template(self, provider: str) -> None:
-        """Soft-delete this tenant's template override; system rows are 403.
+    async def delete_template(self, provider: str, scope: OwnerScope) -> None:
+        """Soft-delete this partner's template override; system rows are 403.
 
         Args:
             provider: Partner name (the natural key).
+            scope: Who writes.
 
         Raises:
             ToolForbiddenError: When a curated system row exists (HTTP 403).
@@ -202,7 +353,8 @@ class IntegrationService:
         """
         from voiceai.modules.tools.exceptions import ensure_system_immutable
 
-        ensure_system_immutable(await self._system.get_template(provider) is not None, provider)
+        ensure_owner_scope(scope)
+        ensure_system_immutable(await self._system.get_template_in_scope(provider, scope) is not None, provider)
         try:
             deleted = await self._tenant.delete_template(provider)
         except _StoreNotFoundError:
@@ -212,49 +364,120 @@ class IntegrationService:
                 f"Template {provider!r} not found.",
                 details={"provider": provider},
             )
+        await self._audit_event(
+            action=C.AUDIT_ACTION_RETIRE, target_kind=C.AUDIT_TARGET_TEMPLATE, target_id=provider, scope=scope
+        )
 
-    async def list_credentials(self) -> list[PartnerCredential]:
-        """List own-tenant credential rows (ciphertext included — project on wire).
+    async def list_credentials(self, scope: OwnerScope) -> list[PartnerCredential]:
+        """List credential rows visible in a scope (spec 0081, P2).
+
+        Manage-path projection (org admins see member metadata — secrets never
+        ride projections); callers MUST serialize through
+        `helpers.wire_credential_meta`.
+
+        Args:
+            scope: Who asks.
 
         Returns:
-            Active rows, oldest first. Callers MUST serialize through
-            `helpers.wire_credential_meta` (the envelope never leaves the store).
+            Visible rows, oldest first.
         """
-        return list(await self._tenant.list_credentials())
+        ensure_owner_scope(scope)
+        rows = list(await self._tenant.list_credentials_for_scope(scope, for_execution=False))
+        logger.debug("credentials listed: partner=%s org=%s returned=%s", scope.partner_id, scope.org_id, len(rows))
+        return rows
+
+    async def resolve_credential(self, *, provider: str, scope: OwnerScope) -> PartnerCredential | None:
+        """Resolve the live credential for a provider in a scope (spec 0081, P2).
+
+        Deterministic: org policy first (absent row = neutral `user_choice`),
+        then the strict execution-path read (`user_private` beats `org_shared`
+        by ownership; `enforce_shared` wins over ownership), then the status
+        gate (suspended/revoked never resolve; expired still resolves —
+        refresh is on-demand). Pure read: no writes, no audit. P5 calls this
+        blind from the gateway.
+
+        Args:
+            provider: Partner name.
+            scope: Who the run acts for.
+
+        Returns:
+            The live row, or `None` when nothing may ride this call.
+        """
+        ensure_owner_scope(scope)
+        rows = await self._tenant.find_credentials_for_scope(provider, scope, for_execution=True)
+        own_private = [
+            row for row in rows if row.binding == C.BINDING_USER_PRIVATE and row.owner_user_id == scope.user_id
+        ]
+        shared = [row for row in rows if row.binding == C.BINDING_ORG_SHARED]
+        live = next(
+            (
+                row
+                for row in (*own_private, *shared)
+                if row.status not in (C.CREDENTIAL_STATUS_SUSPENDED, C.CREDENTIAL_STATUS_REVOKED)
+            ),
+            None,
+        )
+        logger.debug(
+            C.LOG_CREDENTIAL_RESOLVED,
+            provider,
+            live.binding if live else None,
+            scope.org_id,
+        )
+        return live
 
     async def connect_credential(
         self,
         *,
         provider: str,
         credential_type: str,
+        binding: str | None,
+        scope: OwnerScope,
         secret: str,
         auth_config: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
     ) -> tuple[PartnerCredential, bool]:
-        """Seal a secret and store (or replace) this tenant's row for a provider.
+        """Seal a secret and store (or replace) one scoped row (spec 0081, P2).
 
-        Idempotent by natural key: a repeat POST replaces the row and reports
-        `replaced=True` instead of duplicating (spec 0058 rollout). The secret
-        text wraps per type before sealing (`api_key` → `{"api_key"}`,
-        `bearer`/`oauth2` → `{"token"}`, `basic` → `{"password"}`,
-        `custom` → `{"headers"}` from caller JSON, `none` → `{}`).
+        Explicit binding everywhere: omitted bindings answer 422, policy
+        refusals 403, empty effective sets 422 (§35.4). The natural key is
+        (provider, binding, org, user) — a repeat connect reuses the id
+        (`replaced=True`, reconnect also restores suspended rows); a
+        different quad mints a new row (never clobbered).
 
         Args:
             provider: Partner name (code/DB constant at call sites).
             credential_type: `none|api_key|bearer|basic|oauth2|custom`.
+            binding: `org_shared|user_private` (required — `None` is 422).
+            scope: Who connects (owner stamped from here, never the payload).
             secret: Secret text (custom: JSON object text of static headers).
-            auth_config: NON-secret placement (`location`/`name`/`username` —
-                secret-looking keys are refused, never stored).
+            auth_config: NON-secret placement (secret-looking keys refused).
             expires_at: Token expiry, or `None` for non-expiring keys.
 
         Returns:
             `(row, replaced)`: the persisted row and whether one existed.
 
         Raises:
-            InvalidToolError: When the shape is unknown, `auth_config`
-                smuggles secret-looking keys, or custom JSON is not an
-                object (HTTP 400).
+            BindingRequiredError: When the binding was omitted (HTTP 422).
+            ToolForbiddenError: When the policy forbids the binding, or a
+                private binding has no user (HTTP 403 / 400 respectively).
+            PolicyConflictError: When template ∩ policy is empty (HTTP 422).
+            InvalidToolError: When the shape is unknown or `auth_config`
+                smuggles secret-looking keys (HTTP 400).
         """
+        ensure_owner_scope(scope)
+        binding = ensure_binding_present(binding, provider)
+        policy = await self._policy_for(scope)
+        ensure_binding_permitted(binding, policy, provider)
+        if binding == C.BINDING_USER_PRIVATE and not scope.user_id:
+            raise InvalidToolError(
+                "Private credentials need a user login — API keys cannot hold them.",
+                details={"provider": provider},
+            )
+        template = await self._system.get_template_in_scope(provider, scope)
+        if template is None:
+            template = await self._tenant.get_template_in_scope(provider, scope)
+        if template is not None:
+            ensure_effective_allowed(list(template.allowed_bindings), policy, provider)
         if credential_type not in (
             C.CREDENTIAL_TYPE_NONE,
             C.CREDENTIAL_TYPE_API_KEY,
@@ -277,8 +500,8 @@ class IntegrationService:
         envelope = self._vault.encrypt(
             _seal_material(credential_type, secret, provider), key_version=_INITIAL_KEY_VERSION
         )
-        existing = [row for row in await self._tenant.find_credentials_by_provider(provider)]
-        replaced = bool(existing)
+        same = await self._replace_same_quad(provider=provider, binding=binding, scope=scope)
+        replaced = same is not None
         row = PartnerCredential(
             provider=provider,
             credential_type=credential_type,
@@ -286,22 +509,49 @@ class IntegrationService:
             encrypted_data=envelope,
             key_version=_INITIAL_KEY_VERSION,
             expires_at=expires_at,
+            owner_org_id=scope.org_id,
+            owner_user_id=scope.user_id if binding == C.BINDING_USER_PRIVATE else None,
+            binding=binding,  # type: ignore[arg-type]  # why: presence + policy checks above narrow it
+            status=C.CREDENTIAL_STATUS_ACTIVE,
         )
-        if existing:
-            row.id = existing[0].id
+        if same is not None and same.id is not None:
+            row.id = same.id
         saved = await self._tenant.save_credential(row)
-        logger.info("credential connected for provider")
+        await self._audit_event(
+            action=C.AUDIT_ACTION_CONNECT,
+            target_kind=C.AUDIT_TARGET_CREDENTIAL,
+            target_id=saved.id or "",
+            scope=scope,
+        )
+        logger.info(
+            "credential connected: provider=%s binding=%s org=%s replaced=%s",
+            provider,
+            binding,
+            scope.org_id,
+            replaced,
+        )
         return saved, replaced
 
-    async def revoke_credential(self, credential_id: str) -> None:
-        """Soft-delete one credential row (revoke); foreign rows read as missing.
+    async def revoke_credential(self, credential_id: str, scope: OwnerScope) -> None:
+        """Soft-delete one credential row; foreign rows read as missing.
+
+        Revoke takes the manage path (org admins can revoke member rows —
+        operability wins; every revoke is an audit event with the actor).
 
         Args:
             credential_id: Storage id.
+            scope: Who revokes.
 
         Raises:
             ToolNotFoundError: When no visible row exists (HTTP 404, no oracle).
         """
+        ensure_owner_scope(scope)
+        row = await self._tenant.get_credential_in_scope(credential_id, scope, for_execution=False)
+        if row is None:
+            raise ToolNotFoundError(
+                f"Credential {credential_id!r} not found.",
+                details={"credential_id": credential_id},
+            )
         try:
             deleted = await self._tenant.delete_credential(credential_id)
         except _StoreNotFoundError:
@@ -311,58 +561,92 @@ class IntegrationService:
                 f"Credential {credential_id!r} not found.",
                 details={"credential_id": credential_id},
             )
-        logger.info("credential revoked")
+        await self._audit_event(
+            action=C.AUDIT_ACTION_REVOKE,
+            target_kind=C.AUDIT_TARGET_CREDENTIAL,
+            target_id=credential_id,
+            scope=scope,
+        )
 
-    async def list_integrations(self, *, agent_id: str | None = None) -> list[PartnerIntegration]:
-        """List own-tenant links, optionally narrowed to one agent.
+    async def list_integrations(self, *, scope: OwnerScope, agent_id: str | None = None) -> list[PartnerIntegration]:
+        """List link rows visible in a scope, optionally for one agent (spec 0081, P2).
 
         Args:
+            scope: Who asks (`org_id=None` means partner-wide manage).
             agent_id: Narrow to one agent's links, or all.
 
         Returns:
-            Active rows, oldest first.
+            Visible rows, oldest first.
         """
-        rows = list(await self._tenant.list_integrations())
-        if agent_id is not None:
-            rows = [row for row in rows if row.agent_id == agent_id]
+        ensure_owner_scope(scope)
+        rows = list(await self._tenant.list_integrations_for_scope(scope, agent_id=agent_id))
+        logger.debug("integrations listed: partner=%s org=%s returned=%s", scope.partner_id, scope.org_id, len(rows))
         return rows
 
-    async def link_integration(self, *, provider: str, agent_id: str, config: dict[str, Any]) -> PartnerIntegration:
-        """Link a provider to an agent; requires a live credential first.
+    async def link_integration(
+        self, *, provider: str, agent_id: str, config: dict[str, Any], scope: OwnerScope
+    ) -> PartnerIntegration:
+        """Link a provider to an agent; requires a live credential (spec 0081, P2).
+
+        The org comes from the scope (never the payload — client identity
+        fields are untrusted); the credential must resolve on the strict
+        execution path under the effective policy.
 
         Args:
-            provider: Partner name (must have a live credential row).
+            provider: Partner name (must resolve live in this scope).
             agent_id: Agent this link belongs to.
             config: Non-secret runtime options (secrets stay in credentials).
+            scope: Who links (org stamped from here; org-less scopes 400).
 
         Returns:
             The persisted link row.
 
         Raises:
-            InvalidToolError: When no live credential exists (HTTP 400,
-                identifiers only).
+            InvalidToolError: When the scope carries no org, or no live
+                credential resolves (HTTP 400, identifiers only).
         """
-        live = await self._tenant.find_credentials_by_provider(provider)
-        if not live:
+        ensure_owner_scope(scope)
+        if scope.org_id is None:
+            raise InvalidToolError(
+                "Links belong to an org — connect from inside one.",
+                details={"provider": provider},
+            )
+        live = await self.resolve_credential(provider=provider, scope=scope)
+        if live is None:
             raise InvalidToolError(
                 f"Provider {provider!r} has no connected credential.",
                 details={"provider": provider},
             )
         saved = await self._tenant.save_integration(
-            PartnerIntegration(provider=provider, agent_id=agent_id, config=dict(config))
+            PartnerIntegration(provider=provider, agent_id=agent_id, config=dict(config), org_id=scope.org_id)
         )
-        logger.info("integration linked for provider")
+        await self._audit_event(
+            action=C.AUDIT_ACTION_LINK,
+            target_kind=C.AUDIT_TARGET_LINK,
+            target_id=saved.id or "",
+            scope=scope,
+        )
+        logger.info("integration linked: provider=%s agent=%s org=%s", provider, agent_id, scope.org_id)
         return saved
 
-    async def unlink_integration(self, integration_id: str) -> None:
-        """Soft-delete one link row; foreign rows read as missing.
+    async def unlink_integration(self, integration_id: str, scope: OwnerScope) -> None:
+        """Soft-delete one link row; foreign rows read as missing (spec 0081, P2).
 
         Args:
             integration_id: Storage id.
+            scope: Who unlinks (manage-path visibility).
 
         Raises:
             ToolNotFoundError: When no visible row exists (HTTP 404, no oracle).
         """
+        ensure_owner_scope(scope)
+        rows = await self._tenant.list_integrations_for_scope(scope)
+        row = next((item for item in rows if item.id == integration_id), None)
+        if row is None:
+            raise ToolNotFoundError(
+                f"Integration {integration_id!r} not found.",
+                details={"integration_id": integration_id},
+            )
         try:
             deleted = await self._tenant.delete_integration(integration_id)
         except _StoreNotFoundError:
@@ -372,31 +656,147 @@ class IntegrationService:
                 f"Integration {integration_id!r} not found.",
                 details={"integration_id": integration_id},
             )
+        await self._audit_event(
+            action=C.AUDIT_ACTION_UNLINK,
+            target_kind=C.AUDIT_TARGET_LINK,
+            target_id=integration_id,
+            scope=scope,
+        )
 
-    async def dcr_register(self, *, issuer_url: str, provider: str) -> PartnerCredential:
-        """Register at an issuer and seal the issued secret immediately.
+    async def get_policy(self, org_id: str, scope: OwnerScope) -> OrgPolicy:
+        """Return one org's policy row (spec 0081, P2).
+
+        Args:
+            org_id: Home org.
+            scope: Who asks (org match or partner-wide manage).
+
+        Returns:
+            The stored row.
+
+        Raises:
+            ToolNotFoundError: When no row exists or the scope may not see
+                it (HTTP 404, no oracle).
+        """
+        ensure_owner_scope(scope)
+        if self._policies is None:
+            raise ToolNotFoundError(f"Policy {org_id!r} not found.", details={"org_id": org_id})
+        row = await self._policies.get_policy(org_id, scope)
+        if row is None:
+            raise ToolNotFoundError(f"Policy {org_id!r} not found.", details={"org_id": org_id})
+        return row
+
+    async def set_policy(
+        self, *, org_id: str, binding_policy: str, changed_by: str, reason: str, scope: OwnerScope
+    ) -> tuple[OrgPolicy, list[str]]:
+        """Write one org's policy, suspending barred rows on the way in (spec 0081, P2).
+
+        Strict org match (no admin bypass in P2). Turning `enforce_shared`
+        ON suspends (never deletes) the org's live `user_private` rows so
+        rollback stays possible; turning it OFF never auto-restores
+        (explicit reconnect required). Order is suspend-rows → save-policy →
+        audit, so a crash never leaves policy ahead of rows.
+
+        Args:
+            org_id: Home org (must equal the caller's org).
+            binding_policy: `user_choice|shared_with_override|enforce_shared`.
+            changed_by: Actor principal (identifiers only, for the ledger).
+            reason: Why (required on flips — enforced by callers' copy).
+            scope: Who writes.
+
+        Returns:
+            `(row, suspended)`: the saved policy and the suspended row ids.
+
+        Raises:
+            ToolForbiddenError: When writing another org's policy (HTTP 403).
+            InvalidToolError: When the policy literal is unknown (HTTP 400)
+                or policies are unwired in this composition.
+        """
+        ensure_owner_scope(scope)
+        if self._policies is None:
+            raise InvalidToolError(
+                "Org policies are not wired in this deployment.",
+                details={"org_id": org_id},
+            )
+        if scope.org_id != org_id:
+            raise ToolForbiddenError(
+                f"Policy writes stay inside the caller's org.",
+                details={"org_id": org_id},
+            )
+        if binding_policy not in (
+            C.POLICY_USER_CHOICE,
+            C.POLICY_SHARED_WITH_OVERRIDE,
+            C.POLICY_ENFORCE_SHARED,
+        ):
+            raise InvalidToolError(
+                f"Unknown binding policy {binding_policy!r}.",
+                details={"org_id": org_id},
+            )
+        suspended: list[str] = []
+        old_row = await self._policies.get_policy(org_id, scope)
+        old_policy = old_row.binding_policy if old_row is not None else None
+        if binding_policy == C.POLICY_ENFORCE_SHARED:
+            for row in await self._tenant.list_credentials_for_scope(scope, for_execution=False):
+                if (
+                    row.binding == C.BINDING_USER_PRIVATE
+                    and row.owner_org_id == org_id
+                    and row.status == C.CREDENTIAL_STATUS_ACTIVE
+                    and row.id is not None
+                ):
+                    row.status = C.CREDENTIAL_STATUS_SUSPENDED
+                    await self._tenant.save_credential(row)
+                    suspended.append(row.id)
+                    await self._audit_event(
+                        action=C.AUDIT_ACTION_SUSPEND,
+                        target_kind=C.AUDIT_TARGET_CREDENTIAL,
+                        target_id=row.id,
+                        scope=scope,
+                        reason=reason,
+                    )
+                    logger.info(C.LOG_CREDENTIAL_SUSPENDED, row.id, row.provider, reason)
+        saved = await self._policies.save_policy(
+            OrgPolicy(org_id=org_id, binding_policy=binding_policy, changed_by=changed_by, reason=reason),
+            scope,
+        )
+        await self._audit_event(
+            action=C.AUDIT_ACTION_POLICY_FLIP,
+            target_kind=C.AUDIT_TARGET_POLICY,
+            target_id=org_id,
+            scope=scope,
+            reason=reason,
+        )
+        logger.info(C.LOG_POLICY_FLIP, org_id, old_policy, binding_policy, suspended)
+        return saved, suspended
+
+    async def dcr_register(
+        self, *, issuer_url: str, provider: str, binding: str | None, scope: OwnerScope
+    ) -> PartnerCredential:
+        """Register at an issuer and seal the issued secret immediately (spec 0081, P2).
 
         The issued `client_secret` never leaves the server: it is sealed
         into the vault material at registration, and the caller only learns
-        identifiers (`client_id`, endpoints). There is deliberately no
-        one-time display — the login step resolves the secret server-side
-        from this row, so no human ever handles it (Claude-connector flow).
-
-        The row carries no access `token` yet: DCR mints client credentials,
-        it logs no user in. A missing `token` in the material is the
-        "login pending" state the login step completes.
+        identifiers (`client_id`, endpoints). The row carries no access
+        `token` yet (status `pending`) — the login step resolves the secret
+        server-side from this row, so no human ever handles it.
 
         Args:
             issuer_url: Provider issuer URL (SSRF-checked inside DCR).
             provider: Partner name the credential is stored under.
+            binding: `org_shared|user_private` (required — `None` is 422,
+                checked against the policy intent before any outbound call).
+            scope: Who registers (owner stamped from here).
 
         Returns:
             The persisted credential row (metadata only on the wire).
 
         Raises:
+            BindingRequiredError: When the binding was omitted (HTTP 422).
+            ToolForbiddenError: When the policy forbids the binding (HTTP 403).
             ToolExecutionError: When discovery fails or MANUAL is required.
             InvalidToolError: When DCR is unwired in this composition.
         """
+        ensure_owner_scope(scope)
+        binding = ensure_binding_present(binding, provider)
+        ensure_binding_permitted(binding, provider=provider, policy=await self._policy_for(scope))
         if self._dcr is None:
             logger.warning("dcr register unwired: refusing outbound registration")
             raise InvalidToolError(
@@ -414,18 +814,28 @@ class IntegrationService:
             auth_config["token_endpoint"] = record.token_endpoint
         material = {"client_secret": record.client_secret or ""}
         envelope = self._vault.encrypt(json.dumps(material).encode("utf-8"), key_version=_INITIAL_KEY_VERSION)
-        existing = [row for row in await self._tenant.find_credentials_by_provider(provider)]
+        same = await self._replace_same_quad(provider=provider, binding=binding, scope=scope)
         row = PartnerCredential(
             provider=provider,
             credential_type=C.CREDENTIAL_TYPE_OAUTH2,
             auth_config=auth_config,
             encrypted_data=envelope,
             key_version=_INITIAL_KEY_VERSION,
+            owner_org_id=scope.org_id,
+            owner_user_id=scope.user_id if binding == C.BINDING_USER_PRIVATE else None,
+            binding=binding,  # type: ignore[arg-type]  # why: presence + policy checks above narrow it
+            status=C.CREDENTIAL_STATUS_PENDING,
         )
-        if existing:
-            row.id = existing[0].id
+        if same is not None and same.id is not None:
+            row.id = same.id
         saved = await self._tenant.save_credential(row)
-        logger.info("dcr client stored for provider")
+        await self._audit_event(
+            action=C.AUDIT_ACTION_CONNECT,
+            target_kind=C.AUDIT_TARGET_CREDENTIAL,
+            target_id=saved.id or "",
+            scope=scope,
+        )
+        logger.info("dcr client stored: provider=%s binding=%s org=%s", provider, binding, scope.org_id)
         return saved
 
     async def sync_tools(self, provider: str) -> dict[str, Any]:

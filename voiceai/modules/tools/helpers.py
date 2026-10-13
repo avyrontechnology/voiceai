@@ -6,14 +6,26 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from voiceai.modules.tools.models import IntegrationTemplate, PartnerCredential, PartnerIntegration, ToolDefinition
+from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.models import (
+    IntegrationAuditLog,
+    IntegrationTemplate,
+    OrgPolicy,
+    PartnerCredential,
+    PartnerIntegration,
+    ToolDefinition,
+)
 
 __all__ = [
     "validation_field_paths",
+    "wire_audit",
+    "wire_audit_list",
     "wire_credential_meta",
     "wire_credential_meta_list",
     "wire_integration",
     "wire_integration_list",
+    "wire_policy",
+    "wire_policy_list",
     "wire_template",
     "wire_template_list",
     "wire_tool",
@@ -63,6 +75,10 @@ def wire_credential_meta(credential: PartnerCredential) -> dict[str, Any]:
         "credential_type": credential.credential_type,
         "key_version": credential.key_version,
         "expires_at": credential.expires_at.isoformat() if credential.expires_at else None,
+        C.WIRE_BINDING_KEY: credential.binding,
+        C.WIRE_STATUS_KEY: credential.status,
+        C.WIRE_OWNER_ORG_KEY: credential.owner_org_id,
+        C.WIRE_OWNER_USER_KEY: credential.owner_user_id,
     }
 
 
@@ -91,6 +107,7 @@ def wire_integration(integration: PartnerIntegration) -> dict[str, Any]:
         "id": integration.id,
         "provider": integration.provider,
         "agent_id": integration.agent_id,
+        C.WIRE_ORG_ID_KEY: integration.org_id,
         "config": dict(integration.config),
         "status": integration.status,
         "negotiated_protocol_version": integration.negotiated_protocol_version,
@@ -126,6 +143,12 @@ def wire_template(template: IntegrationTemplate) -> dict[str, Any]:
         "oauth_config": dict(template.oauth_config),
         "client_config": dict(template.client_config),
         "tenant_id": template.tenant_id,
+        C.WIRE_VISIBILITY_KEY: template.visibility,
+        "owner_partner_id": template.owner_partner_id,
+        C.WIRE_VERSION_KEY: template.version,
+        C.WIRE_LIFECYCLE_KEY: template.lifecycle,
+        C.WIRE_ALLOWED_BINDINGS_KEY: list(template.allowed_bindings),
+        C.WIRE_SUGGESTED_BINDING_KEY: template.suggested_binding,
     }
 
 
@@ -139,6 +162,67 @@ def wire_template_list(templates: list[IntegrationTemplate]) -> dict[str, Any]:
         JSON-able mapping with the single `templates` key.
     """
     return {"templates": [wire_template(template) for template in templates]}
+
+
+def wire_policy(policy: OrgPolicy) -> dict[str, Any]:
+    """Render one org policy row (rulebook metadata, never secrets — there are none).
+
+    Args:
+        policy: The stored row.
+
+    Returns:
+        JSON-able mapping of the rule plus its change attribution.
+    """
+    return {
+        "id": policy.id,
+        C.WIRE_ORG_ID_KEY: policy.org_id,
+        C.WIRE_POLICY_KEY: policy.binding_policy,
+        "changed_by": policy.changed_by,
+        C.WIRE_REASON_KEY: policy.reason,
+    }
+
+
+def wire_policy_list(policies: list[OrgPolicy]) -> dict[str, Any]:
+    """Render policy rows as a `{"policies": [...]}` payload.
+
+    Args:
+        policies: The stored rows.
+
+    Returns:
+        JSON-able mapping with the single `policies` key.
+    """
+    return {"policies": [wire_policy(policy) for policy in policies]}
+
+
+def wire_audit(event: IntegrationAuditLog) -> dict[str, Any]:
+    """Render one governance event (identifiers + reason — never payloads).
+
+    Args:
+        event: The stored row.
+
+    Returns:
+        JSON-able mapping of the event.
+    """
+    return {
+        "id": event.id,
+        "actor": dict(event.actor),
+        C.WIRE_ACTION_KEY: event.action,
+        C.WIRE_TARGET_KEY: {"kind": event.target_kind, "id": event.target_id},
+        C.WIRE_REASON_KEY: event.reason,
+        C.WIRE_AT_KEY: event.created_at.isoformat(),
+    }
+
+
+def wire_audit_list(events: list[IntegrationAuditLog]) -> dict[str, Any]:
+    """Render audit rows as an `{"audit": [...]}` payload.
+
+    Args:
+        events: The stored rows.
+
+    Returns:
+        JSON-able mapping with the single `audit` key.
+    """
+    return {"audit": [wire_audit(event) for event in events]}
 
 
 def validation_field_paths(exc: ValidationError) -> list[str]:

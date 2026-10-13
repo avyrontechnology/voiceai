@@ -132,9 +132,7 @@ async def test_update_bumps_version_and_propagates_to_referencing_agents() -> No
 
 async def test_update_fanout_is_bounded() -> None:
     """The cascade passes a bound and the link honors it (no unbounded fan-out)."""
-    records = _records(
-        *((f"a{i}", "acme", ["function:book"], []) for i in range(MAX_PAGE_SIZE + 5))
-    )
+    records = _records(*((f"a{i}", "acme", ["function:book"], []) for i in range(MAX_PAGE_SIZE + 5)))
     links = FakeAgentLinks(records)
     service = _service(links=links)
     created = await service.create_tool(_row())

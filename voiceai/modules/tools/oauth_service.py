@@ -1,9 +1,14 @@
-"""Full OAuth2 login connector: authorize URL, callback, refresh (spec 0061).
+"""Full OAuth2 login connector: authorize URL, callback, refresh (spec 0061, spec 0081 P2).
 
 Completes what DCR started: DCR registers the *client*, this service logs
 the *user* in — provider login page (`POST /oauth/authorize-url`) →
 browser callback (`GET /oauth/callback`, PKCE) → sealed tokens → on-demand
 refresh (`POST /partner-credentials/{id}/refresh`).
+
+P2 threading: the binding + owner ride the server-side state record (never
+the URL or payload), so callback-sealed rows land scoped — no legacy rows
+ever again. States minted before the deploy lack the keys and fail closed
+with restart-login (10-minute TTL bounds the window).
 
 Trust boundaries: `tenant_id` always comes from the server-side state
 record (never query/body); `state` is single-use + TTL-bound (CSRF/replay
@@ -30,8 +35,10 @@ import httpx
 from voiceai.common.logger import get_logger
 from voiceai.modules.tools import constants as C
 from voiceai.modules.tools.errors import InvalidToolError, ToolNotFoundError
-from voiceai.modules.tools.models import PartnerCredential
+from voiceai.modules.tools.exceptions import ensure_binding_present, ensure_owner_scope
+from voiceai.modules.tools.models import OwnerScope, PartnerCredential
 from voiceai.modules.tools.repository import VaultRepository
+from voiceai.modules.tools.static_methods import credential_visible_to, tenant_allows
 from voiceai.modules.tools.vault import CredentialVault
 
 __all__ = ["OAuthService", "RedisStatePort"]
@@ -276,22 +283,28 @@ class OAuthService:
         *,
         tenant_id: str,
         provider: str,
+        scope: OwnerScope,
+        binding: str | None = None,
         authorization_endpoint: str | None = None,
         token_endpoint: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
-        scope: str = "",
+        scope_param: str = "",
     ) -> dict[str, Any]:
-        """Mint a login URL + handshake state for one provider (spec 0061).
+        """Mint a login URL + handshake state for one provider (specs 0061, 0081 P2).
 
         Missing endpoints/credentials resolve server-side from the vault
-        DCR record — the caller only sends `provider` (+ `scope`), so no
+        DCR record — the caller only sends `provider` (+ `scope_param`), so no
         human handles client secrets. Explicit values still win (manual
-        setups without a DCR record).
+        setups without a DCR record). The binding is required up front (422
+        before any Redis/state work) and the owner rides the scope (never
+        the payload); both land in the server-side state for the callback.
 
         Args:
             tenant_id: Acting tenant (stored server-side, never in the URL).
             provider: Partner name the credential will land under.
+            scope: Who logs in (owner stamped from here).
+            binding: `org_shared|user_private` (required — `None` is 422).
             authorization_endpoint: Provider login page (SSRF-checked).
                 Vault DCR record when omitted.
             token_endpoint: Provider token endpoint (SSRF-checked now, so a
@@ -302,7 +315,7 @@ class OAuthService:
             client_secret: Confidential-client secret (sealed into state,
                 single-use, TTL-bound — never logged). Vault DCR record
                 when omitted.
-            scope: Space-separated scopes (passed through untouched).
+            scope_param: Space-separated OAuth scopes (passed through untouched).
 
         Returns:
             `{authorization_url, expires_in}` (no state token — the browser
@@ -310,11 +323,13 @@ class OAuthService:
 
         Raises:
             InvalidToolError: When Redis/base-URL is dark, an endpoint
-                fails the safety pre-flight, or no DCR record exists to
-                resolve the missing values (HTTP 400, identifiers only).
+                fails the safety pre-flight, no DCR record exists, or the
+                binding was omitted (HTTP 400 / 422, identifiers only).
         """
         from voiceai.common.security import is_safe_outbound_url
 
+        binding = ensure_binding_present(binding, provider)
+        ensure_owner_scope(scope)
         redis = self._require_redis("authorize")
         self._require_base_url()
         if not authorization_endpoint or not token_endpoint or not client_id:
@@ -340,18 +355,21 @@ class OAuthService:
             "client_secret": client_secret or "",
             "token_endpoint": token_endpoint,
             "tenant_id": tenant_id,
+            "binding": binding,
+            "owner_org_id": scope.org_id or "",
+            "owner_user_id": scope.user_id or "",
         }
         await redis.setex(f"{_STATE_KEY_PREFIX}{state}", _STATE_TTL_S, json.dumps(record))
         query = {
             "response_type": "code",
             "client_id": client_id,
             "redirect_uri": _callback_url(self._public_base_url),
-            "scope": scope,
+            "scope": scope_param,
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
         }
-        logger.info("oauth login started for provider")
+        logger.info("oauth login started: provider=%s binding=%s org=%s", provider, binding, scope.org_id)
         return {"authorization_url": f"{authorization_endpoint}?{urlencode(query)}", "expires_in": _STATE_TTL_S}
 
     async def handle_callback(self, *, code: str, state: str) -> str:
@@ -391,9 +409,19 @@ class OAuthService:
         provider = str(record.get("provider", "provider"))
         tenant_id = str(record.get("tenant_id", ""))
         token_endpoint = str(record.get("token_endpoint", ""))
+        binding = record.get("binding")
+        owner_org_id = str(record.get("owner_org_id", "") or "")
+        owner_user_id = str(record.get("owner_user_id", "") or "")
         if not tenant_id or not token_endpoint or not code:
             raise InvalidToolError(
                 "Login session is incomplete — restart the login.",
+                details={"provider": provider},
+            )
+        if not isinstance(binding, str) or not binding:
+            # States minted before the binding contract lack the keys
+            # (10-minute TTL bounds the window) — fail closed, never default.
+            raise InvalidToolError(
+                "Login session predates binding selection — restart the login.",
                 details={"provider": provider},
             )
         tokens = await self._exchange(
@@ -417,13 +445,16 @@ class OAuthService:
         await self._upsert_credential(
             tenant_id=tenant_id,
             provider=provider,
+            binding=binding,
+            owner_org_id=owner_org_id or None,
+            owner_user_id=owner_user_id or None,
             auth_config={
                 "client_id": str(record.get("client_id", "")),
                 "token_endpoint": token_endpoint,
             },
             material=material,
         )
-        logger.info("oauth login completed for provider")
+        logger.info("oauth login completed: provider=%s binding=%s", provider, binding)
         if self._sync_tools_for is not None:
             # The access token just sealed, so discovery can run now. A sync
             # failure never fails the login — the token stays sealed either
@@ -436,12 +467,17 @@ class OAuthService:
                 logger.warning("oauth login sync failed for provider (token sealed anyway)")
         return provider
 
-    async def refresh_credential(self, *, tenant_id: str, credential_id: str) -> PartnerCredential:
+    async def refresh_credential(self, *, tenant_id: str, credential_id: str, scope: OwnerScope) -> PartnerCredential:
         """Rotate one oauth2 credential via its stored refresh token.
+
+        Refresh mutates secret material, so visibility is strict
+        (execution-path attribution — foreign and out-of-scope rows read
+        as missing). Binding/owner round-trip untouched.
 
         Args:
             tenant_id: Acting tenant (scoped read — foreign rows 404).
             credential_id: Storage id.
+            scope: Who refreshes (strict attribution).
 
         Returns:
             The resealed row (secret preserved when the server does not
@@ -452,9 +488,15 @@ class OAuthService:
             InvalidToolError: When the row is not a refreshable oauth2
                 credential or the server refuses (HTTP 400).
         """
+        ensure_owner_scope(scope)
         repo = self._repos_for(tenant_id)
         row = await repo.get_credential(credential_id)
-        if row is None:
+        if row is None or not tenant_allows(row.tenant_id, scope):
+            raise ToolNotFoundError(
+                f"Credential {credential_id!r} not found.",
+                details={"credential_id": credential_id or ""},
+            )
+        if not credential_visible_to(row, scope, for_execution=True):
             raise ToolNotFoundError(
                 f"Credential {credential_id!r} not found.",
                 details={"credential_id": credential_id or ""},
@@ -501,25 +543,50 @@ class OAuthService:
             new_material["client_secret"] = material["client_secret"]
         row.encrypted_data = self._vault.encrypt(json.dumps(new_material).encode("utf-8"), key_version=row.key_version)
         saved = await repo.save_credential(row)
-        logger.info("oauth credential refreshed")
+        logger.info("oauth credential refreshed: id=%s provider=%s", credential_id, row.provider)
         return saved
 
     async def _upsert_credential(
-        self, *, tenant_id: str, provider: str, auth_config: dict[str, Any], material: dict[str, Any]
+        self,
+        *,
+        tenant_id: str,
+        provider: str,
+        binding: str,
+        owner_org_id: str | None,
+        owner_user_id: str | None,
+        auth_config: dict[str, Any],
+        material: dict[str, Any],
     ) -> PartnerCredential:
-        """Insert or replace one oauth2 row by provider (idempotent login).
+        """Insert or replace one oauth2 row by natural key (idempotent login).
+
+        The natural key is (provider, binding, org, user) — the same login
+        twice reuses the id (reconnect restores suspended rows with a fresh
+        active status); a different binding lands a new row, never a clobber.
 
         Args:
             tenant_id: Owner tenant (from the state record).
-            provider: Partner name (the natural key).
+            provider: Partner name (the natural key head).
+            binding: `org_shared|user_private` (from the state record).
+            owner_org_id: Owning org (from the state record).
+            owner_user_id: Owning user for private rows (from the state record).
             auth_config: Non-secret placement (`client_id`, `token_endpoint`).
             material: Sealed token JSON (never logged).
 
         Returns:
-            The persisted row.
+            The persisted row (status active — a login carries a token).
         """
         repo = self._repos_for(tenant_id)
-        existing = [row for row in await repo.find_credentials_by_provider(provider)]
+        scope = OwnerScope.from_owner(tenant_id, owner_org_id, owner_user_id)
+        same: PartnerCredential | None = None
+        for row in await repo.list_credentials_for_scope(scope, for_execution=False):
+            if (
+                row.provider == provider
+                and row.binding == binding
+                and row.owner_org_id == owner_org_id
+                and row.owner_user_id == (owner_user_id if binding == C.BINDING_USER_PRIVATE else None)
+            ):
+                same = row
+                break
         row = PartnerCredential(
             provider=provider,
             credential_type=C.CREDENTIAL_TYPE_OAUTH2,
@@ -527,9 +594,13 @@ class OAuthService:
             encrypted_data=self._vault.encrypt(json.dumps(material).encode("utf-8"), key_version=1),
             key_version=1,
             expires_at=None,
+            owner_org_id=owner_org_id,
+            owner_user_id=owner_user_id if binding == C.BINDING_USER_PRIVATE else None,
+            binding=binding,  # type: ignore[arg-type]  # why: authorize-time guard + callback fail-closed narrow it
+            status=C.CREDENTIAL_STATUS_ACTIVE,
         )
-        if existing and existing[0].id is not None:
-            row.id = existing[0].id
+        if same is not None and same.id is not None:
+            row.id = same.id
         return await repo.save_credential(row)
 
     async def _exchange(

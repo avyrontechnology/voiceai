@@ -26,7 +26,11 @@ MODULE: ModuleDef = ModuleDef(
     # spec 0061: oauth2 login connector (authorize/callback/refresh; split next).
     # one-click connector (specs 0058/0061): server-side DCR secret + vault
     #   credential resolve + post-login auto-sync + tests (8750 ceiling; split next).
-    max_lines=8750,
+    # spec 0081 P1: owner-scope storage (models/repos/policies/audit) + visibility
+    #   tests (10600 ceiling; split next).
+    # spec 0081 P2: connect/resolve/link/policy/flip + binding HTTP surface +
+    #   policy tests (12100 ceiling; split next).
+    max_lines=12100,
 )
 
 __all__ = [

@@ -14,7 +14,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ValidationError
 
 from voiceai.modules.tools import constants as C
-from voiceai.modules.tools.constants import CredentialType, ToolKind, TransportType
+from voiceai.modules.tools.constants import BindingPolicy, CredentialType, ToolKind, TransportType
 from voiceai.modules.tools.errors import InvalidToolError
 from voiceai.modules.tools.helpers import validation_field_paths
 from voiceai.modules.tools.models import ToolDefinition
@@ -26,6 +26,7 @@ __all__ = [
     "CreateToolPayload",
     "DcrRegisterPayload",
     "LinkIntegrationPayload",
+    "PolicyPayload",
     "TemplatePayload",
     "UpdateToolPayload",
 ]
@@ -83,12 +84,18 @@ class UpdateToolPayload(CreateToolPayload):
 
 
 class ConnectCredentialPayload(BaseModel):
-    """Body for `POST /partner-credentials` — secret sealed on arrival."""
+    """Body for `POST /partner-credentials` — secret sealed on arrival.
+
+    `binding` is optional at the schema so the service guard answers the
+    single 422 (identifier details) instead of FastAPI text; the owner
+    chain never rides the body (stamped from auth context).
+    """
 
     model_config = {"extra": "forbid"}
 
     provider: str = Field(..., min_length=1)
     credential_type: CredentialType = Field(default=C.CREDENTIAL_TYPE_API_KEY)
+    binding: str | None = Field(default=None)
     secret: str = Field(default="")
     auth_config: dict = Field(default_factory=dict)  # why: placement is free-form non-secret JSON
     expires_at: datetime | None = Field(default=None)
@@ -105,12 +112,22 @@ class LinkIntegrationPayload(BaseModel):
 
 
 class DcrRegisterPayload(BaseModel):
-    """Body for `POST /integrations/dcr-register` — issuer + partner name."""
+    """Body for `POST /integrations/dcr-register` — issuer + partner name + binding."""
 
     model_config = {"extra": "forbid"}
 
     issuer_url: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
+    binding: str | None = Field(default=None)
+
+
+class PolicyPayload(BaseModel):
+    """Body for `POST /org-policies` — the rule; the org rides the scope (never the body)."""
+
+    model_config = {"extra": "forbid"}
+
+    binding_policy: BindingPolicy
+    reason: str = Field(default="")
 
 
 class AuthorizeUrlPayload(BaseModel):
@@ -130,10 +147,16 @@ class AuthorizeUrlPayload(BaseModel):
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)
     scope: str = Field(default="")
+    binding: str | None = Field(default=None)
 
 
 class TemplatePayload(BaseModel):
-    """Body for `POST /integration-templates` — tenant override, id = provider."""
+    """Body for `POST /integration-templates` — tenant override, id = provider.
+
+    Visibility is forced to partner-private server-side (the payload cannot
+    ask for global); `allowed_bindings=None` falls back to the most
+    restrictive model default.
+    """
 
     model_config = {"extra": "forbid"}
 
@@ -143,3 +166,5 @@ class TemplatePayload(BaseModel):
     tools_template: list[dict] = Field(default_factory=list)  # why: curated tool shapes are free-form JSON
     oauth_config: dict = Field(default_factory=dict)  # why: DCR discovery options are free-form JSON
     client_config: dict = Field(default_factory=dict)  # why: client defaults are free-form JSON
+    allowed_bindings: list[str] | None = Field(default=None)
+    suggested_binding: str | None = Field(default=None)

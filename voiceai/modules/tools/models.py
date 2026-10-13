@@ -1,5 +1,4 @@
-
-"""Tool and credential/integration persisted rows (specs 0029, 0056, 0059).
+"""Tool and credential/integration persisted rows (specs 0029, 0056, 0059, 0081).
 
 All models inherit `database.base.BaseFields`; collection names come from
 `database.constants.Collections`. Soft deletes only (`is_active`) — no row is
@@ -9,19 +8,29 @@ ever destroyed unless a spec argues for it.
   and their tenant-scoped execution audit rows (spec 0029, spec 0056 Phase-1).
 - `PartnerCredential` / `PartnerIntegration` / `IntegrationTemplate` —
   credential/integration state for the tools vault (spec 0056 Phase-2,
-  spec 0059 auth model).
+  spec 0059 auth model), extended with the 0081 owner chain
+  (`owner_partner_id` / `owner_org_id` / `owner_user_id`), binding scope,
+  visibility, versioning and lifecycle.
+- `OrgPolicy` / `IntegrationAuditLog` — the single-enum sharing rulebook per
+  org and the append-only governance trail (spec 0081, Phase-1).
+- `OwnerScope` — the frozen scope object every scoped repository call takes
+  explicitly (repositories never read ambient context).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from voiceai.common.tenancy import SYSTEM_TENANT_ID
 from voiceai.database.base import BaseFields
 from voiceai.modules.tools.constants import (
+    BINDING_ORG_SHARED,
+    BINDING_USER_PRIVATE,
+    CREDENTIAL_STATUS_ACTIVE,
     CREDENTIAL_TYPE_API_KEY,
     CREDENTIAL_TYPE_BASIC,
     CREDENTIAL_TYPE_BEARER,
@@ -29,28 +38,97 @@ from voiceai.modules.tools.constants import (
     CREDENTIAL_TYPE_NONE,
     CREDENTIAL_TYPE_OAUTH2,
     INTEGRATION_STATUS_ACTIVE,
+    LIFECYCLE_DRAFT,
+    POLICY_SHARED_WITH_OVERRIDE,
     TOOL_KIND_FUNCTION,
+    VISIBILITY_PARTNER_PRIVATE,
+    Binding,
+    BindingPolicy,
+    CredentialStatus,
     CredentialType,
+    TemplateLifecycle,
     ToolKind,
+    VisibilityScope,
 )
 
 __all__ = [
+    "BINDING_ORG_SHARED",
+    "BINDING_USER_PRIVATE",
+    "CREDENTIAL_STATUS_ACTIVE",
     "CREDENTIAL_TYPE_API_KEY",
     "CREDENTIAL_TYPE_BASIC",
     "CREDENTIAL_TYPE_BEARER",
     "CREDENTIAL_TYPE_CUSTOM",
     "CREDENTIAL_TYPE_NONE",
     "CREDENTIAL_TYPE_OAUTH2",
+    "Binding",
+    "BindingPolicy",
+    "CredentialStatus",
     "CredentialType",
     "INTEGRATION_STATUS_ACTIVE",
+    "IntegrationAuditLog",
     "IntegrationTemplate",
+    "OrgPolicy",
+    "OwnerScope",
     "PartnerCredential",
     "PartnerIntegration",
+    "TemplateLifecycle",
     "ToolDefinition",
     "ToolExecutionLog",
     "TOOL_KIND_FUNCTION",
     "ToolKind",
+    "VISIBILITY_PARTNER_PRIVATE",
+    "VisibilityScope",
 ]
+
+
+@dataclass(frozen=True)
+class OwnerScope:
+    """Who a scoped repository call acts for (spec 0081, Phase-1).
+
+    Repositories take this explicitly — they never read ambient tenant
+    context, so every owner filter in a query is visible at the call site.
+    Construct from plain strings only: callers map their own principal's
+    fields here without importing another module (the layer matrix forbids
+    tools → auth imports, so there is deliberately no `from_principal`).
+
+    Attributes:
+        partner_id: Billing and isolation boundary (the tenant id).
+        org_id: Sharing boundary inside the partner, or `None` for
+            partner-level rows (templates).
+        user_id: BYOK owner, or `None` for org-shared / partner rows.
+    """
+
+    partner_id: str
+    org_id: str | None = None
+    user_id: str | None = None
+
+    @classmethod
+    def from_owner(cls, partner_id: str, org_id: str | None = None, user_id: str | None = None) -> OwnerScope:
+        """Build a scope from plain owner strings.
+
+        Args:
+            partner_id: The partner (tenant) id — always required.
+            org_id: The org id, or `None` for partner-level rows.
+            user_id: The user id, or `None` for shared rows.
+
+        Returns:
+            The frozen scope (no validation — repositories treat a missing
+            `partner_id` as a wiring bug via `ensure_owner_scope`).
+        """
+        return cls(partner_id=partner_id, org_id=org_id, user_id=user_id)
+
+
+def _default_allowed_bindings() -> list[str]:
+    """Return the most-restrictive binding default (spec 0081).
+
+    New templates admit private use only until a curator widens them —
+    org-shared must be chosen deliberately, never by default.
+
+    Returns:
+        A fresh single-item list (no shared mutable default).
+    """
+    return [BINDING_USER_PRIVATE]
 
 
 class ToolDefinition(BaseFields):
@@ -92,6 +170,9 @@ class ToolDefinition(BaseFields):
     requires_tenant_key: bool = False
     tools_version: int = 1
     tenant_id: str | None = SYSTEM_TENANT_ID
+    #: Owning org inside the tenant (spec 0081): `None` means tenant-wide
+    #: (visible to every org for the P5 picker); set narrows the picker.
+    owner_org_id: str | None = None
 
 
 class ToolExecutionLog(BaseFields):
@@ -120,6 +201,12 @@ class ToolExecutionLog(BaseFields):
     success: bool = False
     execution_ms: int = Field(default=0, ge=0)
     error_id: str | None = None
+    #: Owner chain stamped at execution time (spec 0081): `credential_version`
+    #: 0 means unknown (legacy rows); P5 stamps real versions on every run.
+    org_id: str | None = None
+    user_id: str | None = None
+    credential_id: str | None = None
+    credential_version: int = Field(default=0, ge=0)
 
 
 class PartnerCredential(BaseFields):
@@ -151,6 +238,14 @@ class PartnerCredential(BaseFields):
     key_version: int = Field(..., ge=1)
     expires_at: datetime | None = None
     tenant_id: str | None = None
+    #: Owner chain (spec 0081): org set for both bindings, user set exactly
+    #: for `user_private`. `binding=None` is the explicit legacy-unscoped
+    #: state — manageable in listings, invisible to execution (re-choose at
+    #: the P2 boundary, never a silent default).
+    owner_org_id: str | None = None
+    owner_user_id: str | None = None
+    binding: Binding | None = None
+    status: CredentialStatus = CREDENTIAL_STATUS_ACTIVE
 
 
 class PartnerIntegration(BaseFields):
@@ -177,6 +272,9 @@ class PartnerIntegration(BaseFields):
     status: str = INTEGRATION_STATUS_ACTIVE
     negotiated_protocol_version: str = ""
     tenant_id: str | None = None
+    #: Link home org (spec 0081): `None` on legacy rows (mapped from the
+    #: agent's org on read); P2 enforces non-null on create.
+    org_id: str | None = None
 
 
 class IntegrationTemplate(BaseFields):
@@ -205,3 +303,100 @@ class IntegrationTemplate(BaseFields):
     oauth_config: dict = Field(default_factory=dict)  # why: DCR discovery options are free-form JSON
     client_config: dict = Field(default_factory=dict)  # why: client defaults are free-form JSON
     tenant_id: str | None = SYSTEM_TENANT_ID
+    #: Visibility + ownership (spec 0081): partners may only create
+    #: `partner_private` rows; `owner_partner_id="system"` marks the
+    #: Otoba-admin catalogue. Legacy rows carry `None` (mapped on read).
+    visibility: VisibilityScope = VISIBILITY_PARTNER_PRIVATE
+    owner_partner_id: str | None = None
+    #: Binding contract (spec 0081): non-empty subset of both bindings;
+    #: `suggested_binding` is a hint only and must sit inside it.
+    allowed_bindings: list[str] = Field(default_factory=_default_allowed_bindings)
+    suggested_binding: str | None = None
+    #: Versioning + lifecycle (spec 0081): publishes are immutable version
+    #: bumps; `provenance` carries `{promoted_from?}` / `{seed?}`.
+    version: int = Field(default=1, ge=1)
+    lifecycle: TemplateLifecycle = LIFECYCLE_DRAFT
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("allowed_bindings")
+    @classmethod
+    def _allowed_bindings_non_empty_subset(cls, value: list[str]) -> list[str]:
+        """Reject empty or unknown binding sets (spec 0081).
+
+        Args:
+            value: The submitted allowed bindings.
+
+        Returns:
+            The value unchanged when it is a non-empty subset of the
+            known bindings.
+        """
+        known = {BINDING_ORG_SHARED, BINDING_USER_PRIVATE}
+        if not value or any(item not in known for item in value):
+            raise ValueError(f"allowed_bindings must be a non-empty subset of {sorted(known)}")
+        return value
+
+    @field_validator("suggested_binding")
+    @classmethod
+    def _suggested_binding_within_allowed(cls, value: str | None, info: Any) -> str | None:
+        """Reject hints outside the allowed set (spec 0081).
+
+        Args:
+            value: The submitted hint, or `None` for no hint.
+            info: Validation context carrying the sibling `allowed_bindings`.
+
+        Returns:
+            The value unchanged when `None` or inside the allowed set.
+        """
+        if value is None:
+            return None
+        allowed = (info.data or {}).get("allowed_bindings", [BINDING_USER_PRIVATE])
+        if value not in allowed:
+            raise ValueError("suggested_binding must sit inside allowed_bindings")
+        return value
+
+
+class OrgPolicy(BaseFields):
+    """One org's sharing rulebook: a single enum, no invalid states (spec 0081).
+
+    `user_choice` names a binding per connect (no org default);
+    `shared_with_override` allows org reuse plus private override;
+    `enforce_shared` allows org reuse only (private attempts answer 403).
+    Flips suspend affected rows first (P2) — the rewrite itself is always
+    explicit with actor + reason, and every flip is a ledger event.
+
+    Attributes:
+        org_id: Home org (exactly one policy row per org).
+        binding_policy: The sharing rule.
+        changed_by: Actor principal of the last change (identifiers only).
+        reason: Why the policy changed (required on flips).
+    """
+
+    org_id: str = Field(..., min_length=1)
+    binding_policy: BindingPolicy = POLICY_SHARED_WITH_OVERRIDE
+    changed_by: str = ""
+    reason: str = ""
+
+
+class IntegrationAuditLog(BaseFields):
+    """One immutable governance event (spec 0081, Phase-1).
+
+    Execution outcomes live in `ToolExecutionLog`; everything decided —
+    publish, deprecate, suspend, promote, policy flips, connects, revokes,
+    syncs — lands here, append-only. Rows are never updated or deleted
+    (except the governed DSAR path); `at` is the BaseFields `created_at`.
+
+    Attributes:
+        actor: Acting identity as plain strings (partner/org/user ids —
+            never a client-supplied blob, mapped by the service in P2).
+        action: Closed governance vocabulary (new actions need a spec note).
+        target_kind: What was decided on (template, credential, link,
+            org_policy, partner).
+        target_id: The governed row id (identifiers only).
+        reason: Why (required for suspend / flip / promote decisions).
+    """
+
+    actor: dict[str, str] = Field(default_factory=dict)
+    action: str = Field(..., min_length=1)
+    target_kind: str = Field(..., min_length=1)
+    target_id: str = Field(..., min_length=1)
+    reason: str = ""

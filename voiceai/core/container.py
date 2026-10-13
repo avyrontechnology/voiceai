@@ -742,6 +742,60 @@ def _vault_views_for(db_client: Any, tenant_id: str) -> Any:
     )
 
 
+def _policy_repo_for(db_client: Any, tenant_id: str) -> Any:
+    """Build the org-policy view for one explicit tenant (spec 0081, P2).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        tenant_id: Owner tenant for the scoped policy view.
+
+    Returns:
+        An `OrgPolicyRepository` bound to `tenant_id`.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.models import OrgPolicy
+    from voiceai.modules.tools.org_policy_repository import OrgPolicyRepository
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    return OrgPolicyRepository(
+        TenantScopedRepository(
+            factory(db_client, Collections.INTEGRATION_ORG_POLICIES, OrgPolicy),
+            tenant_id,
+            Collections.INTEGRATION_ORG_POLICIES,
+        )
+    )
+
+
+def _audit_repo_for(db_client: Any, tenant_id: str) -> Any:
+    """Build the governance-audit view for one explicit tenant (spec 0081, P2).
+
+    Args:
+        db_client: `InMemoryDatabase` (tests/dev) or `MotorDatabase` (Atlas).
+        tenant_id: Owner tenant for the scoped audit view.
+
+    Returns:
+        An `AuditRepository` bound to `tenant_id`.
+    """
+    from voiceai.core.db import InMemoryDatabase
+    from voiceai.database.constants import Collections
+    from voiceai.database.repository import InMemoryRepository, MotorRepository
+    from voiceai.database.scoped import TenantScopedRepository
+    from voiceai.modules.tools.audit_repository import AuditRepository
+    from voiceai.modules.tools.models import IntegrationAuditLog
+
+    factory = InMemoryRepository if isinstance(db_client, InMemoryDatabase) else MotorRepository
+    return AuditRepository(
+        TenantScopedRepository(
+            factory(db_client, Collections.INTEGRATION_AUDIT_LOG, IntegrationAuditLog),
+            tenant_id,
+            Collections.INTEGRATION_AUDIT_LOG,
+        )
+    )
+
+
 def _tools_repo_for(db_client: Any, tenant_id: str) -> Any:
     """Build the tool registry view for one explicit tenant.
 
@@ -834,6 +888,8 @@ def _build_integration_service(db_client: Any, vault: Any, environment: Any) -> 
         vault=vault,
         dcr=DcrService(redirect_uris=redirect_uris),
         tools=_tools_repo_for(db_client, current_tenant().tenant_id),
+        policies=_policy_repo_for(db_client, current_tenant().tenant_id),
+        audit=_audit_repo_for(db_client, current_tenant().tenant_id),
     )
 
 

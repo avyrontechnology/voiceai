@@ -1,4 +1,4 @@
-"""Tool + vault persistence (spec 0029, spec 0056 Phase-2).
+"""Tool + vault persistence (spec 0029, spec 0056 Phase-2, spec 0081 Phase-1).
 
 System rows (`tenant_id="system"`) are readable by every tenant through the
 system view; tenant rows flow through request-scoped views supplied by the
@@ -6,6 +6,12 @@ container. The repository pins `id` to `tool_id` and stamps system rows.
 
 Vault state (spec 0056): credentials and integrations flow through
 tenant-scoped views only; templates have system + scoped views.
+
+Owner scope (spec 0081): every `*_for_scope` / `*_in_scope` read takes an
+explicit `OwnerScope` and filters the view with the pure predicates from
+`static_methods` — repositories never read ambient context, so each owner
+filter is visible at the call site. Legacy rows (missing owner fields) map
+on read and stamp on first write; they never resolve for execution.
 """
 
 from __future__ import annotations
@@ -14,14 +20,26 @@ import logging
 from collections.abc import Sequence
 
 from voiceai.common.logger import get_logger
+from voiceai.database.constants import Collections
 from voiceai.database.repository import BaseRepository, walk_pages
 from voiceai.modules.tools import constants as C
+from voiceai.modules.tools.exceptions import ensure_owner_scope
 from voiceai.modules.tools.models import (
     IntegrationTemplate,
+    OwnerScope,
     PartnerCredential,
     PartnerIntegration,
     ToolDefinition,
     ToolExecutionLog,
+)
+from voiceai.modules.tools.static_methods import (
+    credential_visible_to,
+    is_legacy_credential,
+    is_legacy_template,
+    link_visible_to,
+    template_visible_to,
+    tenant_allows,
+    tool_visible_in_org,
 )
 
 __all__ = ["LogsRepository", "ToolsRepository", "VaultRepository"]
@@ -51,7 +69,14 @@ class ToolsRepository:
             The persisted row.
         """
         tool.id = tool.tool_id
-        return await self._store.insert(tool)
+        saved = await self._store.insert(tool)
+        logger.info(
+            "tool saved: id=%s kind=%s org=%s",
+            saved.tool_id,
+            saved.kind,
+            saved.owner_org_id,
+        )
+        return saved
 
     async def get_tool(self, tool_id: str) -> ToolDefinition | None:
         """Return the active row for a natural key, or `None`.
@@ -69,9 +94,29 @@ class ToolsRepository:
         """Return every active row in this view, walking all pages (scoped views stay in-tenant)."""
         return [row async for row in walk_pages(self._store)]
 
+    async def list_tools_for_org(self, org_id: str | None) -> Sequence[ToolDefinition]:
+        """Return this view's rows visible to one org picker (spec 0081, P1).
+
+        Tenant-wide rows (`owner_org_id=None`) answer every org; pinned rows
+        answer theirs only. Tenancy still comes from the view.
+
+        Args:
+            org_id: The asking org, or `None` for the tenant-wide picker.
+
+        Returns:
+            The visible rows, oldest first.
+        """
+        rows = [row async for row in walk_pages(self._store)]
+        visible = [row for row in rows if tool_visible_in_org(row, org_id)]
+        logger.debug("scoped read: collection=%s org=%s returned=%s", Collections.TOOLS, org_id, len(visible))
+        return visible
+
     async def delete_tool(self, tool_id: str) -> bool:
         """Soft-delete one row; foreign rows read as missing."""
-        return await self._store.soft_delete(tool_id)
+        deleted = await self._store.soft_delete(tool_id)
+        if deleted:
+            logger.info("tool deleted: id=%s", tool_id)
+        return deleted
 
 
 class LogsRepository:
@@ -155,7 +200,17 @@ class VaultRepository:
         Returns:
             The persisted row.
         """
-        return await self._credentials.insert(credential)
+        replaced = credential.id is not None
+        saved = await self._credentials.insert(credential)
+        logger.info(
+            C.LOG_CREDENTIAL_SAVED,
+            saved.provider,
+            saved.binding,
+            saved.owner_org_id,
+            saved.owner_user_id,
+            replaced,
+        )
+        return saved
 
     async def get_credential(self, credential_id: str) -> PartnerCredential | None:
         """Return one credential row, or `None` when unknown, deleted, or foreign.
@@ -185,7 +240,11 @@ class VaultRepository:
 
     async def delete_credential(self, credential_id: str) -> bool:
         """Soft-delete one credential row; foreign rows read as missing."""
-        return await self._credentials.soft_delete(credential_id)
+        row = await self._credentials.get(credential_id)
+        deleted = await self._credentials.soft_delete(credential_id)
+        if deleted:
+            logger.info(C.LOG_CREDENTIAL_REVOKED, credential_id, row.provider if row else "")
+        return deleted
 
     async def save_integration(self, integration: PartnerIntegration) -> PartnerIntegration:
         """Insert or replace one integration link row.
@@ -196,7 +255,14 @@ class VaultRepository:
         Returns:
             The persisted row.
         """
-        return await self._integrations.insert(integration)
+        saved = await self._integrations.insert(integration)
+        logger.info(
+            C.LOG_LINK_SAVED,
+            saved.provider,
+            saved.agent_id,
+            saved.org_id,
+        )
+        return saved
 
     async def get_integration(self, integration_id: str) -> PartnerIntegration | None:
         """Return one integration row, or `None` when unknown, deleted, or foreign.
@@ -215,7 +281,10 @@ class VaultRepository:
 
     async def delete_integration(self, integration_id: str) -> bool:
         """Soft-delete one integration row; foreign rows read as missing."""
-        return await self._integrations.soft_delete(integration_id)
+        deleted = await self._integrations.soft_delete(integration_id)
+        if deleted:
+            logger.info(C.LOG_LINK_DELETED, integration_id)
+        return deleted
 
     async def save_template(self, template: IntegrationTemplate) -> IntegrationTemplate:
         """Insert or replace one template row, pinned to its natural key.
@@ -228,7 +297,16 @@ class VaultRepository:
             The persisted row.
         """
         template.id = template.provider
-        return await self._templates.insert(template)
+        existing = await self._templates.get(template.provider)
+        saved = await self._templates.insert(template)
+        logger.info(
+            C.LOG_TEMPLATE_SAVED,
+            saved.provider,
+            saved.visibility,
+            saved.version,
+            existing is not None,
+        )
+        return saved
 
     async def get_template(self, provider: str) -> IntegrationTemplate | None:
         """Return the active template for a provider, or `None`.
@@ -248,4 +326,193 @@ class VaultRepository:
 
     async def delete_template(self, provider: str) -> bool:
         """Soft-delete one template row; foreign rows read as missing."""
-        return await self._templates.soft_delete(provider)
+        deleted = await self._templates.soft_delete(provider)
+        if deleted:
+            logger.info(C.LOG_TEMPLATE_DELETED, provider)
+        return deleted
+
+    async def get_credential_in_scope(
+        self, credential_id: str, scope: OwnerScope, *, for_execution: bool
+    ) -> PartnerCredential | None:
+        """Return one credential row visible in a scope, or `None` (spec 0081, P1).
+
+        Same-tenant rows failing the owner check read as missing (no oracle);
+        tenant-mismatched rows also read as missing and log a warning (a
+        wiring bug, never a leak). Legacy (`binding=None`) rows answer
+        manage listings only — never execution.
+
+        Args:
+            credential_id: Storage id.
+            scope: Who asks (partner always bound — see `ensure_owner_scope`).
+            for_execution: Resolution path (`True`) or manage listing (`False`).
+
+        Returns:
+            The row, or `None` when unknown, deleted, foreign, out of scope,
+            or legacy on the execution path.
+        """
+        ensure_owner_scope(scope)
+        row = await self._credentials.get(credential_id)
+        if row is None:
+            return None
+        if not tenant_allows(row.tenant_id, scope):
+            logger.warning("scope tenant mismatch: collection=%s id=%s", Collections.PARTNER_CREDENTIALS, credential_id)
+            return None
+        if not credential_visible_to(row, scope, for_execution=for_execution):
+            logger.debug(
+                "credential hidden by scope: id=%s provider=%s binding=%s",
+                credential_id,
+                row.provider,
+                row.binding,
+            )
+            return None
+        if is_legacy_credential(row):
+            logger.debug(C.LOG_LEGACY_MAPPED, Collections.PARTNER_CREDENTIALS, credential_id, "legacy-manage")
+        return row
+
+    async def find_credentials_for_scope(
+        self, provider: str, scope: OwnerScope, *, for_execution: bool
+    ) -> Sequence[PartnerCredential]:
+        """Return this view's rows for a provider visible in a scope (spec 0081, P1).
+
+        Args:
+            provider: Partner name (a code/DB constant at call sites).
+            scope: Who asks.
+            for_execution: Resolution path (`True`) or manage listing (`False`).
+
+        Returns:
+            The visible rows, oldest first (bounded lookup window, as before).
+        """
+        ensure_owner_scope(scope)
+        rows = await self._credentials.find_many(C.VAULT_PROVIDER_FIELD, provider)
+        visible = [
+            row
+            for row in rows
+            if tenant_allows(row.tenant_id, scope) and credential_visible_to(row, scope, for_execution=for_execution)
+        ]
+        legacy = sum(1 for row in visible if is_legacy_credential(row))
+        logger.debug(
+            "scoped read: collection=%s provider=%s partner=%s org=%s returned=%s legacy=%s",
+            Collections.PARTNER_CREDENTIALS,
+            provider,
+            scope.partner_id,
+            scope.org_id,
+            len(visible),
+            legacy,
+        )
+        return visible
+
+    async def list_credentials_for_scope(
+        self, scope: OwnerScope, *, for_execution: bool
+    ) -> Sequence[PartnerCredential]:
+        """Return every credential row in this view visible in a scope (spec 0081, P1).
+
+        Args:
+            scope: Who asks.
+            for_execution: Resolution path (`True`) or manage listing (`False`).
+
+        Returns:
+            The visible rows, oldest first.
+        """
+        ensure_owner_scope(scope)
+        rows = [row async for row in walk_pages(self._credentials)]
+        visible = [
+            row
+            for row in rows
+            if tenant_allows(row.tenant_id, scope) and credential_visible_to(row, scope, for_execution=for_execution)
+        ]
+        legacy = sum(1 for row in visible if is_legacy_credential(row))
+        logger.debug(
+            "scoped read: collection=%s partner=%s org=%s returned=%s legacy=%s",
+            Collections.PARTNER_CREDENTIALS,
+            scope.partner_id,
+            scope.org_id,
+            len(visible),
+            legacy,
+        )
+        return visible
+
+    async def get_template_in_scope(self, provider: str, scope: OwnerScope) -> IntegrationTemplate | None:
+        """Return one template row visible in a scope, or `None` (spec 0081, P1).
+
+        Global rows answer every scope; partner rows answer their owner only
+        (legacy `owner_partner_id=None` rows map from the tenant stamp).
+        Tenant-mismatched rows read as missing with a warning.
+
+        Args:
+            provider: Partner name (the natural key).
+            scope: Who asks.
+
+        Returns:
+            The row, or `None` when unknown, deleted, foreign, or out of scope.
+        """
+        ensure_owner_scope(scope)
+        row = await self._templates.get(provider)
+        if row is None:
+            return None
+        if not tenant_allows(row.tenant_id, scope):
+            logger.warning("scope tenant mismatch: collection=%s id=%s", Collections.INTEGRATION_TEMPLATES, provider)
+            return None
+        if not template_visible_to(row, scope):
+            logger.debug("template hidden by scope: provider=%s visibility=%s", provider, row.visibility)
+            return None
+        if is_legacy_template(row):
+            logger.debug(C.LOG_LEGACY_MAPPED, Collections.INTEGRATION_TEMPLATES, provider, "legacy-owner")
+        return row
+
+    async def list_templates_for_scope(self, scope: OwnerScope) -> Sequence[IntegrationTemplate]:
+        """Return every template row in this view visible in a scope (spec 0081, P1).
+
+        The service merges system + tenant views (tenant wins ties) — each
+        view filters its own rows here.
+
+        Args:
+            scope: Who asks.
+
+        Returns:
+            The visible rows, oldest first.
+        """
+        ensure_owner_scope(scope)
+        rows = [row async for row in walk_pages(self._templates)]
+        visible = [row for row in rows if tenant_allows(row.tenant_id, scope) and template_visible_to(row, scope)]
+        legacy = sum(1 for row in visible if is_legacy_template(row))
+        logger.debug(
+            "scoped read: collection=%s partner=%s returned=%s legacy=%s",
+            Collections.INTEGRATION_TEMPLATES,
+            scope.partner_id,
+            len(visible),
+            legacy,
+        )
+        return visible
+
+    async def list_integrations_for_scope(
+        self, scope: OwnerScope, *, agent_id: str | None = None
+    ) -> Sequence[PartnerIntegration]:
+        """Return link rows visible in a scope, optionally for one agent (spec 0081, P1).
+
+        Legacy (`org_id=None`) rows answer listings so they can be re-homed
+        in P2; execution re-checks the live credential there.
+
+        Args:
+            scope: Who asks (`org_id=None` means partner-wide manage).
+            agent_id: Narrow to one agent's links, or all.
+
+        Returns:
+            The visible rows, oldest first.
+        """
+        ensure_owner_scope(scope)
+        rows = [row async for row in walk_pages(self._integrations)]
+        visible = [
+            row
+            for row in rows
+            if tenant_allows(row.tenant_id, scope)
+            and link_visible_to(row, scope)
+            and (agent_id is None or row.agent_id == agent_id)
+        ]
+        logger.debug(
+            "scoped read: collection=%s partner=%s org=%s returned=%s",
+            Collections.PARTNER_INTEGRATIONS,
+            scope.partner_id,
+            scope.org_id,
+            len(visible),
+        )
+        return visible

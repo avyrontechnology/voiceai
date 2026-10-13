@@ -7,6 +7,11 @@ the retired platform tools routes used — through the voice-controller
 `_require_scope` precedent (middleware-stashed principal first, one store
 trip). Anonymous callers answer the 401 envelope, under-scoped ones 403, and
 the gate runs before any service call so denied writes never reach the store.
+
+Owner scope (spec 0081, P2): integration handlers build an `OwnerScope`
+from the gated principal + ambient tenant (never client fields) and pass it
+explicitly — services never read ambient context, so each owner filter is
+visible at the call site.
 """
 
 from typing import Annotated, Any, Protocol
@@ -22,7 +27,7 @@ from voiceai.common.responses import success_response
 from voiceai.common.tenancy import current_tenant
 from voiceai.core.container import VoiceAIContainer
 from voiceai.core.environment import Environment
-from voiceai.modules.auth import SESSION_COOKIE, AuthService, ensure_permitted, request_principal
+from voiceai.modules.auth import SESSION_COOKIE, AuthService, Principal, ensure_permitted, request_principal
 from voiceai.modules.tools import constants as C
 from voiceai.modules.tools.constants import ToolKind
 from voiceai.modules.tools.helpers import (
@@ -30,12 +35,14 @@ from voiceai.modules.tools.helpers import (
     wire_credential_meta_list,
     wire_integration,
     wire_integration_list,
+    wire_policy,
     wire_template,
     wire_template_list,
     wire_tool,
     wire_tool_list,
 )
 from voiceai.modules.tools.integration_service import IntegrationService
+from voiceai.modules.tools.models import OwnerScope
 from voiceai.modules.tools.oauth_service import OAuthService
 from voiceai.modules.tools.schemas import (
     AuthorizeUrlPayload,
@@ -43,6 +50,7 @@ from voiceai.modules.tools.schemas import (
     CreateToolPayload,
     DcrRegisterPayload,
     LinkIntegrationPayload,
+    PolicyPayload,
     TemplatePayload,
     UpdateToolPayload,
 )
@@ -86,13 +94,17 @@ IntegrationsDep = Annotated[IntegrationService, Depends(Provide[VoiceAIContainer
 OAuthDep = Annotated[OAuthService, Depends(Provide[VoiceAIContainer.oauth_service])]
 
 
-async def _require_scope(request: Request, auth: AuthService, scope: str) -> None:
+async def _require_scope(request: Request, auth: AuthService, scope: str) -> Principal:
     """Gate the caller on a scope, preferring the middleware-stashed principal (one store trip).
 
     Args:
         request: The incoming request (cookie + bearer fallback, stashed principal).
         auth: The auth service resolving credentials the middleware did not.
         scope: The scope this route requires.
+
+    Returns:
+        The gated principal (callers map it to an `OwnerScope` — returning
+        it is additive; existing call sites ignore the value).
 
     Raises:
         InvalidCredentialsError: When no credential resolves (401 envelope).
@@ -102,6 +114,27 @@ async def _require_scope(request: Request, auth: AuthService, scope: str) -> Non
         request.cookies.get(SESSION_COOKIE), request.headers.get(C.AUTHORIZATION_HEADER, "")
     )
     ensure_permitted(principal.has_scope(scope), C.SCOPE_REQUIRED_TEMPLATE.format(scope=scope))
+    return principal
+
+
+def _owner_scope(principal: Principal) -> OwnerScope:
+    """Map a gated principal to its owner scope (spec 0081, P2).
+
+    Org and user ride auth context — never request bodies or query params
+    (client identity fields are untrusted); the partner rides the ambient
+    tenant bound by middleware.
+
+    Args:
+        principal: The gated caller.
+
+    Returns:
+        The explicit scope services filter on.
+    """
+    return OwnerScope.from_owner(
+        current_tenant().tenant_id,
+        principal.org_id,
+        principal.user_id,
+    )
 
 
 @router.get(C.TOOLS_PATH)
@@ -192,17 +225,17 @@ async def mcp_endpoint(
 @router.get(C.TEMPLATES_PATH)
 @inject
 async def list_templates(request: Request, auth: AuthServiceDep, service: IntegrationsDep) -> JSONResponse:
-    """List curated + own-tenant provider templates (`platform:read`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
-    return success_response(wire_template_list(await service.list_templates()))
+    """List global + own-partner provider templates (`platform:read`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
+    return success_response(wire_template_list(await service.list_templates(_owner_scope(principal))))
 
 
 @router.get(C.CREDENTIALS_PATH)
 @inject
 async def list_credentials(request: Request, auth: AuthServiceDep, service: IntegrationsDep) -> JSONResponse:
-    """List credential metadata — ciphertext never leaves the store (`platform:read`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
-    return success_response(wire_credential_meta_list(await service.list_credentials()))
+    """List credential metadata in scope — ciphertext never leaves the store (`platform:read`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
+    return success_response(wire_credential_meta_list(await service.list_credentials(_owner_scope(principal))))
 
 
 @router.post(C.CREDENTIALS_PATH, status_code=HTTP_CREATED)
@@ -213,11 +246,13 @@ async def connect_credential(
     auth: AuthServiceDep,
     service: IntegrationsDep,
 ) -> JSONResponse:
-    """Seal a secret; plaintext surfaces once, never again (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    """Seal a secret with explicit binding; plaintext surfaces once, never again (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
     row, replaced = await service.connect_credential(
         provider=payload.provider,
         credential_type=payload.credential_type,
+        binding=payload.binding,
+        scope=_owner_scope(principal),
         secret=payload.secret,
         auth_config=dict(payload.auth_config),
         expires_at=payload.expires_at,
@@ -233,9 +268,9 @@ async def connect_credential(
 async def revoke_credential(
     credential_id: str, request: Request, auth: AuthServiceDep, service: IntegrationsDep
 ) -> JSONResponse:
-    """Revoke one credential (soft delete); foreign rows read as 404 (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    await service.revoke_credential(credential_id)
+    """Revoke one credential in scope (soft delete, audited); foreign rows read as 404 (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    await service.revoke_credential(credential_id, _owner_scope(principal))
     return success_response({C.STATE_KEY: C.STATE_DELETED})
 
 
@@ -247,9 +282,11 @@ async def list_integrations(
     service: IntegrationsDep,
     agent_id: Annotated[str | None, Query(description=C.AGENT_QUERY_DESCRIPTION)] = None,
 ) -> JSONResponse:
-    """List own-tenant provider links, optionally narrowed by agent (`platform:read`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
-    return success_response(wire_integration_list(await service.list_integrations(agent_id=agent_id)))
+    """List provider links in scope, optionally narrowed by agent (`platform:read`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
+    return success_response(
+        wire_integration_list(await service.list_integrations(scope=_owner_scope(principal), agent_id=agent_id))
+    )
 
 
 @router.post(C.INTEGRATIONS_PATH, status_code=HTTP_CREATED)
@@ -260,10 +297,13 @@ async def link_integration(
     auth: AuthServiceDep,
     service: IntegrationsDep,
 ) -> JSONResponse:
-    """Link a provider to an agent; needs a live credential (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    """Link a provider to an agent in the caller's org; needs a live credential (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
     linked = await service.link_integration(
-        provider=payload.provider, agent_id=payload.agent_id, config=dict(payload.config)
+        provider=payload.provider,
+        agent_id=payload.agent_id,
+        config=dict(payload.config),
+        scope=_owner_scope(principal),
     )
     return success_response(wire_integration(linked), status_code=HTTP_CREATED)
 
@@ -273,9 +313,9 @@ async def link_integration(
 async def unlink_integration(
     integration_id: str, request: Request, auth: AuthServiceDep, service: IntegrationsDep
 ) -> JSONResponse:
-    """Remove one provider link; foreign rows read as 404 (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    await service.unlink_integration(integration_id)
+    """Remove one provider link in scope (audited); foreign rows read as 404 (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    await service.unlink_integration(integration_id, _owner_scope(principal))
     return success_response({C.STATE_KEY: C.STATE_DELETED})
 
 
@@ -287,9 +327,11 @@ async def dcr_register(
     auth: AuthServiceDep,
     service: IntegrationsDep,
 ) -> JSONResponse:
-    """Register at an issuer; the issued secret seals server-side (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    row = await service.dcr_register(issuer_url=payload.issuer_url, provider=payload.provider)
+    """Register at an issuer with explicit binding; the issued secret seals server-side (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    row = await service.dcr_register(
+        issuer_url=payload.issuer_url, provider=payload.provider, binding=payload.binding, scope=_owner_scope(principal)
+    )
     body = wire_credential_meta(row)
     body[C.CLIENT_ID_KEY] = row.auth_config.get(C.CLIENT_ID_KEY, "")
     body[C.ISSUER_URL_KEY] = payload.issuer_url
@@ -304,15 +346,18 @@ async def save_template(
     auth: AuthServiceDep,
     service: IntegrationsDep,
 ) -> JSONResponse:
-    """Create or replace this tenant's template for a provider (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    """Create or replace this partner's private template (global stays seed-only) (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
     saved, replaced = await service.save_template(
         provider=payload.provider,
         credential_type=payload.credential_type,
+        scope=_owner_scope(principal),
         transport=payload.transport,
         tools_template=[dict(entry) for entry in payload.tools_template],
         oauth_config=dict(payload.oauth_config),
         client_config=dict(payload.client_config),
+        allowed_bindings=list(payload.allowed_bindings) if payload.allowed_bindings is not None else None,
+        suggested_binding=payload.suggested_binding,
     )
     body = wire_template(saved)
     body[C.REPLACED_KEY] = replaced
@@ -324,9 +369,9 @@ async def save_template(
 async def delete_template(
     provider: str, request: Request, auth: AuthServiceDep, service: IntegrationsDep
 ) -> JSONResponse:
-    """Remove this tenant's template override; system rows answer 403 (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    await service.delete_template(provider)
+    """Remove this partner's template override (audited); system rows answer 403 (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    await service.delete_template(provider, _owner_scope(principal))
     return success_response({C.STATE_KEY: C.STATE_DELETED})
 
 
@@ -348,17 +393,19 @@ async def oauth_authorize_url(
     auth: AuthServiceDep,
     service: OAuthDep,
 ) -> JSONResponse:
-    """Mint a provider login URL + handshake state (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    """Mint a provider login URL + handshake state with explicit binding (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
     return success_response(
         await service.build_authorize_url(
             tenant_id=current_tenant().tenant_id,
             provider=payload.provider,
+            scope=_owner_scope(principal),
+            binding=payload.binding,
             authorization_endpoint=payload.authorization_endpoint,
             token_endpoint=payload.token_endpoint,
             client_id=payload.client_id,
             client_secret=payload.client_secret,
-            scope=payload.scope,
+            scope_param=payload.scope,
         )
     )
 
@@ -395,7 +442,42 @@ async def oauth_callback(
 async def refresh_credential(
     credential_id: str, request: Request, auth: AuthServiceDep, service: OAuthDep
 ) -> JSONResponse:
-    """Rotate one oauth2 credential via its stored refresh token (`platform:write`)."""
-    await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
-    row = await service.refresh_credential(tenant_id=current_tenant().tenant_id, credential_id=credential_id)
+    """Rotate one oauth2 credential in scope via its stored refresh token (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    row = await service.refresh_credential(
+        tenant_id=current_tenant().tenant_id, credential_id=credential_id, scope=_owner_scope(principal)
+    )
     return success_response(wire_credential_meta(row))
+
+
+@router.get(C.ORG_POLICY_ITEM_PATH)
+@inject
+async def read_org_policy(
+    org_id: str, request: Request, auth: AuthServiceDep, service: IntegrationsDep
+) -> JSONResponse:
+    """Read one org's sharing rulebook in scope (`platform:read`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_READ)
+    return success_response(wire_policy(await service.get_policy(org_id, _owner_scope(principal))))
+
+
+@router.post(C.ORG_POLICIES_PATH)
+@inject
+async def write_org_policy(
+    payload: PolicyPayload,
+    request: Request,
+    auth: AuthServiceDep,
+    service: IntegrationsDep,
+) -> JSONResponse:
+    """Write the caller's org rulebook (strict org match, flips suspend barred rows) (`platform:write`)."""
+    principal = await _require_scope(request, auth, C.SCOPE_PLATFORM_WRITE)
+    scope = _owner_scope(principal)
+    saved, suspended = await service.set_policy(
+        org_id=scope.org_id or "",
+        binding_policy=payload.binding_policy,
+        changed_by=principal.user_id or "",
+        reason=payload.reason,
+        scope=scope,
+    )
+    body = wire_policy(saved)
+    body["suspended"] = suspended
+    return success_response(body)

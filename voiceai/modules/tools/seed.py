@@ -108,9 +108,7 @@ _SEED_TABLE: tuple[tuple[str, str, _RowOptions], ...] = (
 
 
 #: Materialized seed rows (built once; the loader inserts them idempotently).
-SEED_ENTRIES: tuple[ToolDefinition, ...] = tuple(
-    _entry(kind, name, options) for kind, name, options in _SEED_TABLE
-)
+SEED_ENTRIES: tuple[ToolDefinition, ...] = tuple(_entry(kind, name, options) for kind, name, options in _SEED_TABLE)
 
 
 def seed_entries() -> list[ToolDefinition]:

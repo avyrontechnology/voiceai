@@ -85,6 +85,11 @@ class Collections(str, Enum):
     PARTNER_CREDENTIALS = "partner_credentials"
     PARTNER_INTEGRATIONS = "partner_integrations"
     INTEGRATION_TEMPLATES = "integration_templates"
+    #: Enterprise sharing rulebook + governance trail (spec 0081, Phase-1):
+    #: one OrgPolicy row per org, one append-only row per governance decision.
+    #: New collections, no migration — readers tolerate their absence.
+    INTEGRATION_ORG_POLICIES = "integration_org_policies"
+    INTEGRATION_AUDIT_LOG = "integration_audit_log"
     #: GDPR consent records (spec 0071): demonstrable consent per subject/purpose.
     #: Grants and withdrawals both persist; withdrawal is a tombstone, never a delete.
     CONSENT_RECORDS = "consent_records"
